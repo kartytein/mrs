@@ -70,8 +70,22 @@ end)
 
 print("Скрипт запущен. Отслеживаю все фрукты.")
 
-local Settings = {
-  JoinTeam = "Pirates"; -- Pirates/Marines
-  Translator = true; -- true/false
-}
-loadstring(game:HttpGet("https://raw.githubusercontent.com/PlockScripts/newredz/refs/heads/main/Remake-version.luau"))(Settings)
+local replicatedStorage = game:GetService("ReplicatedStorage")
+local player = game:GetService("Players").LocalPlayer
+
+-- Ждём появления нужных объектов
+local remotes = replicatedStorage:WaitForChild("Remotes")
+local commF = remotes:WaitForChild("CommF_")
+
+-- Выбор команды через InvokeServer (как в сниффере)
+commF:InvokeServer("SetTeam", "Pirates")
+
+-- Если игра требует дополнительный вызов (OnEventServiceActivity)
+local modules = replicatedStorage:WaitForChild("Modules")
+local eventService = modules:FindFirstChild("RE/OnEventServiceActivity")
+if eventService then
+    eventService:FireServer() -- без аргументов, если они не нужны
+end
+
+print("Команда Pirates выбрана")
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Huylovemy/Bearhudz/refs/heads/main/Bearhud.lua"))()
