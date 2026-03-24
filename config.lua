@@ -89,62 +89,47 @@ end
 
 print("Команда Pirates выбрана")
 loadstring(game:HttpGet("https://raw.githubusercontent.com/Huylovemy/Bearhudz/refs/heads/main/Bearhud.lua"))()
--- Получаем сервис для телепортации
+
 local TeleportService = game:GetService("TeleportService")
 
--- Функция для перезахода (сервер-хоп)
 local function serverHop(player)
     if player and player.Parent then
-        print("Server hop for", player.Name, "due to idle Beli value")
         TeleportService:Teleport(game.PlaceId, player)
     end
 end
 
--- Функция мониторинга значения Beli у игрока
 local function monitorPlayer(player)
-    -- Проверяем, что у игрока есть структура Data и объект Beli
-    local data = player:FindFirstChild("Data")
-    if not data then
-        warn(player.Name, "has no 'Data' folder")
-        return
+    local data = player:WaitForChild("Data", 10)
+    if not data then return end
+    local beli = data:WaitForChild("Beli", 10)
+    if not (beli and (beli:IsA("NumberValue") or beli:IsA("IntValue"))) then return end
+
+    local timer = nil
+    local function resetTimer()
+        if timer then task.cancel(timer) end
+        timer = task.spawn(function()
+            task.wait(30)
+            if player.Parent then
+                serverHop(player)
+            end
+        end)
     end
-    
-    local beli = data:FindFirstChild("Beli")
-    if not beli or not (beli:IsA("NumberValue") or beli:IsA("IntValue")) then
-        warn(player.Name, "has no 'Beli' NumberValue/IntValue in Data")
-        return
-    end
-    
-    local lastValue = beli.Value
-    local lastChangeTime = os.time()
-    
-    -- Цикл наблюдения, пока игрок в игре
-    while player.Parent do
-        task.wait(1)  -- проверяем каждую секунду
-        
-        -- Игрок мог покинуть игру, повторная проверка
-        if not player.Parent then break end
-        
-        local currentValue = beli.Value
-        
-        if currentValue ~= lastValue then
-            -- Значение изменилось – сбрасываем таймер
-            lastValue = currentValue
-            lastChangeTime = os.time()
-        elseif os.time() - lastChangeTime >= 30 then
-            -- Прошло 30 секунд без изменений – выполняем сервер-хоп
-            serverHop(player)
-            break  -- выходим из цикла, так как игрок будет телепортирован
+
+    local connection = beli:GetPropertyChangedSignal("Value"):Connect(resetTimer)
+    resetTimer()
+
+    player.AncestryChanged:Connect(function()
+        if not player.Parent then
+            connection:Disconnect()
+            if timer then task.cancel(timer) end
         end
-    end
+    end)
 end
 
--- Запускаем мониторинг для всех уже существующих игроков
-for _, player in ipairs(game:GetService("Players"):GetPlayers()) do
+for _, player in ipairs(game.Players:GetPlayers()) do
     task.spawn(monitorPlayer, player)
 end
 
--- И для новых игроков, которые зайдут позже
-game:GetService("Players").PlayerAdded:Connect(function(player)
+game.Players.PlayerAdded:Connect(function(player)
     task.spawn(monitorPlayer, player)
 end)
