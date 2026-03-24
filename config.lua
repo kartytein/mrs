@@ -89,3 +89,21 @@ end
 
 print("Команда Pirates выбрана")
 loadstring(game:HttpGet("https://raw.githubusercontent.com/Huylovemy/Bearhudz/refs/heads/main/Bearhud.lua"))()
+
+local Players = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
+local player = Players.LocalPlayer
+
+local beli = player:WaitForChild("Data", 10):WaitForChild("Beli", 10)
+
+local timer = nil
+local function resetTimer()
+    if timer then task.cancel(timer) end
+    timer = task.spawn(function()
+        task.wait(30)
+        TeleportService:Teleport(game.PlaceId, player)
+    end)
+end
+
+beli:GetPropertyChangedSignal("Value"):Connect(resetTimer)
+resetTimer()
