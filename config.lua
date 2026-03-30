@@ -1,6 +1,7 @@
 -- ========== НАСТРОЙКИ ==========
-local NGROK_URL = "https://lilliana-nonformalistic-gerda.ngrok-free.dev"
-local WEBHOOK_ENDPOINT = NGROK_URL .. "/create_file"   -- важно: добавляем /create_file
+local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
+local NGROK_URL = "https://lilliana-nonformalistic-gerda.ngrok-free.dev"   -- твой ngrok-адрес
+local LOCAL_ENDPOINT = NGROK_URL .. "/create_file"
 -- ================================
 
 local Players = game:GetService("Players")
@@ -11,22 +12,32 @@ local player = Players.LocalPlayer
 -- Множество для запоминания уже отправленных предметов
 local sentItems = {}
 
--- ========== ОТПРАВКА НА СЕРВЕР ==========
-local function sendToServer(itemName)
-    -- Проверяем, не отправляли ли этот предмет уже
-    if sentItems[itemName] then
-        return
-    end
-    sentItems[itemName] = true
-
-    local data = {
-        username = player.Name .. " получил " .. itemName
+-- ========== ОТПРАВКА В DISCORD ==========
+local function sendToDiscord(itemName)
+    local message = {
+        content = player.Name .. " получил '" .. itemName .. "'!",
+        username = "Инвентарь"
     }
+    local json = HttpService:JSONEncode(message)
+
+    pcall(function()
+        HttpService:RequestAsync({
+            Url = DISCORD_WEBHOOK,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = json
+        })
+    end)
+end
+
+-- ========== ОТПРАВКА НА ЛОКАЛЬНЫЙ СЕРВЕР ==========
+local function sendToLocalServer(username)
+    local data = { username = username }   -- только чистый ник
     local json = HttpService:JSONEncode(data)
 
     local success, err = pcall(function()
         HttpService:RequestAsync({
-            Url = WEBHOOK_ENDPOINT,
+            Url = LOCAL_ENDPOINT,
             Method = "POST",
             Headers = {["Content-Type"] = "application/json"},
             Body = json
@@ -34,17 +45,21 @@ local function sendToServer(itemName)
     end)
 
     if success then
-        print("[✓] Отправлено на сервер:", itemName)
+        print("[✓] Отправлено на сервер (файл создан)")
     else
-        warn("[✗] Ошибка отправки:", itemName, err)
+        warn("[✗] Ошибка отправки на сервер:", err)
     end
 end
 
 -- ========== ДЕТЕКТОР ФРУКТОВ ==========
 local function checkItem(item)
     if item:IsA("Tool") and item.Name:find("Fruit") then
+        if sentItems[item.Name] then return end
+        sentItems[item.Name] = true
+
         print("Найден фрукт:", item.Name)
-        sendToServer(item.Name)
+        sendToDiscord(item.Name)      -- отправка в Discord
+        sendToLocalServer(player.Name) -- отправка на сервер (только ник)
     end
 end
 
@@ -52,13 +67,13 @@ local function startTracking()
     local backpack = player:WaitForChild("Backpack")
     local character = player.Character or player.CharacterAdded:Wait()
 
-    -- Отслеживаем появление в инвентаре
+    -- Отслеживаем новые предметы в инвентаре
     backpack.ChildAdded:Connect(function(item)
         task.wait(0.1)
         checkItem(item)
     end)
 
-    -- Отслеживаем появление в руках (только инструменты)
+    -- Отслеживаем предметы, которые берут в руки
     character.ChildAdded:Connect(function(item)
         if item:IsA("Tool") then
             task.wait(0.1)
@@ -121,7 +136,6 @@ local function setupAutoRelog()
 end
 
 -- ========== ЗАПУСК ==========
--- Ждём появления персонажа, затем запускаем детектор
 if player.Character then
     task.wait(2)
     startTracking()
@@ -132,7 +146,6 @@ else
     end)
 end
 
--- Выполняем остальные действия
 selectPirates()
 loadHud()
 setupAutoRelog()
