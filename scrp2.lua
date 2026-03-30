@@ -20,7 +20,7 @@
     ["FPS Booster"] = true
 }
 
--- Безопасная загрузка внешнего скрипта
+-- Безопасная загрузка внешнего скрипта (игнорируем ошибку expected end)
 local success, err = pcall(function()
     loadstring(game:HttpGet("https://raw.githubusercontent.com/Graihub/Loader-bamiahub/refs/heads/main/Bamia-kaitun"))()
 end)
@@ -28,15 +28,12 @@ if not success then
     warn("Не удалось загрузить внешний скрипт: " .. tostring(err))
 end
 
--- Остальная часть вашего скрипта (без изменений)
 local TeleportService = game:GetService("TeleportService")
 
-local function kickPlayer(player)
-    if player then player:Kick() end
-end
-
 local function serverHop(player)
-    if player then TeleportService:Teleport(game.PlaceId, player) end
+    if player then
+        TeleportService:Teleport(game.PlaceId, player)
+    end
 end
 
 local function monitorPlayer(player)
@@ -52,15 +49,16 @@ local function monitorPlayer(player)
         task.wait(1)
         local currentValue = level.Value
         
+        -- Если уровень > 50 → сервер-хоп (вместо кика)
         if currentValue > 50 then
-            kickPlayer(player)
+            serverHop(player)
             break
         end
         
         if currentValue ~= lastValue then
             lastValue = currentValue
             lastChangeTime = os.time()
-        elseif os.time() - lastChangeTime >= 180 then
+        elseif os.time() - lastChangeTime >= 90 then  -- 90 секунд без изменений
             serverHop(player)
             break
         end
