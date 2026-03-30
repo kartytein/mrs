@@ -1,48 +1,34 @@
-(getgenv())["Configs"] = {
+(getgenv() or _G)["Configs"] = {
     ["Quest"] = {
         ["Evo Race V1"] = true,
-        ["Evo Race V2"] = true;
+        ["Evo Race V2"] = true,
         ["RGB Haki"] = true,
         ["Pull Lerver"] = true
-    };
+    },
     ["Sword"] = {
-        "Dual-Headed Blade",
-        "Smoke Admiral",
-        "Wardens Sword",
-        "Cutlass",
-        "Katana";
-        "Dual Katana";
-        "Triple Katana",
-        "Iron Mace",
-        "Saber";
-        "Pole (1st Form)",
-        "Gravity Blade",
-        "Longsword";
-        "Rengoku";
-        "Midnight Blade",
-        "Soul Cane",
-        "Bisento",
-        "Yama";
-        "Tushita";
+        "Dual-Headed Blade", "Smoke Admiral", "Wardens Sword", "Cutlass",
+        "Katana", "Dual Katana", "Triple Katana", "Iron Mace", "Saber",
+        "Pole (1st Form)", "Gravity Blade", "Longsword", "Rengoku",
+        "Midnight Blade", "Soul Cane", "Bisento", "Yama", "Tushita",
         "Cursed Dual Katana"
-    };
+    },
     ["Gun"] = {
-        "Soul Guitar";
-        "Kabucha",
-        "Venom Bow",
-        "Musket";
-        "Flintlock",
-        "Refined Slingshot",
-        "Magma Blaster";
-        "Dual Flintlock",
-        "Cannon",
-        "Bizarre Revolver";
-        "Bazooka"
-    };
+        "Soul Guitar", "Kabucha", "Venom Bow", "Musket", "Flintlock",
+        "Refined Slingshot", "Magma Blaster", "Dual Flintlock", "Cannon",
+        "Bizarre Revolver", "Bazooka"
+    },
     ["FPS Booster"] = true
 }
-loadstring(game:HttpGet("https://raw.githubusercontent.com/Graihub/Loader-bamiahub/refs/heads/main/Bamia-kaitun"))()
 
+-- Безопасная загрузка внешнего скрипта
+local success, err = pcall(function()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/Graihub/Loader-bamiahub/refs/heads/main/Bamia-kaitun"))()
+end)
+if not success then
+    warn("Не удалось загрузить внешний скрипт: " .. tostring(err))
+end
+
+-- Остальная часть вашего скрипта (без изменений)
 local TeleportService = game:GetService("TeleportService")
 
 local function kickPlayer(player)
