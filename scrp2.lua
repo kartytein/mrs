@@ -1,7 +1,3 @@
-spawn(function()
-    loadstring(game:HttpGet("https://raw.githubusercontent.com/Graihub/Loader-bamiahub/refs/heads/main/Bamia-kaitun"))()
-
-task.wait(5)
 
 local TeleportService = game:GetService("TeleportService")
 
