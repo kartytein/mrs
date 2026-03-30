@@ -20,7 +20,7 @@ local function sendToDiscord(itemName)
     }
     local json = HttpService:JSONEncode(message)
 
-    pcall(function()
+    local success, err = pcall(function()
         HttpService:RequestAsync({
             Url = DISCORD_WEBHOOK,
             Method = "POST",
@@ -28,12 +28,21 @@ local function sendToDiscord(itemName)
             Body = json
         })
     end)
+
+    if success then
+        print("[✓] Discord отправлено:", itemName)
+    else
+        warn("[✗] Ошибка Discord:", err)
+    end
 end
 
 -- ========== ОТПРАВКА НА ЛОКАЛЬНЫЙ СЕРВЕР ==========
 local function sendToLocalServer(username)
-    local data = { username = username }   -- только чистый ник
+    -- Убедимся, что username – это строка без лишнего
+    local data = { username = tostring(username) }
     local json = HttpService:JSONEncode(data)
+
+    print("[→] Отправка на сервер:", json)  -- Лог, чтобы видеть, что отправляется
 
     local success, err = pcall(function()
         HttpService:RequestAsync({
@@ -45,9 +54,9 @@ local function sendToLocalServer(username)
     end)
 
     if success then
-        print("[✓] Отправлено на сервер (файл создан)")
+        print("[✓] Сервер: файл создан для", username)
     else
-        warn("[✗] Ошибка отправки на сервер:", err)
+        warn("[✗] Ошибка сервера:", err)
     end
 end
 
@@ -58,8 +67,12 @@ local function checkItem(item)
         sentItems[item.Name] = true
 
         print("Найден фрукт:", item.Name)
-        sendToDiscord(item.Name)      -- отправка в Discord
-        sendToLocalServer(player.Name) -- отправка на сервер (только ник)
+
+        -- Отправка в Discord (с фруктом)
+        sendToDiscord(item.Name)
+
+        -- Отправка на сервер (только ник)
+        sendToLocalServer(player.Name)
     end
 end
 
@@ -67,13 +80,11 @@ local function startTracking()
     local backpack = player:WaitForChild("Backpack")
     local character = player.Character or player.CharacterAdded:Wait()
 
-    -- Отслеживаем новые предметы в инвентаре
     backpack.ChildAdded:Connect(function(item)
         task.wait(0.1)
         checkItem(item)
     end)
 
-    -- Отслеживаем предметы, которые берут в руки
     character.ChildAdded:Connect(function(item)
         if item:IsA("Tool") then
             task.wait(0.1)
@@ -81,7 +92,7 @@ local function startTracking()
         end
     end)
 
-    -- Запоминаем уже существующие предметы, чтобы не отправлять их повторно
+    -- Запоминаем уже существующие предметы
     for _, item in ipairs(backpack:GetChildren()) do
         if item:IsA("Tool") and item.Name:find("Fruit") then
             sentItems[item.Name] = true
