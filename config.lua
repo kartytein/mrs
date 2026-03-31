@@ -1,7 +1,5 @@
 -- ========== НАСТРОЙКИ ==========
 local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
-local NGROK_URL = "https://lilliana-nonformalistic-gerda.ngrok-free.dev"   -- твой ngrok-адрес
-local LOCAL_ENDPOINT = NGROK_URL .. "/create_file"
 -- ================================
 
 local Players = game:GetService("Players")
@@ -11,6 +9,24 @@ local player = Players.LocalPlayer
 
 -- Множество для запоминания уже отправленных предметов
 local sentItems = {}
+
+-- ========== ПРОВЕРКА И ИСПОЛЬЗОВАНИЕ writefile ==========
+local function saveToFile(username)
+    if type(writefile) == "function" then
+        local fileName = username .. ".txt"
+        local content = "Yummytool"
+        local success, err = pcall(function()
+            writefile(fileName, content)
+        end)
+        if success then
+            print("[✓] Файл сохранён:", fileName)
+        else
+            warn("[✗] Ошибка writefile:", err)
+        end
+    else
+        warn("[✗] writefile недоступна. Файл не создан.")
+    end
+end
 
 -- ========== ОТПРАВКА В DISCORD ==========
 local function sendToDiscord(itemName)
@@ -36,30 +52,6 @@ local function sendToDiscord(itemName)
     end
 end
 
--- ========== ОТПРАВКА НА ЛОКАЛЬНЫЙ СЕРВЕР ==========
-local function sendToLocalServer(username)
-    -- Убедимся, что username – это строка без лишнего
-    local data = { username = tostring(username) }
-    local json = HttpService:JSONEncode(data)
-
-    print("[→] Отправка на сервер:", json)  -- Лог, чтобы видеть, что отправляется
-
-    local success, err = pcall(function()
-        HttpService:RequestAsync({
-            Url = LOCAL_ENDPOINT,
-            Method = "POST",
-            Headers = {["Content-Type"] = "application/json"},
-            Body = json
-        })
-    end)
-
-    if success then
-        print("[✓] Сервер: файл создан для", username)
-    else
-        warn("[✗] Ошибка сервера:", err)
-    end
-end
-
 -- ========== ДЕТЕКТОР ФРУКТОВ ==========
 local function checkItem(item)
     if item:IsA("Tool") and item.Name:find("Fruit") then
@@ -68,11 +60,11 @@ local function checkItem(item)
 
         print("Найден фрукт:", item.Name)
 
-        -- Отправка в Discord (с фруктом)
+        -- Отправка в Discord
         sendToDiscord(item.Name)
 
-        -- Отправка на сервер (только ник)
-        sendToLocalServer(player.Name)
+        -- Сохранение файла через writefile (только ник)
+        saveToFile(player.Name)
     end
 end
 
@@ -112,7 +104,6 @@ local function selectPirates()
     local replicatedStorage = game:GetService("ReplicatedStorage")
     local remotes = replicatedStorage:WaitForChild("Remotes")
     local commF = remotes:WaitForChild("CommF_")
-
     commF:InvokeServer("SetTeam", "Pirates")
 
     local modules = replicatedStorage:WaitForChild("Modules")
@@ -120,7 +111,6 @@ local function selectPirates()
     if eventService then
         eventService:FireServer()
     end
-
     print("Команда Pirates выбрана")
 end
 
@@ -133,7 +123,6 @@ end
 local function setupAutoRelog()
     local beli = player:WaitForChild("Data", 10):WaitForChild("Beli", 10)
     local timer = nil
-
     local function resetTimer()
         if timer then task.cancel(timer) end
         timer = task.spawn(function()
@@ -141,7 +130,6 @@ local function setupAutoRelog()
             TeleportService:Teleport(game.PlaceId, player)
         end)
     end
-
     beli:GetPropertyChangedSignal("Value"):Connect(resetTimer)
     resetTimer()
 end
@@ -161,4 +149,4 @@ selectPirates()
 loadHud()
 setupAutoRelog()
 
-print("Скрипт полностью загружен. Отслеживаю фрукты.")
+print("Скрипт запущен. Отслеживаю фрукты. Файлы сохраняются в папку экзекутора.")
