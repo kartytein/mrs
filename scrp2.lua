@@ -1,14 +1,25 @@
-(getgenv() or _G)["Configs"] = {
-    ["Quest"] = {
-        ["Evo Race V1"] = false,
-        ["Evo Race V2"] = false,
-        ["RGB Haki"] = false,
-        ["Pull Lerver"] = false
-    },
-    ["Sword"] = {
-    },
-    ["Gun"] = {
-    },
-    ["FPS Booster"] = true
+Config = {
+Team = "Pirates",
+Configuration = {
+HopWhenIdle = true,
+AutoHop = true,
+AutoHopDelay = 60 * 60,
+FpsBoost = false,
+BlackScreen = true
+},
+Items = {
+-- Melees
+AutoFullyMelees = true,
+-- Swords
+Saber = true,
+CursedDualKatana = false,
+-- Guns
+SoulGuitar = false,
+-- Upgrades
+RaceV2 = true
+},
+Settings = {
+StayInSea2UntilHaveDarkFragments = false
 }
-loadstring(game:HttpGet("https://raw.githubusercontent.com/Graihub/Loader-bamiahub/refs/heads/main/Bamia-kaitun"))()
+}
+loadstring(game:HttpGet("https://raw.githubusercontent.com/hhl29042008-ops/script/refs/heads/main/cac"))()
