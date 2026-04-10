@@ -1,82 +1,100 @@
--- Универсальный скрипт управления лодкой (работает с любой моделью, имеющей VehicleSeat)
+-- ========== ПОЛНЫЙ СКРИПТ (рабочий) ==========
 local player = game.Players.LocalPlayer
 local char = player.Character or player.CharacterAdded:Wait()
 local hrp = char:WaitForChild("HumanoidRootPart")
 local humanoid = char:WaitForChild("Humanoid")
 
-local function controlBoat(boat)
-    print("Обнаружена лодка:", boat.Name)
+-- 1. Плавное перемещение в точку (-16917, 9.1, 447)
+local targetPos = Vector3.new(-16917, 9.1, 447)
+local distance = (hrp.Position - targetPos).Magnitude
+local speed = 420                 -- скорость перемещения (как у лодки)
+local duration = distance / speed
 
-    -- Ждём появления сиденья (на случай, если модель загружается не мгновенно)
-    local seat = boat:FindFirstChildWhichIsA("VehicleSeat")
-    if not seat then
-        seat = boat.ChildAdded:Wait()
-        while not seat:IsA("VehicleSeat") do
-            seat = boat.ChildAdded:Wait()
-        end
+-- Отключаем коллизии у всех частей персонажа (чтобы не застревать)
+local partsCollision = {}
+for _, part in ipairs(char:GetDescendants()) do
+    if part:IsA("BasePart") then
+        partsCollision[part] = part.CanCollide
+        part.CanCollide = false
     end
-    print("Сиденье найдено")
+end
 
-    -- Отключаем столкновения у всех частей лодки
+-- Замораживаем анимации и физику
+local oldPlatform = humanoid.PlatformStand
+humanoid.PlatformStand = true
+
+-- Tween
+local tween = game:GetService("TweenService"):Create(hrp, TweenInfo.new(duration, Enum.EasingStyle.Linear), {Position = targetPos})
+tween:Play()
+tween.Completed:Wait()
+
+-- Восстанавливаем
+humanoid.PlatformStand = oldPlatform
+for part, val in pairs(partsCollision) do
+    if part and part.Parent then
+        part.CanCollide = val
+    end
+end
+print("Перемещение завершено")
+
+-- 2. Призыв лодки
+local remote = game:GetService("ReplicatedStorage").Remotes.CommF_
+remote:InvokeServer("BuyBoat", "Guardian")
+print("Лодка призвана, ожидание...")
+task.wait(3)
+
+-- 3. Управление лодкой (посадка + движение)
+local function controlBoat(boat)
+    local seat = boat:FindFirstChildWhichIsA("VehicleSeat")
+    if not seat then return end
+
+    -- Отключаем коллизии у лодки
     for _, part in ipairs(boat:GetDescendants()) do
         if part:IsA("BasePart") then
             part.CanCollide = false
         end
     end
 
-    -- Отключаем родной скрипт управления (если есть)
+    -- Отключаем родной скрипт лодки (если есть)
     local nativeScript = boat:FindFirstChild("Script")
     if nativeScript then
         nativeScript.Disabled = true
     end
 
-    -- Плавное перемещение к сиденью (Tween)
+    -- Tween к сиденью
     local targetCF = seat.CFrame + Vector3.new(0, 2, 0)
-    local tweenService = game:GetService("TweenService")
-    local tween = tweenService:Create(hrp, TweenInfo.new(2, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), {CFrame = targetCF})
-    tween:Play()
-    tween.Completed:Wait()
+    local tweenSeat = game:GetService("TweenService"):Create(hrp, TweenInfo.new(2, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), {CFrame = targetCF})
+    tweenSeat:Play()
+    tweenSeat.Completed:Wait()
 
     -- Садимся
     humanoid.Sit = true
-    task.wait(0.5) -- небольшая пауза для стабилизации
+    task.wait(0.5)
 
-    -- Основная часть для движения
+    -- Движение лодки
     local rootPart = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
-    if not rootPart then
-        warn("Не найдена основная часть лодки")
-        return
-    end
-
-    -- Движение с постоянной скоростью (плавно, через RenderStepped)
-    local speed = -420  -- единиц в секунду (отрицательное = движение назад по Z)
+    if not rootPart then return end
+    local boatSpeed = -420
     local runService = game:GetService("RunService")
     runService.RenderStepped:Connect(function(deltaTime)
-        -- Проверяем, сидит ли игрок на этом же сиденье
         if humanoid.Sit and humanoid.SeatPart == seat then
-            local step = speed * deltaTime
+            local step = boatSpeed * deltaTime
             rootPart.CFrame = rootPart.CFrame * CFrame.new(0, 0, step)
         end
     end)
-
-    print("Лодка", boat.Name, "начала движение со скоростью", math.abs(speed), "в секунду")
+    print("Лодка движется")
 end
 
--- Поиск лодки (сканируем workspace раз в секунду, пока не найдём)
+-- Поиск появившейся лодки
 task.spawn(function()
     while true do
         for _, obj in ipairs(workspace:GetDescendants()) do
-            if obj:IsA("Model") and obj:FindFirstChildWhichIsA("VehicleSeat") then
-                -- Избегаем повторного управления одной и той же лодкой
-                if not obj:GetAttribute("UnderControl") then
-                    obj:SetAttribute("UnderControl", true)
-                    controlBoat(obj)
-                    return -- останавливаем поиск после успеха
-                end
+            if obj:IsA("Model") and obj:FindFirstChildWhichIsA("VehicleSeat") and not obj:GetAttribute("UnderControl") then
+                obj:SetAttribute("UnderControl", true)
+                controlBoat(obj)
+                return
             end
         end
         task.wait(1)
     end
 end)
-
-print("Ожидание появления лодки... (активируйте создание лодки)")
