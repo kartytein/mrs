@@ -1,66 +1,60 @@
--- Автоматическое управление лодкой (любой, которая появляется в Boats)
+-- Универсальный скрипт управления лодкой (ищет по всему workspace)
 local player = game.Players.LocalPlayer
 local char = player.Character or player.CharacterAdded:Wait()
 local hrp = char:WaitForChild("HumanoidRootPart")
 local humanoid = char:WaitForChild("Humanoid")
 
-local boatsFolder = workspace:FindFirstChild("Boats")
-if not boatsFolder then
-    boatsFolder = Instance.new("Folder")
-    boatsFolder.Name = "Boats"
-    boatsFolder.Parent = workspace
-end
-
 local function controlBoat(boat)
-    print("Обнаружена лодка:", boat.Name)
-
-    -- Отключаем столкновения у всех частей лодки
+    print("Найдена лодка:", boat.Name)
+    
+    -- Отключаем столкновения у всех частей
     for _, part in ipairs(boat:GetDescendants()) do
-        if part:IsA("BasePart") then
-            part.CanCollide = false
-        end
+        if part:IsA("BasePart") then part.CanCollide = false end
     end
-
-    -- Отключаем родной скрипт управления, если есть
-    local nativeScript = boat:FindFirstChild("Script")
-    if nativeScript then nativeScript.Disabled = true end
-
-    -- Садимся на сиденье
+    
+    -- Отключаем родной скрипт (если есть)
+    local native = boat:FindFirstChild("Script")
+    if native then native.Disabled = true end
+    
     local seat = boat:FindFirstChildWhichIsA("VehicleSeat")
-    if not seat then return end
-    local targetCF = seat.CFrame + Vector3.new(0, 2, 0)
-    local tween = game:GetService("TweenService"):Create(hrp, TweenInfo.new(2, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), {CFrame = targetCF})
+    if not then return end
+    
+    -- Tween к сиденью
+    local target = seat.CFrame + Vector3.new(0, 2, 0)
+    local tween = game:GetService("TweenService"):Create(hrp, TweenInfo.new(2), {CFrame = target})
     tween:Play()
     tween.Completed:Wait()
+    
     humanoid.Sit = true
     task.wait(0.5)
-
-    -- Движение лодки (плавное, без рывков)
-    local rootPart = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
-    if not rootPart then return end
-    local speed = -420  -- скорость по оси Z
-    local runService = game:GetService("RunService")
-    runService.RenderStepped:Connect(function(deltaTime)
+    
+    -- Движение
+    local root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
+    if not root then return end
+    local speed = -420
+    game:GetService("RunService").RenderStepped:Connect(function(dt)
         if humanoid.Sit and humanoid.SeatPart == seat then
-            local step = speed * deltaTime
-            rootPart.CFrame = rootPart.CFrame * CFrame.new(0, 0, step)
+            root.CFrame = root.CFrame * CFrame.new(0, 0, speed * dt)
         end
     end)
-    print("Лодка начала движение")
+    print("Лодка поехала")
 end
 
--- Отслеживаем появление новых лодок
-boatsFolder.ChildAdded:Connect(function(child)
-    if child:IsA("Model") and child:FindFirstChildWhichIsA("VehicleSeat") then
-        controlBoat(child)
+-- Поиск лодки раз в секунду
+task.spawn(function()
+    while true do
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("Model") and obj:FindFirstChildWhichIsA("VehicleSeat") then
+                -- Игнорируем уже управляемую лодку (можно добавить флаг)
+                if not obj:GetAttribute("UnderControl") then
+                    obj:SetAttribute("UnderControl", true)
+                    controlBoat(obj)
+                    return -- останавливаем поиск
+                end
+            end
+        end
+        task.wait(1)
     end
 end)
 
--- Проверяем уже существующие лодки
-for _, child in ipairs(boatsFolder:GetChildren()) do
-    if child:IsA("Model") and child:FindFirstChildWhichIsA("VehicleSeat") then
-        controlBoat(child)
-    end
-end
-
-print("Ожидание появления лодки в папке Boats...")
+print("Ожидание появления лодки...")
