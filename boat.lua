@@ -1,4 +1,4 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ (с возвратом, перепризывом и остановкой при острове) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (с проверкой наличия лодки, остановкой движения при вылезании) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local char = player.Character or player.CharacterAdded:Wait()
@@ -22,45 +22,49 @@ local function checkIsland()
 end
 
 -- 1. Перемещение персонажа в точку (-16917, 9.1, 447) с отключением коллизий
-local targetPos = Vector3.new(-16917, 9.1, 447)
-local speed = 150
-local step = 0.1
+local function moveCharacterTo(targetPos)
+    local speed = 150
+    local step = 0.1
+    local char = player.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
 
-local partsChar = {}
-for _, part in ipairs(char:GetDescendants()) do
-    if part:IsA("BasePart") then
-        table.insert(partsChar, part)
-        part.CanCollide = false
+    -- Отключаем коллизии у всех частей персонажа
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.CanCollide = false
+        end
     end
+
+    while true do
+        local current = hrp.Position
+        local direction = (targetPos - current).Unit
+        local distance = (targetPos - current).Magnitude
+        if distance < 0.5 then break end
+        local move = math.min(speed * step, distance)
+        local newPos = current + direction * move
+        hrp.CFrame = CFrame.new(newPos)
+        task.wait(step)
+        if checkIsland() then break end
+    end
+    hrp.CFrame = CFrame.new(targetPos)
+
+    -- Восстанавливаем коллизии (необязательно, можно оставить отключенными)
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.CanCollide = true
+        end
+    end
+    return true
 end
 
-while not stopScript do
-    local current = hrp.Position
-    local direction = (targetPos - current).Unit
-    local distance = (targetPos - current).Magnitude
-    if distance < 0.5 then break end
-    local move = math.min(speed * step, distance)
-    local newPos = current + direction * move
-    hrp.CFrame = CFrame.new(newPos)
-    task.wait(step)
-    checkIsland()
-end
-hrp.CFrame = CFrame.new(targetPos)
-for _, part in ipairs(partsChar) do
-    if part and part.Parent then part.CanCollide = true end
-end
-print("Перемещение завершено")
+local targetPos = Vector3.new(-16917, 9.1, 447)
+moveCharacterTo(targetPos)
 if stopScript then return end
+print("Перемещение завершено")
 
--- 2. Призыв лодки
-local remote = game:GetService("ReplicatedStorage").Remotes.CommF_
-local function summonBoat()
-    remote:InvokeServer("BuyBoat", "Guardian")
-    print("Лодка призвана, ожидание появления...")
-end
-summonBoat()
-
--- 3. Поиск своей лодки по атрибуту/значению Owner
+-- 2. Проверяем, есть ли уже лодка (по Owner)
 local boatsFolder = workspace:FindFirstChild("Boats")
 if not boatsFolder then error("Папка Boats не найдена") end
 
@@ -78,18 +82,29 @@ local function findMyBoat()
     return nil
 end
 
-local myBoat = nil
-local startTime = os.clock()
-while os.clock() - startTime < 10 and not stopScript do
-    myBoat = findMyBoat()
-    if myBoat then break end
-    task.wait(0.3)
-    checkIsland()
-end
-if not myBoat then error("Не найдена лодка с владельцем " .. playerName) end
-print("Найдена своя лодка:", myBoat.Name)
+local myBoat = findMyBoat()
 
--- 4. Управление лодкой (отключаем коллизии, садимся, циклическое движение)
+if myBoat then
+    print("Лодка уже существует, пропускаем призыв.")
+else
+    -- Призываем новую лодку
+    local remote = game:GetService("ReplicatedStorage").Remotes.CommF_
+    remote:InvokeServer("BuyBoat", "Guardian")
+    print("Лодка призвана, ожидание появления...")
+    task.wait(3)
+
+    -- Поиск своей лодки (с повторами)
+    for i = 1, 10 do
+        myBoat = findMyBoat()
+        if myBoat then break end
+        task.wait(1)
+        if checkIsland() then return end
+    end
+    if not myBoat then error("Не найдена лодка с владельцем " .. playerName) end
+    print("Найдена своя лодка:", myBoat.Name)
+end
+
+-- 3. Подготовка лодки и посадка
 local seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
 if not seat then error("Сиденье не найдено") end
 
@@ -110,7 +125,7 @@ end
 local native = myBoat:FindFirstChild("Script")
 if native then native.Disabled = true end
 
--- Функция посадки на сиденье
+-- Функция посадки на сиденье (с Tween)
 local function sitOnSeat()
     if stopScript then return false end
     local targetCF = seat.CFrame + Vector3.new(0, 2, 0)
@@ -122,10 +137,10 @@ local function sitOnSeat()
     return true
 end
 
--- Посадка
-if not sitOnSeat() then return end
+-- Выполняем посадку
+sitOnSeat()
 
--- Основная часть лодки
+-- Основная часть лодки для движения
 local rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
 if not rootPart then error("Основная часть не найдена") end
 
@@ -134,32 +149,48 @@ local points = {
     Vector3.new(-77389.3, 22.8, 32606.2),
     Vector3.new(-47968.4, 22.8, 6048.2)
 }
-local currentPoint = 1
 local boatSpeed = 420
 
-local function moveTo(point)
-    local dist = (rootPart.Position - point).Magnitude
-    local duration = dist / boatSpeed
-    local tween = tweenService:Create(rootPart, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = CFrame.new(point)})
-    tween:Play()
-    return tween
+-- Переменная для управления движением
+local currentTween = nil
+local movementActive = false
+
+-- Функция остановки текущего движения
+local function stopMovement()
+    if currentTween and currentTween.PlaybackState == Enum.PlaybackState.Playing then
+        currentTween:Cancel()
+    end
+    movementActive = false
+    currentTween = nil
 end
 
--- Циклическое движение (отдельный поток)
-local movementThread = nil
+-- Функция запуска движения (циклическое, но с проверкой посадки)
 local function startMovement()
-    if movementThread then return end
-    movementThread = task.spawn(function()
-        while not stopScript and humanoid.Sit and humanoid.SeatPart == seat do
-            local target = points[currentPoint]
-            local tween = moveTo(target)
-            tween.Completed:Wait()
-            currentPoint = currentPoint % #points + 1
-            checkIsland()
+    if movementActive then stopMovement() end
+    movementActive = true
+    task.spawn(function()
+        local pointIndex = 1
+        while movementActive and not stopScript do
+            -- Ждём, пока персонаж сидит на сиденье
+            while not (humanoid.Sit and humanoid.SeatPart == seat) do
+                if not movementActive then break end
+                task.wait(0.5)
+            end
+            if not movementActive then break end
+            local target = points[pointIndex]
+            local dist = (rootPart.Position - target).Magnitude
+            local duration = dist / boatSpeed
+            currentTween = tweenService:Create(rootPart, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = CFrame.new(target)})
+            currentTween:Play()
+            currentTween.Completed:Wait()
+            pointIndex = pointIndex % #points + 1
         end
-        print("Движение остановлено")
+        movementActive = false
+        currentTween = nil
     end)
 end
+
+-- Запускаем движение
 startMovement()
 
 -- Мониторинг сброса/смерти и перепризыв при потере лодки
@@ -172,19 +203,15 @@ task.spawn(function()
         -- Проверка: существует ли лодка
         if not myBoat or not myBoat.Parent then
             print("[MONITOR] Лодка потеряна, перепризыв...")
+            stopMovement()
             myBoat = nil
-            -- Останавливаем движение
-            if movementThread then task.cancel(movementThread) movementThread = nil end
             -- Возвращаем персонажа в точку
-            -- Временно включаем коллизии, чтобы переместить (метод уже отключает их внутри)
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") then part.CanCollide = true end
-            end
-            moveCharacterTo(targetPos) -- используем ту же функцию, но нужно её определить выше
+            moveCharacterTo(targetPos)
             -- Призываем новую лодку
-            summonBoat()
+            local remote = game:GetService("ReplicatedStorage").Remotes.CommF_
+            remote:InvokeServer("BuyBoat", "Guardian")
+            print("Лодка призвана, ожидание...")
             task.wait(3)
-            -- Ищем новую лодку
             local newBoat = nil
             for i = 1, 10 do
                 newBoat = findMyBoat()
@@ -203,7 +230,6 @@ task.spawn(function()
                     myBoat.DescendantAdded:Connect(function(desc)
                         if desc:IsA("BasePart") then desc.CanCollide = false end
                     end)
-                    -- Отключаем родной скрипт
                     local native = myBoat:FindFirstChild("Script")
                     if native then native.Disabled = true end
                     rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
@@ -230,10 +256,12 @@ task.spawn(function()
                         if part:IsA("BasePart") then part.CanCollide = false end
                     end
                 end
+                -- Принудительно сажаем обратно
                 sitOnSeat()
+                -- Движение уже запущено, но оно ждёт посадки, так что всё ок
             end
         end
     end
 end)
 
-print("Лодка управляется, возврат и перепризыв активны, движение по маршруту запущено")
+print("Лодка управляется, движение активно только когда вы сидите, возврат при сбросе работает.")
