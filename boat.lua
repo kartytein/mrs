@@ -1,4 +1,4 @@
--- ===== ПОЛНЫЙ СКРИПТ (перемещение + призыв + управление лодкой с постоянным noclip) =====
+-- ===== ПОЛНЫЙ СКРИПТ (с отключением коллизий у персонажа во время движения лодки) =====
 local player = game.Players.LocalPlayer
 local char = player.Character or player.CharacterAdded:Wait()
 local hrp = char:WaitForChild("HumanoidRootPart")
@@ -10,10 +10,10 @@ local targetPos = Vector3.new(-16917, 9.1, 447)
 local speed = 150
 local step = 0.1
 
-local parts = {}
+local partsChar = {}
 for _, part in ipairs(char:GetDescendants()) do
     if part:IsA("BasePart") then
-        table.insert(parts, part)
+        table.insert(partsChar, part)
         part.CanCollide = false
     end
 end
@@ -30,7 +30,7 @@ while true do
 end
 hrp.CFrame = CFrame.new(targetPos)
 
-for _, part in ipairs(parts) do
+for _, part in ipairs(partsChar) do
     if part and part.Parent then part.CanCollide = true end
 end
 print("Перемещение персонажа завершено")
@@ -41,27 +41,36 @@ remote:InvokeServer("BuyBoat", "Guardian")
 print("Лодка призвана, ожидание...")
 task.wait(3)
 
--- 3. Управление лодкой с постоянным отключением коллизий (noclip)
+-- 3. Управление лодкой с постоянным отключением коллизий у лодки и персонажа
 local function controlBoat(boat)
     local seat = boat:FindFirstChildWhichIsA("VehicleSeat")
     if not seat then return end
 
-    -- Отключаем коллизии у всех частей лодки (и будущих)
-    local function disableAllCollisions(instance)
+    -- Функция отключения коллизий у всех частей (лодки и персонажа)
+    local function disableCollisions(instance)
         for _, part in ipairs(instance:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.CanCollide = false
             end
         end
     end
-    disableAllCollisions(boat)
+
+    -- Отключаем коллизии у лодки (сразу и для будущих частей)
+    disableCollisions(boat)
     boat.DescendantAdded:Connect(function(desc)
-        if desc:IsA("BasePart") then
+        if desc:IsA("BasePart") then desc.CanCollide = false end
+    end)
+
+    -- Отключаем коллизии у персонажа (пока он в лодке)
+    disableCollisions(char)
+    -- Следим за новыми частями персонажа (например, после переодевания)
+    char.DescendantAdded:Connect(function(desc)
+        if desc:IsA("BasePart") and humanoid.Sit and humanoid.SeatPart == seat then
             desc.CanCollide = false
         end
     end)
 
-    -- Отключаем родной скрипт (если есть)
+    -- Отключаем родной скрипт лодки (если есть)
     local native = boat:FindFirstChild("Script")
     if native then native.Disabled = true end
 
@@ -73,11 +82,11 @@ local function controlBoat(boat)
     humanoid.Sit = true
     task.wait(0.5)
 
-    -- Основная часть лодки
+    -- Основная часть лодки для перемещения
     local rootPart = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
     if not rootPart then return end
 
-    -- Циклическое движение по точкам
+    -- Точки маршрута
     local points = {
         Vector3.new(-77389.3, 22.8, 32606.2),
         Vector3.new(-47968.4, 22.8, 6048.2)
@@ -93,7 +102,7 @@ local function controlBoat(boat)
         return tween
     end
 
-    -- Дополнительный цикл для поддержания noclip (на случай сброса)
+    -- Периодически проверяем и восстанавливаем отключение коллизий (на случай сброса)
     task.spawn(function()
         while humanoid.Sit and humanoid.SeatPart == seat do
             for _, part in ipairs(boat:GetDescendants()) do
@@ -101,11 +110,22 @@ local function controlBoat(boat)
                     part.CanCollide = false
                 end
             end
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") and part.CanCollide == true then
+                    part.CanCollide = false
+                end
+            end
             task.wait(0.5)
+        end
+        -- Когда игрок встаёт, возвращаем коллизии персонажу (опционально)
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = true
+            end
         end
     end)
 
-    -- Запуск циклического движения
+    -- Циклическое движение
     task.spawn(function()
         while humanoid.Sit and humanoid.SeatPart == seat do
             local target = points[currentPoint]
@@ -116,10 +136,10 @@ local function controlBoat(boat)
         print("Движение остановлено (игрок встал)")
     end)
 
-    print("Лодка движется с постоянным noclip")
+    print("Лодка движется, коллизии отключены у лодки и персонажа")
 end
 
--- 4. Поиск своей лодки
+-- 4. Поиск своей лодки (имя "Guardian" или "Guardian1" и т.д.)
 local myBoat = nil
 local startWait = os.clock()
 while os.clock() - startWait < 10 do
