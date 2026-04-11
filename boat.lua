@@ -1,4 +1,4 @@
--- ===== ПОЛНЫЙ СКРИПТ (с отключением коллизий у персонажа во время движения лодки) =====
+-- ===== ПОЛНЫЙ СКРИПТ (работает с лодкой в _WorldOrigin) =====
 local player = game.Players.LocalPlayer
 local char = player.Character or player.CharacterAdded:Wait()
 local hrp = char:WaitForChild("HumanoidRootPart")
@@ -38,15 +38,51 @@ print("Перемещение персонажа завершено")
 -- 2. Призыв лодки
 local remote = game:GetService("ReplicatedStorage").Remotes.CommF_
 remote:InvokeServer("BuyBoat", "Guardian")
-print("Лодка призвана, ожидание...")
-task.wait(3)
+print("Лодка призвана, ожидание появления...")
 
--- 3. Управление лодкой с постоянным отключением коллизий у лодки и персонажа
+-- 3. Поиск своей лодки в _WorldOrigin
+local worldOrigin = workspace:FindFirstChild("_WorldOrigin")
+if not worldOrigin then
+    warn("_WorldOrigin не найдена")
+    return
+end
+
+-- Запоминаем лодки, которые уже были до вызова
+local existingBoats = {}
+for _, child in ipairs(worldOrigin:GetChildren()) do
+    if child:IsA("Model") and child:FindFirstChildWhichIsA("VehicleSeat") then
+        existingBoats[child] = true
+    end
+end
+
+local myBoat = nil
+local connection
+connection = worldOrigin.ChildAdded:Connect(function(child)
+    if myBoat then return end
+    if child:IsA("Model") and child:FindFirstChildWhichIsA("VehicleSeat") and not existingBoats[child] then
+        myBoat = child
+        connection:Disconnect()
+        print("Найдена новая лодка:", myBoat.Name, "путь:", myBoat:GetFullName())
+    end
+end)
+
+-- Ждём до 10 секунд
+task.wait(10)
+if not myBoat then
+    connection:Disconnect()
+    warn("Лодка не появилась в течение 10 секунд")
+    return
+end
+
+-- 4. Управление лодкой (отключаем коллизии у лодки и персонажа, циклическое движение)
 local function controlBoat(boat)
     local seat = boat:FindFirstChildWhichIsA("VehicleSeat")
-    if not seat then return end
+    if not seat then
+        warn("Сиденье не найдено")
+        return
+    end
 
-    -- Функция отключения коллизий у всех частей (лодки и персонажа)
+    -- Отключаем коллизии у всех частей лодки (включая будущие)
     local function disableCollisions(instance)
         for _, part in ipairs(instance:GetDescendants()) do
             if part:IsA("BasePart") then
@@ -54,8 +90,6 @@ local function controlBoat(boat)
             end
         end
     end
-
-    -- Отключаем коллизии у лодки (сразу и для будущих частей)
     disableCollisions(boat)
     boat.DescendantAdded:Connect(function(desc)
         if desc:IsA("BasePart") then desc.CanCollide = false end
@@ -63,16 +97,15 @@ local function controlBoat(boat)
 
     -- Отключаем коллизии у персонажа (пока он в лодке)
     disableCollisions(char)
-    -- Следим за новыми частями персонажа (например, после переодевания)
     char.DescendantAdded:Connect(function(desc)
         if desc:IsA("BasePart") and humanoid.Sit and humanoid.SeatPart == seat then
             desc.CanCollide = false
         end
     end)
 
-    -- Отключаем родной скрипт лодки (если есть)
-    local native = boat:FindFirstChild("Script")
-    if native then native.Disabled = true end
+    -- Отключаем родной скрипт управления лодкой, если есть
+    local nativeScript = boat:FindFirstChild("Script")
+    if nativeScript then nativeScript.Disabled = true end
 
     -- Tween к сиденью
     local targetCF = seat.CFrame + Vector3.new(0, 2, 0)
@@ -84,7 +117,10 @@ local function controlBoat(boat)
 
     -- Основная часть лодки для перемещения
     local rootPart = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
-    if not rootPart then return end
+    if not rootPart then
+        warn("Не найдена основная часть лодки")
+        return
+    end
 
     -- Точки маршрута
     local points = {
@@ -102,7 +138,7 @@ local function controlBoat(boat)
         return tween
     end
 
-    -- Периодически проверяем и восстанавливаем отключение коллизий (на случай сброса)
+    -- Фоновый поток для поддержания отключённых коллизий (на случай сброса)
     task.spawn(function()
         while humanoid.Sit and humanoid.SeatPart == seat do
             for _, part in ipairs(boat:GetDescendants()) do
@@ -117,15 +153,13 @@ local function controlBoat(boat)
             end
             task.wait(0.5)
         end
-        -- Когда игрок встаёт, возвращаем коллизии персонажу (опционально)
+        -- Восстанавливаем коллизии персонажа после выхода
         for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = true
-            end
+            if part:IsA("BasePart") then part.CanCollide = true end
         end
     end)
 
-    -- Циклическое движение
+    -- Циклическое движение между точками
     task.spawn(function()
         while humanoid.Sit and humanoid.SeatPart == seat do
             local target = points[currentPoint]
@@ -136,27 +170,7 @@ local function controlBoat(boat)
         print("Движение остановлено (игрок встал)")
     end)
 
-    print("Лодка движется, коллизии отключены у лодки и персонажа")
+    print("Лодка управляется, коллизии отключены, начато циклическое движение")
 end
 
--- 4. Поиск своей лодки (имя "Guardian" или "Guardian1" и т.д.)
-local myBoat = nil
-local startWait = os.clock()
-while os.clock() - startWait < 10 do
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Model") and obj:FindFirstChildWhichIsA("VehicleSeat") then
-            if obj.Name == "Guardian" or obj.Name:match("Guardian%d*") then
-                myBoat = obj
-                break
-            end
-        end
-    end
-    if myBoat then break end
-    task.wait(0.5)
-end
-
-if myBoat then
-    controlBoat(myBoat)
-else
-    warn("Своя лодка не найдена")
-end
+controlBoat(myBoat)
