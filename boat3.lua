@@ -1,20 +1,24 @@
--- ===== ПОЛНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ (С РАБОЧЕЙ ПОСАДКОЙ) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ (ПОЛНАЯ ВЕРСИЯ) =====
+-- Выбор команды Marines, призыв/поиск лодки, перемещение, посадка,
+-- циклическое движение, возврат при сбросе/смерти, перепризыв при потере,
+-- остановка при появлении острова Prehistoricisland.
+
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local tweenService = game:GetService("TweenService")
 
--- НАСТРОЙКИ
-local MOVE_POINT = Vector3.new(-16917, 9.1, 447)          -- точка перед призывом
+-- ===== НАСТРОЙКИ =====
+local MOVE_POINT = Vector3.new(-16917, 9.1, 447)          -- где покупать/призывать лодку
 local BOAT_POINTS = {                                     -- маршрут лодки
     Vector3.new(-77389.3, 22.8, 32606.2),
     Vector3.new(-47968.4, 22.8, 6048.2)
 }
-local WALK_SPEED = 150        -- скорость ходьбы
+local WALK_SPEED = 150        -- скорость ходьбы (студий/сек)
 local BOAT_SPEED = 420         -- скорость лодки
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)  -- высота над сиденьем
-local SIT_DURATION = 1.5       -- максимум секунд на посадку
+local SIT_DURATION = 1.5       -- макс. длительность посадки
 
--- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
+-- ===== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====
 local stopScript = false
 local myBoat = nil
 local seat = nil
@@ -23,19 +27,35 @@ local currentPoint = 1
 local movementThread = nil
 local isMoving = false
 
--- ФУНКЦИЯ ПРОВЕРКИ ОСТРОВА (опционально)
+-- ===== 1. ВЫБОР КОМАНДЫ (MARINES) =====
+local function selectMarines()
+    local replicatedStorage = game:GetService("ReplicatedStorage")
+    local remotes = replicatedStorage:WaitForChild("Remotes")
+    local commF = remotes:WaitForChild("CommF_")
+    commF:InvokeServer("SetTeam", "Marines")
+    print("[TEAM] Команда Marines выбрана")
+
+    local modules = replicatedStorage:WaitForChild("Modules")
+    local eventService = modules:FindFirstChild("RE/OnEventServiceActivity")
+    if eventService then
+        eventService:FireServer()
+        print("[TEAM] OnEventServiceActivity вызван")
+    end
+end
+
+-- ===== 2. ПРОВЕРКА ОСТРОВА (ДЛЯ ОСТАНОВКИ) =====
 local function checkIsland()
     if stopScript then return true end
     local map = workspace:FindFirstChild("Map")
     if map and map:FindFirstChild("Prehistoricisland") then
         stopScript = true
-        print("[ОСТРОВ] Обнаружен Prehistoricisland, скрипт остановлен.")
+        print("[STOP] Обнаружен Prehistoricisland, скрипт остановлен.")
         return true
     end
     return false
 end
 
--- ПЕРЕМЕЩЕНИЕ ПЕРСОНАЖА (TWEEN)
+-- ===== 3. ПЕРЕМЕЩЕНИЕ ПЕРСОНАЖА (TWEEN, ПОСТОЯННАЯ СКОРОСТЬ) =====
 local function moveCharacterTo(targetPos)
     local char = player.Character
     if not char then return false end
@@ -44,6 +64,7 @@ local function moveCharacterTo(targetPos)
     local humanoid = char:FindFirstChild("Humanoid")
     if not humanoid then return false end
 
+    -- Отключаем коллизии и замораживаем анимации
     for _, part in ipairs(char:GetDescendants()) do
         if part:IsA("BasePart") then part.CanCollide = false end
     end
@@ -61,7 +82,7 @@ local function moveCharacterTo(targetPos)
     return true
 end
 
--- ПОИСК ЛОДКИ ПО ВЛАДЕЛЬЦУ
+-- ===== 4. ПОИСК ЛОДКИ ПО ВЛАДЕЛЬЦУ (OWNER) =====
 local function findMyBoat()
     local boatsFolder = workspace:FindFirstChild("Boats")
     if not boatsFolder then return nil end
@@ -78,7 +99,7 @@ local function findMyBoat()
     return nil
 end
 
--- ПОСАДКА НА СИДЕНЬЕ (РАБОЧИЙ TWEEN)
+-- ===== 5. ПОСАДКА НА СИДЕНЬЕ (ОТЛАЖЕННЫЙ TWEEN) =====
 local function sitOnSeat(seat, hrp, humanoid)
     local char = hrp.Parent
     for _, part in ipairs(char:GetDescendants()) do
@@ -99,7 +120,7 @@ local function sitOnSeat(seat, hrp, humanoid)
     humanoid.PlatformStand = false
 end
 
--- ЗАПУСК ЦИКЛИЧЕСКОГО ДВИЖЕНИЯ ЛОДКИ
+-- ===== 6. ЗАПУСК ЦИКЛИЧЕСКОГО ДВИЖЕНИЯ ЛОДКИ (ТОЛЬКО КОГДА ПЕРСОНАЖ СИДИТ) =====
 local function startBoatMovement()
     if isMoving then return end
     isMoving = true
@@ -127,7 +148,7 @@ local function startBoatMovement()
     end)
 end
 
--- ОСТАНОВКА ДВИЖЕНИЯ
+-- ===== 7. ОСТАНОВКА ДВИЖЕНИЯ =====
 local function stopBoatMovement()
     if movementThread then
         task.cancel(movementThread)
@@ -136,9 +157,13 @@ local function stopBoatMovement()
     isMoving = false
 end
 
--- ОСНОВНАЯ ЛОГИКА
+-- ===== 8. ОСНОВНАЯ ЛОГИКА (ВЫБОР КОМАНДЫ, ПЕРЕМЕЩЕНИЕ, ПРИЗЫВ, ПОСАДКА, ДВИЖЕНИЕ) =====
 local function main()
-    -- Перемещение в точку (если нужно)
+    -- Выбор команды Marines
+    selectMarines()
+    task.wait(2)  -- небольшая задержка для стабилизации
+
+    -- Перемещение в точку для покупки/призыва лодки
     print("[MAIN] Перемещение в точку", MOVE_POINT)
     moveCharacterTo(MOVE_POINT)
     if checkIsland() then return end
@@ -162,7 +187,7 @@ local function main()
         print("[MAIN] Лодка уже существует:", myBoat.Name)
     end
 
-    -- Получаем компоненты
+    -- Получаем компоненты лодки
     seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
     if not seat then error("[MAIN] Нет сиденья") end
     rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
@@ -184,7 +209,7 @@ local function main()
         end
     end
 
-    -- Отключаем родной скрипт лодки
+    -- Отключаем родной скрипт лодки (если есть)
     local native = myBoat:FindFirstChild("Script")
     if native then native.Disabled = true end
 
@@ -196,18 +221,18 @@ local function main()
     sitOnSeat(seat, hrp, humanoid)
     print("[MAIN] Посадка выполнена")
 
-    -- Запуск движения
+    -- Запуск движения лодки
     startBoatMovement()
     print("[MAIN] Движение запущено")
 end
 
--- МОНИТОРИНГ СБРОСА, СМЕРТИ, ПОТЕРИ ЛОДКИ
+-- ===== 9. МОНИТОРИНГ СОСТОЯНИЯ (СБРОС, СМЕРТЬ, ПОТЕРЯ ЛОДКИ) =====
 local function monitor()
     while not stopScript do
         task.wait(0.5)
         if checkIsland() then break end
 
-        -- Лодка исчезла?
+        -- Если лодка исчезла (сломана)
         if not myBoat or not myBoat.Parent then
             print("[MONITOR] Лодка потеряна, перезапуск...")
             stopBoatMovement()
@@ -250,13 +275,14 @@ local function monitor()
                 task.wait(5)
             end
         else
-            -- Проверка, сидит ли персонаж
+            -- Проверка: сидит ли персонаж на сиденье
             local char = player.Character
             if not char then
                 print("[MONITOR] Персонаж умер, ожидание...")
                 player.CharacterAdded:Wait()
                 char = player.Character
                 if char then
+                    -- Отключаем коллизии у нового персонажа
                     for _, part in ipairs(char:GetDescendants()) do
                         if part:IsA("BasePart") then part.CanCollide = false end
                     end
@@ -280,7 +306,7 @@ local function monitor()
     end
 end
 
--- ЗАПУСК
+-- ===== ЗАПУСК =====
 task.spawn(main)
 task.spawn(monitor)
 print("Скрипт полностью загружен. Ожидание действий...")
