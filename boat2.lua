@@ -1,64 +1,58 @@
 local player = game.Players.LocalPlayer
 local char = player.Character or player.CharacterAdded:Wait()
 local hrp = char:WaitForChild("HumanoidRootPart")
+local humanoid = char:WaitForChild("Humanoid")
 
--- Функция вывода в консоль и в чат
 local function log(msg)
     print(msg)
     game:GetService("StarterGui"):SetCore("ChatMakeSystemMessage", {Text = msg, Color = Color3.new(1,1,0)})
 end
 
-log("=== Трекер запущен. Выполните телепортацию вручную ===")
+log("=== Трекер запущен. Активируйте эталонный скрипт перемещения ===")
 
--- Отслеживаем изменение позиции HumanoidRootPart
+-- Отслеживаем изменения позиции
 local lastPos = hrp.Position
 hrp:GetPropertyChangedSignal("Position"):Connect(function()
     local newPos = hrp.Position
-    local delta = (newPos - lastPos).Magnitude
-    if delta > 5 then
-        log(string.format("[POS] %s -> %s (дельта %.1f)", lastPos, newPos, delta))
+    if (newPos - lastPos).Magnitude > 0.1 then
+        log("[POS] " .. lastPos .. " -> " .. newPos)
         lastPos = newPos
     end
 end)
 
--- Отслеживаем изменение CFrame
-hrp:GetPropertyChangedSignal("CFrame"):Connect(function()
-    log("[CFRAME] " .. tostring(hrp.CFrame))
+-- Отслеживаем изменения PlatformStand
+humanoid:GetPropertyChangedSignal("PlatformStand"):Connect(function()
+    log("[PLATFORMSTAND] = " .. tostring(humanoid.PlatformStand))
 end)
 
--- Отслеживаем появление BodyVelocity (признак физического движения)
-local function onDescendant(desc)
-    if desc:IsA("BodyVelocity") then
-        log("[BODYVELOCITY] создан у " .. desc.Parent:GetFullName())
-        desc:GetPropertyChangedSignal("Velocity"):Connect(function()
-            log("[VEL] " .. tostring(desc.Velocity))
+-- Отслеживаем изменения CanCollide у частей персонажа
+local function trackCollisions(part)
+    if part:IsA("BasePart") then
+        local old = part.CanCollide
+        part:GetPropertyChangedSignal("CanCollide"):Connect(function()
+            log("[COLLIDE] " .. part.Name .. " -> " .. tostring(part.CanCollide))
         end)
-    elseif desc:IsA("BodyPosition") then
-        log("[BODYPOSITION] создан у " .. desc.Parent:GetFullName())
-    elseif desc:IsA("Tween") then
-        log("[TWEEN] создан для " .. desc.Parent:GetFullName())
     end
 end
+for _, part in ipairs(char:GetDescendants()) do
+    trackCollisions(part)
+end
+char.DescendantAdded:Connect(trackCollisions)
 
-char.DescendantAdded:Connect(onDescendant)
-for _, desc in ipairs(char:GetDescendants()) do onDescendant(desc) end
-
--- Перехват RemoteEvent/RemoteFunction (безопасный, только логирование)
-local rs = game:GetService("ReplicatedStorage")
-rs.DescendantAdded:Connect(function(obj)
-    if obj:IsA("RemoteEvent") then
-        log("[REMOTE] RemoteEvent найден: " .. obj:GetFullName())
-    elseif obj:IsA("RemoteFunction") then
-        log("[REMOTE] RemoteFunction найден: " .. obj:GetFullName())
+-- Отслеживаем появление BodyVelocity и BodyPosition
+char.DescendantAdded:Connect(function(desc)
+    if desc:IsA("BodyVelocity") then
+        log("[BODYVELOCITY] создан, Velocity = " .. tostring(desc.Velocity))
+    elseif desc:IsA("BodyPosition") then
+        log("[BODYPOSITION] создан, Position = " .. tostring(desc.Position))
+    elseif desc:IsA("Tween") then
+        log("[TWEEN] найден")
     end
 end)
 
--- Логирование нажатий клавиш (если телепорт по клавише)
-local uis = game:GetService("UserInputService")
-uis.InputBegan:Connect(function(input, gameProcessed)
-    if not gameProcessed then
-        log("[KEY] Нажата клавиша: " .. input.KeyCode.Name)
-    end
+-- Отслеживаем изменения WalkSpeed (возможно, отключается)
+humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+    log("[WALKSPEED] = " .. tostring(humanoid.WalkSpeed))
 end)
 
-log("Трекер активен. Теперь выполните телепортацию (через карту, NPC или команду).")
+log("Трекер активен, запустите эталонный скрипт")
