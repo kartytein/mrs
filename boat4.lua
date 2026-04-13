@@ -1,26 +1,26 @@
--- ===== ИСПРАВЛЕННЫЙ СКРИПТ (движение лодки по правилу: если X < -77389 → плыть ко второй точке, иначе к первой) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ (С ПРОСТОЙ ЛОГИКОЙ ДВИЖЕНИЯ ПО X) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
+local tweenService = game:GetService("TweenService")
 
--- Константы
+-- НАСТРОЙКИ
 local MOVE_POINT = Vector3.new(-16917, 9.1, 447)
-local BOAT_POINT_FAR = Vector3.new(-77389.3, 22.8, 32606.2)   -- дальняя (левая)
-local BOAT_POINT_NEAR = Vector3.new(-47968.4, 22.8, 6048.2)    -- ближняя (правая)
-local THRESHOLD_X = -77389   -- порог: если X меньше, то плыть к ближней, иначе к дальней
+local BOAT_THRESHOLD_X = -77389   -- порог: если X меньше этого, плывём ко второй точке
+local BOAT_POINT_FAR = Vector3.new(-77389.3, 22.8, 32606.2)   -- дальняя
+local BOAT_POINT_NEAR = Vector3.new(-47968.4, 22.8, 6048.2)   -- ближняя
 local WALK_SPEED = 150
 local BOAT_SPEED = 420
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
 local COLLISION_INTERVAL = 0.3
 
--- Глобальные переменные
 local stopScript = false
 local myBoat = nil
 local seat = nil
 local rootPart = nil
-local collisionThread = nil
 local boatVelocity = nil
+local collisionThread = nil
 
--- Поддержание коллизий
+-- Поддержание CanCollide для LowerTorso/UpperTorso
 local function maintainCollisions(char)
     if collisionThread then task.cancel(collisionThread) end
     collisionThread = task.spawn(function()
@@ -44,7 +44,7 @@ local function disableAllCollisions(char)
     end
 end
 
--- Выбор команды
+-- Выбор команды Marines
 local function selectMarines()
     local replicatedStorage = game:GetService("ReplicatedStorage")
     local remotes = replicatedStorage:WaitForChild("Remotes")
@@ -95,7 +95,7 @@ local function moveCharacterTo(targetPos, speed)
     return true
 end
 
--- Поиск своей лодки
+-- Поиск своей лодки по Owner
 local function findMyBoat()
     local boatsFolder = workspace:FindFirstChild("Boats")
     if not boatsFolder then return nil end
@@ -112,7 +112,7 @@ local function findMyBoat()
     return nil
 end
 
--- Посадка на сиденье
+-- Посадка на сиденье через BodyVelocity
 local function sitOnSeat(boatSeat, hrp, humanoid)
     local char = hrp.Parent
     if not char then return false end
@@ -139,7 +139,7 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     return true
 end
 
--- Остановка лодки
+-- Управление лодкой: остановка движения
 local function stopBoat()
     if boatVelocity then
         boatVelocity:Destroy()
@@ -147,45 +147,42 @@ local function stopBoat()
     end
 end
 
--- Запуск движения лодки (с проверкой порога X)
+-- Обновление направления лодки на основе порога X
+local function updateBoatDirection()
+    if not rootPart or not myBoat then return end
+    local x = rootPart.Position.X
+    local target
+    if x < BOAT_THRESHOLD_X then
+        target = BOAT_POINT_NEAR
+    else
+        target = BOAT_POINT_FAR
+    end
+    local direction = (target - rootPart.Position).Unit
+    if boatVelocity then
+        boatVelocity.Velocity = direction * BOAT_SPEED
+    end
+end
+
+-- Запуск движения лодки (создаёт BodyVelocity и цикл обновления)
 local function startBoatMovement()
+    if boatVelocity then return end
+    if not rootPart then return end
+    boatVelocity = Instance.new("BodyVelocity")
+    boatVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    boatVelocity.Parent = rootPart
+    updateBoatDirection()
     task.spawn(function()
-        while not stopScript and myBoat and myBoat.Parent do
-            -- Ждём, пока персонаж сидит
+        while boatVelocity and myBoat and myBoat.Parent and not stopScript do
+            -- Проверяем, сидит ли персонаж
             local char = player.Character
             local humanoid = char and char:FindFirstChild("Humanoid")
             if not (humanoid and humanoid.Sit and humanoid.SeatPart == seat) then
                 stopBoat()
-                repeat
-                    task.wait(0.5)
-                    char = player.Character
-                    humanoid = char and char:FindFirstChild("Humanoid")
-                    if stopScript then break end
-                until humanoid and humanoid.Sit and humanoid.SeatPart == seat
-                if stopScript then break end
-                -- Создаём новый BodyVelocity
-                boatVelocity = Instance.new("BodyVelocity")
-                boatVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-                boatVelocity.Parent = rootPart
+                break
             end
-
-            -- Определяем цель по порогу X
-            local currentX = rootPart.Position.X
-            local targetPoint
-            if currentX < THRESHOLD_X then
-                targetPoint = BOAT_POINT_NEAR
-            else
-                targetPoint = BOAT_POINT_FAR
-            end
-
-            -- Направление к цели
-            local direction = (targetPoint - rootPart.Position).Unit
-            if boatVelocity then
-                boatVelocity.Velocity = direction * BOAT_SPEED
-            end
+            updateBoatDirection()
             task.wait(0.2)
         end
-        stopBoat()
     end)
 end
 
@@ -222,6 +219,7 @@ local function main()
     rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
     if not rootPart then error("Основная часть не найдена") end
 
+    -- Отключаем коллизии у лодки
     for _, part in ipairs(myBoat:GetDescendants()) do
         if part:IsA("BasePart") then part.CanCollide = false end
     end
@@ -235,6 +233,7 @@ local function main()
         maintainCollisions(char)
     end
 
+    -- Отключаем родной скрипт лодки
     local native = myBoat:FindFirstChild("Script")
     if native then native.Disabled = true end
 
@@ -245,10 +244,10 @@ local function main()
     sitOnSeat(seat, hrp, humanoid)
 
     startBoatMovement()
-    print("[MAIN] Движение запущено (правило: если X < -77389 → плыть к ближней точке, иначе к дальней)")
+    print("[MAIN] Движение запущено (лодка движется по порогу X)")
 end
 
--- Мониторинг сброса, смерти, потери лодки (без изменений)
+-- Мониторинг сброса, смерти, потери лодки
 local function monitor()
     while not stopScript do
         task.wait(0.5)
@@ -325,4 +324,4 @@ end
 
 task.spawn(main)
 task.spawn(monitor)
-print("Скрипт загружен. Лодка движется по правилу: если X < -77389 → плыть к ближней точке, иначе к дальней.")
+print("Скрипт загружен. Лодка движется по логике: если X < -77389, плывёт к ближней точке, иначе к дальней.")
