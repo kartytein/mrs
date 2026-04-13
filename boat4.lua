@@ -1,11 +1,10 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С РАБОЧИМ TWEEN ДВИЖЕНИЕМ И ПОСАДКОЙ =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (BodyVelocity для посадки и движения лодки) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
-local tweenService = game:GetService("TweenService")
 
 -- НАСТРОЙКИ
 local MOVE_POINT = Vector3.new(-16917, 9.1, 447)
-local BOAT_THRESHOLD_X = -77389   -- порог
+local BOAT_THRESHOLD_X = -77389
 local BOAT_POINT_FAR = Vector3.new(-77389.3, 22.8, 32606.2)
 local BOAT_POINT_NEAR = Vector3.new(-47968.4, 22.8, 6048.2)
 local WALK_SPEED = 150
@@ -17,9 +16,7 @@ local stopScript = false
 local myBoat = nil
 local seat = nil
 local rootPart = nil
-local currentBoatTween = nil
-local movementActive = false
-local movementThread = nil
+local boatVelocity = nil
 local collisionThread = nil
 
 -- Поддержание CanCollide для LowerTorso/UpperTorso
@@ -46,7 +43,7 @@ local function disableAllCollisions(char)
     end
 end
 
--- Выбор команды
+-- Выбор команды Marines
 local function selectMarines()
     local replicatedStorage = game:GetService("ReplicatedStorage")
     local remotes = replicatedStorage:WaitForChild("Remotes")
@@ -70,7 +67,7 @@ local function checkIsland()
     return false
 end
 
--- Перемещение персонажа через BodyVelocity (старый рабочий метод)
+-- Перемещение персонажа в точку через BodyVelocity
 local function moveCharacterTo(targetPos, speed)
     local char = player.Character
     if not char then return false end
@@ -97,7 +94,7 @@ local function moveCharacterTo(targetPos, speed)
     return true
 end
 
--- Поиск своей лодки
+-- Поиск своей лодки по Owner
 local function findMyBoat()
     local boatsFolder = workspace:FindFirstChild("Boats")
     if not boatsFolder then return nil end
@@ -114,7 +111,7 @@ local function findMyBoat()
     return nil
 end
 
--- Посадка на сиденье (старый рабочий Tween, который нормально садился)
+-- ПОСАДКА НА СИДЕНЬЕ ЧЕРЕЗ BODYVELOCITY (ПЛАВНО, БЕЗ ПАДЕНИЙ)
 local function sitOnSeat(boatSeat, hrp, humanoid)
     local char = hrp.Parent
     if not char then return false end
@@ -122,75 +119,67 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     maintainCollisions(char)
 
     local targetCF = boatSeat.CFrame + SEAT_OFFSET
-    local distance = (hrp.Position - targetCF.Position).Magnitude
-    local duration = math.min(distance / WALK_SPEED, 1.5)
-    if duration < 0.2 then duration = 0.2 end
+    local targetPos = targetCF.Position
 
-    local tween = tweenService:Create(hrp, TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), {CFrame = targetCF})
-    tween:Play()
-    tween.Completed:Wait()
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bv.Parent = hrp
+
+    while (hrp.Position - targetPos).Magnitude > 1.5 do
+        if stopScript then break end
+        local direction = (targetPos - hrp.Position).Unit
+        bv.Velocity = direction * WALK_SPEED
+        task.wait()
+    end
+    bv:Destroy()
+    hrp.CFrame = targetCF
     humanoid.Sit = true
     task.wait(0.3)
     return true
 end
 
--- Остановка движения лодки (мгновенно)
-local function stopBoatMovement()
-    if currentBoatTween then
-        currentBoatTween:Cancel()
-        currentBoatTween = nil
-    end
-    if movementThread then
-        task.cancel(movementThread)
-        movementThread = nil
-    end
-    movementActive = false
-    print("[BOAT] Движение остановлено")
-end
+-- Управление лодкой (BodyVelocity, остановка при вылезании)
+local function startBoatControl()
+    if boatVelocity then return end
+    if not rootPart then return end
 
--- Запуск движения лодки (цикл с Tween, с проверкой посадки и логикой по X)
-local function startBoatMovement()
-    if movementActive then return end
-    movementActive = true
-    movementThread = task.spawn(function()
-        while not stopScript and myBoat and myBoat.Parent do
-            -- Ждём, пока персонаж сидит
+    boatVelocity = Instance.new("BodyVelocity")
+    boatVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    boatVelocity.Parent = rootPart
+    print("[BOAT] BodyVelocity создан")
+
+    task.spawn(function()
+        while boatVelocity and myBoat and myBoat.Parent and not stopScript do
             local char = player.Character
             local humanoid = char and char:FindFirstChild("Humanoid")
             if not (humanoid and humanoid.Sit and humanoid.SeatPart == seat) then
-                -- Если не сидит, останавливаем текущий Tween
-                if currentBoatTween then
-                    currentBoatTween:Cancel()
-                    currentBoatTween = nil
+                -- Останавливаем лодку мгновенно
+                if boatVelocity then
+                    boatVelocity:Destroy()
+                    boatVelocity = nil
+                    print("[BOAT] Лодка остановлена (персонаж не сидит)")
                 end
-                task.wait(0.5)
-                continue
+                break
             end
             -- Определяем цель по порогу X
             local x = rootPart.Position.X
-            local targetPoint
-            if x < BOAT_THRESHOLD_X then
-                targetPoint = BOAT_POINT_NEAR
-            else
-                targetPoint = BOAT_POINT_FAR
+            local target = (x < BOAT_THRESHOLD_X) and BOAT_POINT_NEAR or BOAT_POINT_FAR
+            local direction = (target - rootPart.Position).Unit
+            if boatVelocity then
+                boatVelocity.Velocity = direction * BOAT_SPEED
             end
-            local dist = (rootPart.Position - targetPoint).Magnitude
-            if dist < 10 then
-                -- Уже рядом, ждём немного
-                task.wait(1)
-                continue
-            end
-            local duration = dist / BOAT_SPEED
-            if duration > 0 then
-                currentBoatTween = tweenService:Create(rootPart, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = CFrame.new(targetPoint)})
-                currentBoatTween:Play()
-                currentBoatTween.Completed:Wait()
-                currentBoatTween = nil
-            end
+            task.wait(0.2)
         end
-        movementActive = false
-        movementThread = nil
     end)
+end
+
+-- Остановка лодки (принудительная)
+local function stopBoat()
+    if boatVelocity then
+        boatVelocity:Destroy()
+        boatVelocity = nil
+        print("[BOAT] Принудительная остановка лодки")
+    end
 end
 
 -- Основная логика
@@ -250,8 +239,8 @@ local function main()
     print("[MAIN] Посадка")
     sitOnSeat(seat, hrp, humanoid)
 
-    startBoatMovement()
-    print("[MAIN] Движение запущено")
+    print("[MAIN] Запуск управления лодкой")
+    startBoatControl()
 end
 
 -- Мониторинг сброса, смерти, потери лодки
@@ -262,7 +251,7 @@ local function monitor()
 
         if not myBoat or not myBoat.Parent then
             print("[MONITOR] Лодка потеряна, перезапуск...")
-            stopBoatMovement()
+            stopBoat()
             moveCharacterTo(MOVE_POINT, WALK_SPEED)
             local remote = game:GetService("ReplicatedStorage").Remotes.CommF_
             remote:InvokeServer("BuyBoat", "Guardian")
@@ -293,7 +282,7 @@ local function monitor()
                         local humanoid = char:FindFirstChild("Humanoid")
                         if hrp and humanoid then
                             sitOnSeat(seat, hrp, humanoid)
-                            startBoatMovement()
+                            startBoatControl()
                         end
                     end
                 end
@@ -313,6 +302,10 @@ local function monitor()
                     local humanoid = char:FindFirstChild("Humanoid")
                     if hrp and humanoid then
                         sitOnSeat(seat, hrp, humanoid)
+                        -- Если лодка была остановлена, перезапускаем управление
+                        if not boatVelocity then
+                            startBoatControl()
+                        end
                     end
                 end
             else
@@ -322,6 +315,10 @@ local function monitor()
                     local hrp = char:FindFirstChild("HumanoidRootPart")
                     if hrp then
                         sitOnSeat(seat, hrp, humanoid)
+                        -- После возврата, если лодка остановлена, перезапускаем
+                        if not boatVelocity then
+                            startBoatControl()
+                        end
                     end
                 end
             end
@@ -331,4 +328,4 @@ end
 
 task.spawn(main)
 task.spawn(monitor)
-print("Скрипт загружен. Движение лодки через Tween, посадка через Tween, логика по X.")
+print("Скрипт загружен. Посадка через BodyVelocity, лодка движется и останавливается при вылезании.")
