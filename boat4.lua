@@ -1,4 +1,4 @@
--- ===== ИСПРАВЛЕННЫЙ СКРИПТ (лодка останавливается мгновенно) =====
+-- ===== ИСПРАВЛЕННЫЙ СКРИПТ (постоянная попытка сесть, лодка останавливается) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local tweenService = game:GetService("TweenService")
@@ -18,8 +18,9 @@ local myBoat = nil
 local seat = nil
 local rootPart = nil
 local currentTween = nil          -- Tween лодки
+local boatControlActive = false   -- флаг, что лодка под управлением
 
--- Коллизии (как в эталоне)
+-- Коллизии
 local function maintainCollisions(char)
     task.spawn(function()
         while char and char.Parent and not stopScript do
@@ -98,37 +99,71 @@ local function findMyBoat()
     return nil
 end
 
--- Посадка на сиденье (BodyVelocity, с постоянной скоростью)
-local function sitOnSeat(boatSeat, hrp, humanoid)
-    local char = hrp.Parent
-    if not char then return false end
-    disableAllCollisions(char)
-    maintainCollisions(char)
+-- Посадка на сиденье (BodyVelocity, с постоянной скоростью, бесконечная попытка)
+local function sitOnSeatLoop()
+    while not stopScript do
+        -- Ждём, пока лодка и сиденье существуют
+        if not myBoat or not seat then
+            task.wait(0.5)
+            continue
+        end
+        local char = player.Character
+        if not char then
+            player.CharacterAdded:Wait()
+            char = player.Character
+        end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local humanoid = char:FindFirstChild("Humanoid")
+        if not hrp or not humanoid then
+            task.wait(0.5)
+            continue
+        end
 
-    local targetCF = boatSeat.CFrame + SEAT_OFFSET
-    local targetPos = targetCF.Position
+        -- Если уже сидит на этом сиденье, выходим из цикла
+        if humanoid.Sit and humanoid.SeatPart == seat then
+            print("[SIT] Уже сидим, выход из цикла посадки")
+            break
+        end
 
-    local bv = Instance.new("BodyVelocity")
-    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    bv.Parent = hrp
+        -- Пытаемся сесть
+        disableAllCollisions(char)
+        maintainCollisions(char)
 
-    while (hrp.Position - targetPos).Magnitude > 1.5 do
-        if stopScript then break end
-        local direction = (targetPos - hrp.Position).Unit
-        bv.Velocity = direction * WALK_SPEED
-        task.wait()
+        local targetCF = seat.CFrame + SEAT_OFFSET
+        local targetPos = targetCF.Position
+
+        local bv = Instance.new("BodyVelocity")
+        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        bv.Parent = hrp
+
+        local startTime = tick()
+        while (hrp.Position - targetPos).Magnitude > 1.5 do
+            if stopScript then break end
+            -- Если персонаж умер или пропал, прерываем эту попытку и начнём новую
+            if not player.Character or not hrp.Parent then
+                break
+            end
+            local direction = (targetPos - hrp.Position).Unit
+            bv.Velocity = direction * WALK_SPEED
+            task.wait()
+            -- Защита от бесконечного цикла (30 секунд максимум на одну попытку)
+            if tick() - startTime > 30 then break
+        end
+        bv:Destroy()
+
+        -- Проверяем, сел ли
+        if humanoid.Sit and humanoid.SeatPart == seat then
+            print("[SIT] Посадка успешна")
+            break
+        else
+            print("[SIT] Не удалось сесть, повторяем...")
+            task.wait(1)
+        end
     end
-    bv:Destroy()
-    hrp.CFrame = targetCF
-    humanoid.Sit = true
-    task.wait(0.3)   -- фиксация посадки
-    print("[SIT] Посадка успешна")
-    return true
 end
 
 -- Управление лодкой (запуск/остановка Tween)
 local function updateBoatMovement()
-    -- Останавливаем предыдущий Tween
     if currentTween then
         currentTween:Cancel()
         currentTween = nil
@@ -145,13 +180,12 @@ local function updateBoatMovement()
             currentTween:Play()
             currentTween.Completed:Connect(function()
                 currentTween = nil
-                -- Не запускаем следующий автоматически — монитор сделает это
             end)
         end
     end
 end
 
--- Мониторинг посадки и острова
+-- Мониторинг состояния (остров, посадка, движение лодки)
 local function monitor()
     while not stopScript do
         task.wait(0.3)
@@ -187,40 +221,23 @@ local function monitor()
                     end)
                     local native = myBoat:FindFirstChild("Script")
                     if native then native.Disabled = true end
-                    local char = player.Character
-                    if char then
-                        local hrp = char:FindFirstChild("HumanoidRootPart")
-                        local humanoid = char:FindFirstChild("Humanoid")
-                        if hrp and humanoid then
-                            sitOnSeat(seat, hrp, humanoid)
-                        end
-                    end
+                    -- Запускаем цикл посадки заново
+                    task.spawn(sitOnSeatLoop)
                 end
             else
                 task.wait(5)
             end
         else
-            -- Проверка, сидит ли персонаж
+            -- Управление лодкой: если сидим, запускаем движение; если нет – останавливаем
             local char = player.Character
             local humanoid = char and char:FindFirstChild("Humanoid")
-            local sitting = humanoid and humanoid.Sit and humanoid.SeatPart == seat
-            if sitting then
-                updateBoatMovement()   -- запускаем/обновляем движение
+            if humanoid and humanoid.Sit and humanoid.SeatPart == seat then
+                updateBoatMovement()
             else
-                -- Не сидит: останавливаем лодку и пытаемся вернуться
                 if currentTween then
                     currentTween:Cancel()
                     currentTween = nil
-                    print("[BOAT] Остановлено (не сидит)")
-                end
-                -- Если персонаж существует, возвращаем на сиденье
-                if char then
-                    local hrp = char:FindFirstChild("HumanoidRootPart")
-                    local humanoid2 = char:FindFirstChild("Humanoid")
-                    if hrp and humanoid2 and not (humanoid2.Sit and humanoid2.SeatPart == seat) then
-                        print("[MONITOR] Сброс, возврат на сиденье")
-                        sitOnSeat(seat, hrp, humanoid2)
-                    end
+                    print("[BOAT] Остановлена (не сидит)")
                 end
             end
         end
@@ -263,15 +280,10 @@ local function start()
     local native = myBoat:FindFirstChild("Script")
     if native then native.Disabled = true end
 
-    local char = player.Character
-    if char then
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        local humanoid = char:FindFirstChild("Humanoid")
-        if hrp and humanoid then
-            sitOnSeat(seat, hrp, humanoid)
-        end
-    end
+    -- Запускаем цикл посадки (будет пытаться сесть, пока не сядет)
+    task.spawn(sitOnSeatLoop)
 
+    -- Запускаем монитор (остров, потеря лодки, движение)
     task.spawn(monitor)
 end
 
