@@ -1,13 +1,13 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С ДИАГНОСТИКОЙ ДВИЖЕНИЯ ЛОДКИ =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С РАБОЧИМ TWEEN ДВИЖЕНИЕМ И ПОСАДКОЙ =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local tweenService = game:GetService("TweenService")
 
 -- НАСТРОЙКИ
 local MOVE_POINT = Vector3.new(-16917, 9.1, 447)
-local BOAT_THRESHOLD_X = -77389   -- порог: если X меньше этого, плывём ко второй точке
-local BOAT_POINT_FAR = Vector3.new(-77389.3, 22.8, 32606.2)   -- дальняя
-local BOAT_POINT_NEAR = Vector3.new(-47968.4, 22.8, 6048.2)   -- ближняя
+local BOAT_THRESHOLD_X = -77389   -- порог
+local BOAT_POINT_FAR = Vector3.new(-77389.3, 22.8, 32606.2)
+local BOAT_POINT_NEAR = Vector3.new(-47968.4, 22.8, 6048.2)
 local WALK_SPEED = 150
 local BOAT_SPEED = 420
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
@@ -17,7 +17,9 @@ local stopScript = false
 local myBoat = nil
 local seat = nil
 local rootPart = nil
-local boatVelocity = nil
+local currentBoatTween = nil
+local movementActive = false
+local movementThread = nil
 local collisionThread = nil
 
 -- Поддержание CanCollide для LowerTorso/UpperTorso
@@ -29,11 +31,9 @@ local function maintainCollisions(char)
             local upper = char:FindFirstChild("UpperTorso")
             if lower and lower:IsA("BasePart") and lower.CanCollide == true then
                 lower.CanCollide = false
-                print("[DIAG] LowerTorso CanCollide принудительно false")
             end
             if upper and upper:IsA("BasePart") and upper.CanCollide == true then
                 upper.CanCollide = false
-                print("[DIAG] UpperTorso CanCollide принудительно false")
             end
             task.wait(COLLISION_INTERVAL)
         end
@@ -44,10 +44,9 @@ local function disableAllCollisions(char)
     for _, part in ipairs(char:GetDescendants()) do
         if part:IsA("BasePart") then part.CanCollide = false end
     end
-    print("[DIAG] Отключены коллизии у всех частей персонажа")
 end
 
--- Выбор команды Marines
+-- Выбор команды
 local function selectMarines()
     local replicatedStorage = game:GetService("ReplicatedStorage")
     local remotes = replicatedStorage:WaitForChild("Remotes")
@@ -71,7 +70,7 @@ local function checkIsland()
     return false
 end
 
--- Перемещение персонажа через BodyVelocity
+-- Перемещение персонажа через BodyVelocity (старый рабочий метод)
 local function moveCharacterTo(targetPos, speed)
     local char = player.Character
     if not char then return false end
@@ -85,7 +84,6 @@ local function moveCharacterTo(targetPos, speed)
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
-    print("[DIAG] BodyVelocity создан для перемещения персонажа")
 
     while (hrp.Position - targetPos).Magnitude > 2 do
         if stopScript then break end
@@ -99,7 +97,7 @@ local function moveCharacterTo(targetPos, speed)
     return true
 end
 
--- Поиск своей лодки по Owner
+-- Поиск своей лодки
 local function findMyBoat()
     local boatsFolder = workspace:FindFirstChild("Boats")
     if not boatsFolder then return nil end
@@ -116,7 +114,7 @@ local function findMyBoat()
     return nil
 end
 
--- Посадка на сиденье через BodyVelocity
+-- Посадка на сиденье (старый рабочий Tween, который нормально садился)
 local function sitOnSeat(boatSeat, hrp, humanoid)
     local char = hrp.Parent
     if not char then return false end
@@ -124,88 +122,74 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     maintainCollisions(char)
 
     local targetCF = boatSeat.CFrame + SEAT_OFFSET
-    local targetPos = targetCF.Position
+    local distance = (hrp.Position - targetCF.Position).Magnitude
+    local duration = math.min(distance / WALK_SPEED, 1.5)
+    if duration < 0.2 then duration = 0.2 end
 
-    local bv = Instance.new("BodyVelocity")
-    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    bv.Parent = hrp
-    print("[DIAG] BodyVelocity создан для посадки на сиденье")
-
-    while (hrp.Position - targetPos).Magnitude > 1.5 do
-        if stopScript then break end
-        local direction = (targetPos - hrp.Position).Unit
-        bv.Velocity = direction * WALK_SPEED
-        task.wait()
-    end
-    bv:Destroy()
-    hrp.CFrame = targetCF
+    local tween = tweenService:Create(hrp, TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), {CFrame = targetCF})
+    tween:Play()
+    tween.Completed:Wait()
     humanoid.Sit = true
     task.wait(0.3)
-    print("[DIAG] Посадка завершена")
     return true
 end
 
--- Управление лодкой: остановка движения
-local function stopBoat()
-    if boatVelocity then
-        boatVelocity:Destroy()
-        boatVelocity = nil
-        print("[DIAG] Лодка остановлена (BodyVelocity уничтожен)")
+-- Остановка движения лодки (мгновенно)
+local function stopBoatMovement()
+    if currentBoatTween then
+        currentBoatTween:Cancel()
+        currentBoatTween = nil
     end
+    if movementThread then
+        task.cancel(movementThread)
+        movementThread = nil
+    end
+    movementActive = false
+    print("[BOAT] Движение остановлено")
 end
 
--- Обновление направления лодки на основе порога X
-local function updateBoatDirection()
-    if not rootPart or not myBoat then
-        print("[DIAG] updateBoatDirection: rootPart или myBoat nil")
-        return
-    end
-    local x = rootPart.Position.X
-    local target
-    if x < BOAT_THRESHOLD_X then
-        target = BOAT_POINT_NEAR
-        print("[DIAG] X < порога, цель = ближняя точка", target)
-    else
-        target = BOAT_POINT_FAR
-        print("[DIAG] X >= порога, цель = дальняя точка", target)
-    end
-    local direction = (target - rootPart.Position).Unit
-    if boatVelocity then
-        boatVelocity.Velocity = direction * BOAT_SPEED
-        print("[DIAG] Скорость лодки установлена", boatVelocity.Velocity)
-    else
-        print("[DIAG] boatVelocity = nil, направление не установлено")
-    end
-end
-
--- Запуск движения лодки (создаёт BodyVelocity и цикл обновления)
+-- Запуск движения лодки (цикл с Tween, с проверкой посадки и логикой по X)
 local function startBoatMovement()
-    if boatVelocity then
-        print("[DIAG] Движение уже активно")
-        return
-    end
-    if not rootPart then
-        print("[DIAG] rootPart nil, невозможно создать BodyVelocity")
-        return
-    end
-    boatVelocity = Instance.new("BodyVelocity")
-    boatVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    boatVelocity.Parent = rootPart
-    print("[DIAG] BodyVelocity лодки создан")
-    updateBoatDirection()
-    task.spawn(function()
-        while boatVelocity and myBoat and myBoat.Parent and not stopScript do
-            -- Проверяем, сидит ли персонаж
+    if movementActive then return end
+    movementActive = true
+    movementThread = task.spawn(function()
+        while not stopScript and myBoat and myBoat.Parent do
+            -- Ждём, пока персонаж сидит
             local char = player.Character
             local humanoid = char and char:FindFirstChild("Humanoid")
             if not (humanoid and humanoid.Sit and humanoid.SeatPart == seat) then
-                print("[DIAG] Персонаж не сидит, останавливаем лодку")
-                stopBoat()
-                break
+                -- Если не сидит, останавливаем текущий Tween
+                if currentBoatTween then
+                    currentBoatTween:Cancel()
+                    currentBoatTween = nil
+                end
+                task.wait(0.5)
+                continue
             end
-            updateBoatDirection()
-            task.wait(0.2)
+            -- Определяем цель по порогу X
+            local x = rootPart.Position.X
+            local targetPoint
+            if x < BOAT_THRESHOLD_X then
+                targetPoint = BOAT_POINT_NEAR
+            else
+                targetPoint = BOAT_POINT_FAR
+            end
+            local dist = (rootPart.Position - targetPoint).Magnitude
+            if dist < 10 then
+                -- Уже рядом, ждём немного
+                task.wait(1)
+                continue
+            end
+            local duration = dist / BOAT_SPEED
+            if duration > 0 then
+                currentBoatTween = tweenService:Create(rootPart, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = CFrame.new(targetPoint)})
+                currentBoatTween:Play()
+                currentBoatTween.Completed:Wait()
+                currentBoatTween = nil
+            end
         end
+        movementActive = false
+        movementThread = nil
     end)
 end
 
@@ -241,7 +225,6 @@ local function main()
     if not seat then error("Сиденье не найдено") end
     rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
     if not rootPart then error("Основная часть не найдена") end
-    print("[DIAG] rootPart =", rootPart, "Position =", rootPart.Position)
 
     -- Отключаем коллизии у лодки
     for _, part in ipairs(myBoat:GetDescendants()) do
@@ -250,7 +233,6 @@ local function main()
     myBoat.DescendantAdded:Connect(function(desc)
         if desc:IsA("BasePart") then desc.CanCollide = false end
     end)
-    print("[DIAG] Коллизии лодки отключены")
 
     local char = player.Character
     if char then
@@ -268,8 +250,8 @@ local function main()
     print("[MAIN] Посадка")
     sitOnSeat(seat, hrp, humanoid)
 
-    print("[MAIN] Запуск движения лодки")
     startBoatMovement()
+    print("[MAIN] Движение запущено")
 end
 
 -- Мониторинг сброса, смерти, потери лодки
@@ -280,7 +262,7 @@ local function monitor()
 
         if not myBoat or not myBoat.Parent then
             print("[MONITOR] Лодка потеряна, перезапуск...")
-            stopBoat()
+            stopBoatMovement()
             moveCharacterTo(MOVE_POINT, WALK_SPEED)
             local remote = game:GetService("ReplicatedStorage").Remotes.CommF_
             remote:InvokeServer("BuyBoat", "Guardian")
@@ -349,4 +331,4 @@ end
 
 task.spawn(main)
 task.spawn(monitor)
-print("Скрипт загружен. Лодка должна двигаться. Смотрите диагностические сообщения в консоли.")
+print("Скрипт загружен. Движение лодки через Tween, посадка через Tween, логика по X.")
