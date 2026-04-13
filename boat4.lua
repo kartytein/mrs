@@ -1,4 +1,4 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ (С ПРОСТОЙ ЛОГИКОЙ ДВИЖЕНИЯ ПО X) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ДИАГНОСТИКОЙ ДВИЖЕНИЯ ЛОДКИ =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local tweenService = game:GetService("TweenService")
@@ -29,9 +29,11 @@ local function maintainCollisions(char)
             local upper = char:FindFirstChild("UpperTorso")
             if lower and lower:IsA("BasePart") and lower.CanCollide == true then
                 lower.CanCollide = false
+                print("[DIAG] LowerTorso CanCollide принудительно false")
             end
             if upper and upper:IsA("BasePart") and upper.CanCollide == true then
                 upper.CanCollide = false
+                print("[DIAG] UpperTorso CanCollide принудительно false")
             end
             task.wait(COLLISION_INTERVAL)
         end
@@ -42,6 +44,7 @@ local function disableAllCollisions(char)
     for _, part in ipairs(char:GetDescendants()) do
         if part:IsA("BasePart") then part.CanCollide = false end
     end
+    print("[DIAG] Отключены коллизии у всех частей персонажа")
 end
 
 -- Выбор команды Marines
@@ -82,6 +85,7 @@ local function moveCharacterTo(targetPos, speed)
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
+    print("[DIAG] BodyVelocity создан для перемещения персонажа")
 
     while (hrp.Position - targetPos).Magnitude > 2 do
         if stopScript then break end
@@ -125,6 +129,7 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
+    print("[DIAG] BodyVelocity создан для посадки на сиденье")
 
     while (hrp.Position - targetPos).Magnitude > 1.5 do
         if stopScript then break end
@@ -136,6 +141,7 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     hrp.CFrame = targetCF
     humanoid.Sit = true
     task.wait(0.3)
+    print("[DIAG] Посадка завершена")
     return true
 end
 
@@ -144,32 +150,48 @@ local function stopBoat()
     if boatVelocity then
         boatVelocity:Destroy()
         boatVelocity = nil
+        print("[DIAG] Лодка остановлена (BodyVelocity уничтожен)")
     end
 end
 
 -- Обновление направления лодки на основе порога X
 local function updateBoatDirection()
-    if not rootPart or not myBoat then return end
+    if not rootPart or not myBoat then
+        print("[DIAG] updateBoatDirection: rootPart или myBoat nil")
+        return
+    end
     local x = rootPart.Position.X
     local target
     if x < BOAT_THRESHOLD_X then
         target = BOAT_POINT_NEAR
+        print("[DIAG] X < порога, цель = ближняя точка", target)
     else
         target = BOAT_POINT_FAR
+        print("[DIAG] X >= порога, цель = дальняя точка", target)
     end
     local direction = (target - rootPart.Position).Unit
     if boatVelocity then
         boatVelocity.Velocity = direction * BOAT_SPEED
+        print("[DIAG] Скорость лодки установлена", boatVelocity.Velocity)
+    else
+        print("[DIAG] boatVelocity = nil, направление не установлено")
     end
 end
 
 -- Запуск движения лодки (создаёт BodyVelocity и цикл обновления)
 local function startBoatMovement()
-    if boatVelocity then return end
-    if not rootPart then return end
+    if boatVelocity then
+        print("[DIAG] Движение уже активно")
+        return
+    end
+    if not rootPart then
+        print("[DIAG] rootPart nil, невозможно создать BodyVelocity")
+        return
+    end
     boatVelocity = Instance.new("BodyVelocity")
     boatVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     boatVelocity.Parent = rootPart
+    print("[DIAG] BodyVelocity лодки создан")
     updateBoatDirection()
     task.spawn(function()
         while boatVelocity and myBoat and myBoat.Parent and not stopScript do
@@ -177,6 +199,7 @@ local function startBoatMovement()
             local char = player.Character
             local humanoid = char and char:FindFirstChild("Humanoid")
             if not (humanoid and humanoid.Sit and humanoid.SeatPart == seat) then
+                print("[DIAG] Персонаж не сидит, останавливаем лодку")
                 stopBoat()
                 break
             end
@@ -218,6 +241,7 @@ local function main()
     if not seat then error("Сиденье не найдено") end
     rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
     if not rootPart then error("Основная часть не найдена") end
+    print("[DIAG] rootPart =", rootPart, "Position =", rootPart.Position)
 
     -- Отключаем коллизии у лодки
     for _, part in ipairs(myBoat:GetDescendants()) do
@@ -226,6 +250,7 @@ local function main()
     myBoat.DescendantAdded:Connect(function(desc)
         if desc:IsA("BasePart") then desc.CanCollide = false end
     end)
+    print("[DIAG] Коллизии лодки отключены")
 
     local char = player.Character
     if char then
@@ -243,8 +268,8 @@ local function main()
     print("[MAIN] Посадка")
     sitOnSeat(seat, hrp, humanoid)
 
+    print("[MAIN] Запуск движения лодки")
     startBoatMovement()
-    print("[MAIN] Движение запущено (лодка движется по порогу X)")
 end
 
 -- Мониторинг сброса, смерти, потери лодки
@@ -324,4 +349,4 @@ end
 
 task.spawn(main)
 task.spawn(monitor)
-print("Скрипт загружен. Лодка движется по логике: если X < -77389, плывёт к ближней точке, иначе к дальней.")
+print("Скрипт загружен. Лодка должна двигаться. Смотрите диагностические сообщения в консоли.")
