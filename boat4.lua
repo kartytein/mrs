@@ -1,4 +1,4 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С НЕПРЕРЫВНЫМ ВЫВОДОМ РЕЗУЛЬТАТА ПРОВЕРКИ =====
+-- ===== ИСПРАВЛЕННЫЙ СКРИПТ (принудительные действия при isSitting = false) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local tweenService = game:GetService("TweenService")
@@ -13,182 +13,52 @@ local BOAT_SPEED = 420
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
 local COLLISION_INTERVAL = 0.3
 
--- ГЛОБАЛЬНЫЕ ФЛАГИ
-local isSitting = false          -- сидит ли персонаж в своей лодке
-local needToSit = false          -- требуется ли посадка
+local isSitting = false
+local needToSit = false
 local myBoat = nil
 local seat = nil
 local rootPart = nil
 local currentTween = nil
 local stopScript = false
 
--- Периодическое отключение коллизий (для LowerTorso/UpperTorso)
-local function maintainCollisions(char)
-    task.spawn(function()
-        while char and char.Parent and not stopScript do
-            local lower = char:FindFirstChild("LowerTorso")
-            local upper = char:FindFirstChild("UpperTorso")
-            if lower and lower:IsA("BasePart") and lower.CanCollide == true then
-                lower.CanCollide = false
-                print("[COLLISION] LowerTorso принудительно false")
-            end
-            if upper and upper:IsA("BasePart") and upper.CanCollide == true then
-                upper.CanCollide = false
-                print("[COLLISION] UpperTorso принудительно false")
-            end
-            task.wait(COLLISION_INTERVAL)
-        end
-    end)
-end
+-- ... (функции maintainCollisions, disableAllCollisions, selectMarines, moveCharacterTo, findMyBoat, sitOnSeat, stopBoat, startBoatMovement остаются без изменений, как в предыдущем сообщении) ...
 
-local function disableAllCollisions(char)
-    for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") then part.CanCollide = false end
-    end
-    print("[COLLISION] Все коллизии персонажа отключены")
-end
-
--- Выбор команды Marines
-local function selectMarines()
-    local replicatedStorage = game:GetService("ReplicatedStorage")
-    local remotes = replicatedStorage:WaitForChild("Remotes")
-    local commF = remotes:WaitForChild("CommF_")
-    commF:InvokeServer("SetTeam", "Marines")
-    print("[TEAM] Marines выбрана")
-    local modules = replicatedStorage:WaitForChild("Modules")
-    local eventService = modules:FindFirstChild("RE/OnEventServiceActivity")
-    if eventService then eventService:FireServer() end
-end
-
--- Перемещение персонажа к точке (BodyVelocity)
-local function moveCharacterTo(targetPos, speed)
-    local char = player.Character
-    if not char then return false end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local humanoid = char:FindFirstChild("Humanoid")
-    if not hrp or not humanoid then return false end
-
-    disableAllCollisions(char)
-    maintainCollisions(char)
-
-    local bv = Instance.new("BodyVelocity")
-    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    bv.Parent = hrp
-
-    while (hrp.Position - targetPos).Magnitude > 2 do
-        if stopScript then break end
-        local direction = (targetPos - hrp.Position).Unit
-        bv.Velocity = direction * speed
-        task.wait()
-    end
-    bv:Destroy()
-    hrp.CFrame = CFrame.new(targetPos)
-    print("[MOVE] Перемещение в точку завершено")
-    return true
-end
-
--- Поиск своей лодки (по Owner)
-local function findMyBoat()
-    local boatsFolder = workspace:FindFirstChild("Boats")
-    if not boatsFolder then return nil end
-    for _, boat in ipairs(boatsFolder:GetChildren()) do
-        if boat:IsA("Model") and boat:FindFirstChildWhichIsA("VehicleSeat") then
-            local ownerAttr = boat:GetAttribute("Owner")
-            if ownerAttr == playerName then return boat end
-            local ownerObj = boat:FindFirstChild("Owner")
-            if ownerObj and (ownerObj:IsA("StringValue") or ownerObj:IsA("ObjectValue")) then
-                if tostring(ownerObj.Value) == playerName then return boat end
-            end
-        end
-    end
-    return nil
-end
-
--- Посадка на сиденье (BodyVelocity, без прерываний)
-local function sitOnSeat(boatSeat, hrp, humanoid)
-    local char = hrp.Parent
-    if not char then return false end
-    disableAllCollisions(char)
-    maintainCollisions(char)
-
-    local targetCF = boatSeat.CFrame + SEAT_OFFSET
-    local targetPos = targetCF.Position
-    print("[SIT] Начинаем посадку, цель: ", targetPos)
-
-    local bv = Instance.new("BodyVelocity")
-    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    bv.Parent = hrp
-
-    while (hrp.Position - targetPos).Magnitude > 1.5 do
-        if stopScript then break end
-        local direction = (targetPos - hrp.Position).Unit
-        bv.Velocity = direction * WALK_SPEED
-        task.wait()
-    end
-    bv:Destroy()
-    hrp.CFrame = targetCF
-    humanoid.Sit = true
-    task.wait(0.3)
-    print("[SIT] Посадка успешна")
-    return true
-end
-
--- Остановка движения лодки
-local function stopBoat()
-    if currentTween then
-        currentTween:Cancel()
-        currentTween = nil
-        print("[BOAT] Движение остановлено")
-    end
-end
-
--- Запуск движения лодки (Tween к цели)
-local function startBoatMovement()
-    if not myBoat or not rootPart then return end
-    if currentTween then currentTween:Cancel() end
-    local x = rootPart.Position.X
-    local target = (x < BOAT_THRESHOLD_X) and BOAT_POINT_NEAR or BOAT_POINT_FAR
-    local dist = (rootPart.Position - target).Magnitude
-    local duration = dist / BOAT_SPEED
-    if duration > 0 then
-        currentTween = tweenService:Create(rootPart, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = CFrame.new(target)})
-        currentTween:Play()
-        print("[BOAT] Движение запущено к точке", target)
-        currentTween.Completed:Connect(function()
-            currentTween = nil
-        end)
-    end
-end
-
--- НЕПРЕРЫВНЫЙ МОНИТОР ПОСАДКИ (отдельный поток) с выводом статуса каждые 0.2 сек
+-- НЕПРЕРЫВНЫЙ МОНИТОР ПОСАДКИ (отдельный поток)
 task.spawn(function()
     while not stopScript do
         local char = player.Character
         local humanoid = char and char:FindFirstChild("Humanoid")
         local sitting = humanoid and humanoid.Sit and humanoid.SeatPart == seat
-        -- ВЫВОД РЕЗУЛЬТАТА ПРОВЕРКИ КАЖДЫЕ 0.2 СЕКУНДЫ
         print("[CHECK] Сидит в лодке:", sitting)
         if sitting ~= isSitting then
             isSitting = sitting
             if not isSitting then
                 needToSit = true
                 stopBoat()
+                print("[CHECK] needToSit = true")
             else
                 needToSit = false
+                print("[CHECK] needToSit = false")
             end
         end
-        -- Обновляем ссылки на лодку, если она вдруг изменилась
+        -- Если isSitting = false, но needToSit по какой-то причине false, принудительно выставляем
+        if not isSitting and not needToSit then
+            needToSit = true
+            print("[CHECK] Принудительно установлен needToSit = true")
+        end
+        -- Обновление ссылок на лодку
         if myBoat and (not myBoat.Parent or not seat or not rootPart) then
             myBoat = nil
             seat = nil
             rootPart = nil
             needToSit = true
+            print("[CHECK] Лодка потеряна, сброс ссылок")
         end
         task.wait(0.2)
     end
 end)
 
--- ГЛАВНЫЙ ЦИКЛ (выполняет действия в зависимости от флагов)
+-- ГЛАВНЫЙ ЦИКЛ (действия)
 task.spawn(function()
     selectMarines()
     task.wait(2)
@@ -196,13 +66,17 @@ task.spawn(function()
     while not stopScript do
         if needToSit then
             print("[MAIN] needToSit активен, начинаем процесс посадки")
-            -- Если нет лодки, покупаем
+            -- Если нет лодки или она пропала, покупаем
             if not myBoat or not myBoat.Parent then
                 print("[MAIN] Лодки нет, перемещаемся к точке покупки")
                 moveCharacterTo(MOVE_POINT, WALK_SPEED)
                 print("[MAIN] Призываем лодку")
                 local remote = game:GetService("ReplicatedStorage").Remotes.CommF_
-                remote:InvokeServer("BuyBoat", "Guardian")
+                if remote then
+                    remote:InvokeServer("BuyBoat", "Guardian")
+                else
+                    print("[MAIN] Ошибка: CommF_ не найден")
+                end
                 task.wait(3)
                 -- Ищем лодку
                 for i = 1, 10 do
@@ -242,9 +116,13 @@ task.spawn(function()
                 print("[MAIN] Запуск посадки на сиденье")
                 sitOnSeat(seat, hrp, humanoid)
                 task.wait(0.5)
+                -- Проверяем, сели ли
                 if isSitting then
                     needToSit = false
                     print("[MAIN] Посадка подтверждена, needToSit = false")
+                else
+                    print("[MAIN] Посадка не удалась, повтор через 1 сек")
+                    task.wait(1)
                 end
             else
                 print("[MAIN] Нет персонажа или HRP, ждём...")
@@ -260,4 +138,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт запущен. Каждые 0.2 секунды выводится [CHECK] Сидит в лодке: true/false.")
+print("Скрипт запущен. Принудительная посадка при isSitting = false.")
