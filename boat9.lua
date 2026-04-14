@@ -1,13 +1,12 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ (РАБОЧИЙ, БЕЗ ДЁРГАНИЙ) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ (ЦИКЛИЧЕСКОЕ ДВИЖЕНИЕ МЕЖДУ ДВУМЯ ТОЧКАМИ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local tweenService = game:GetService("TweenService")
 
--- НАСТРОЙКИ (при необходимости измените)
+-- НАСТРОЙКИ
 local MOVE_POINT = Vector3.new(-16917, 9.1, 447)
-local BOAT_THRESHOLD_X = -77389
-local BOAT_POINT_FAR = Vector3.new(-77389.3, 22.8, 32606.2)
-local BOAT_POINT_NEAR = Vector3.new(-47968.4, 22.8, 6048.2)
+local BOAT_POINT_A = Vector3.new(-77389.3, 22.8, 32606.2)   -- дальняя точка
+local BOAT_POINT_B = Vector3.new(-47968.4, 22.8, 6048.2)    -- ближняя точка
 local WALK_SPEED = 150
 local BOAT_SPEED = 420
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
@@ -19,9 +18,10 @@ local myBoat = nil
 local seat = nil
 local rootPart = nil
 local currentTween = nil
-local currentTargetPoint = nil
 local isSitting = false
 local needToSit = true
+local boatPoints = {BOAT_POINT_A, BOAT_POINT_B}
+local currentPointIndex = 1
 
 -- ===== УПРАВЛЕНИЕ КОЛЛИЗИЯМИ =====
 local function maintainCollisions(char)
@@ -96,13 +96,12 @@ local function findMyBoat()
     return nil
 end
 
--- ===== УПРАВЛЕНИЕ ДВИЖЕНИЕМ ЛОДКИ =====
+-- ===== УПРАВЛЕНИЕ ДВИЖЕНИЕМ ЛОДКИ (ЦИКЛИЧЕСКОЕ) =====
 local function stopBoat()
     if currentTween then
         currentTween:Cancel()
         currentTween = nil
     end
-    currentTargetPoint = nil
 end
 
 local function updateBoatMovement()
@@ -110,35 +109,25 @@ local function updateBoatMovement()
     if currentTween then currentTween:Cancel() end
     if not isSitting then return end
 
-    local distToFar = (rootPart.Position - BOAT_POINT_FAR).Magnitude
-    local distToNear = (rootPart.Position - BOAT_POINT_NEAR).Magnitude
-
-    -- Выбираем новую цель, если текущей нет или она достигнута
-    if not currentTargetPoint or
-       (currentTargetPoint == BOAT_POINT_FAR and distToFar < 50) or
-       (currentTargetPoint == BOAT_POINT_NEAR and distToNear < 50) then
-        local x = rootPart.Position.X
-        if x < BOAT_THRESHOLD_X then
-            currentTargetPoint = BOAT_POINT_NEAR
-        else
-            currentTargetPoint = BOAT_POINT_FAR
-        end
+    local target = boatPoints[currentPointIndex]
+    local dist = (rootPart.Position - target).Magnitude
+    if dist < 50 then
+        currentPointIndex = currentPointIndex % #boatPoints + 1
+        target = boatPoints[currentPointIndex]
     end
 
-    local target = currentTargetPoint
-    local dist = (rootPart.Position - target).Magnitude
-    local duration = dist / BOAT_SPEED
+    local duration = (rootPart.Position - target).Magnitude / BOAT_SPEED
     if duration > 0 then
         currentTween = tweenService:Create(rootPart, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = CFrame.new(target)})
         currentTween:Play()
         currentTween.Completed:Connect(function()
             currentTween = nil
-            currentTargetPoint = nil
+            updateBoatMovement()  -- продолжать движение
         end)
     end
 end
 
--- ===== МОНИТОР ПОСАДКИ (ОТДЕЛЬНЫЙ ПОТОК) =====
+-- ===== МОНИТОР ПОСАДКИ =====
 task.spawn(function()
     while not stopScript do
         local char = player.Character
@@ -164,13 +153,13 @@ task.spawn(function()
     end
 end)
 
--- ===== ГЛАВНЫЙ ЦИКЛ (ПОКУПКА / ПОСАДКА) =====
+-- ===== ГЛАВНЫЙ ЦИКЛ =====
 task.spawn(function()
     selectMarines()
     task.wait(2)
 
     while not stopScript do
-        -- Обновляем ссылку на существующую лодку
+        -- Обновляем ссылку на лодку
         local found = findMyBoat()
         if found then
             if myBoat ~= found then
@@ -195,7 +184,6 @@ task.spawn(function()
         end
 
         if needToSit then
-            -- Если нет лодки, покупаем новую
             if not myBoat or not myBoat.Parent then
                 moveCharacterTo(MOVE_POINT, WALK_SPEED)
                 local remote = game:GetService("ReplicatedStorage").Remotes.CommF_
@@ -226,7 +214,7 @@ task.spawn(function()
                 if native then native.Disabled = true end
             end
 
-            -- Непрерывная посадка (цикл с BodyVelocity)
+            -- Непрерывная посадка
             local char = player.Character
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
             local humanoid = char and char:FindFirstChild("Humanoid")
