@@ -1,12 +1,12 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ (ЦИКЛИЧЕСКОЕ ДВИЖЕНИЕ МЕЖДУ ДВУМЯ ТОЧКАМИ) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ПОДДЕРЖКОЙ ОСТРОВА И DRAGON EGG =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local tweenService = game:GetService("TweenService")
 
--- НАСТРОЙКИ
+-- НАСТРОЙКИ (при необходимости измените)
 local MOVE_POINT = Vector3.new(-16917, 9.1, 447)
-local BOAT_POINT_A = Vector3.new(-77389.3, 22.8, 32606.2)   -- дальняя точка
-local BOAT_POINT_B = Vector3.new(-47968.4, 22.8, 6048.2)    -- ближняя точка
+local BOAT_POINT_A = Vector3.new(-77389.3, 22.8, 32606.2)
+local BOAT_POINT_B = Vector3.new(-47968.4, 22.8, 6048.2)
 local WALK_SPEED = 150
 local BOAT_SPEED = 420
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
@@ -22,6 +22,8 @@ local isSitting = false
 local needToSit = true
 local boatPoints = {BOAT_POINT_A, BOAT_POINT_B}
 local currentPointIndex = 1
+local islandMode = false
+local waitingForEgg = false
 
 -- ===== УПРАВЛЕНИЕ КОЛЛИЗИЯМИ =====
 local function maintainCollisions(char)
@@ -96,7 +98,7 @@ local function findMyBoat()
     return nil
 end
 
--- ===== УПРАВЛЕНИЕ ДВИЖЕНИЕМ ЛОДКИ (ЦИКЛИЧЕСКОЕ) =====
+-- ===== УПРАВЛЕНИЕ ЛОДКОЙ =====
 local function stopBoat()
     if currentTween then
         currentTween:Cancel()
@@ -107,7 +109,7 @@ end
 local function updateBoatMovement()
     if not myBoat or not rootPart then return end
     if currentTween then currentTween:Cancel() end
-    if not isSitting then return end
+    if not isSitting or islandMode then return end
 
     local target = boatPoints[currentPointIndex]
     local dist = (rootPart.Position - target).Magnitude
@@ -122,10 +124,87 @@ local function updateBoatMovement()
         currentTween:Play()
         currentTween.Completed:Connect(function()
             currentTween = nil
-            updateBoatMovement()  -- продолжать движение
+            if not islandMode then updateBoatMovement() end
         end)
     end
 end
+
+-- ===== ВЫХОД ИЗ ЛОДКИ =====
+local function exitBoat()
+    local char = player.Character
+    local humanoid = char and char:FindFirstChild("Humanoid")
+    if humanoid and humanoid.Sit then
+        humanoid.Sit = false
+        task.wait(0.5)
+    end
+end
+
+-- ===== ОЖИДАНИЕ ПОЯВЛЕНИЯ И ИСЧЕЗНОВЕНИЯ DRAGON EGG =====
+local function waitForDragonEgg()
+    local egg = nil
+    -- Ждём появления яйца (до 60 секунд)
+    for _ = 1, 60 do
+        egg = workspace:FindFirstChild("Map.Prehistoricisland.Core.SpawnedDragonEggs.DragonEgg")
+        if egg then break end
+        task.wait(1)
+    end
+    if not egg then
+        print("[ISLAND] Dragon Egg не появился, возвращаемся")
+        return
+    end
+    print("[ISLAND] Dragon Egg появился, ожидаем исчезновения...")
+    while egg and egg.Parent do
+        task.wait(0.5)
+    end
+    print("[ISLAND] Dragon Egg исчез")
+end
+
+-- ===== МОНИТОР ОСТРОВА =====
+task.spawn(function()
+    while not stopScript do
+        local island = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Prehistoricisland")
+        if island and not islandMode then
+            print("[ISLAND] Prehistoricisland обнаружен, переключение в режим острова")
+            islandMode = true
+
+            -- Останавливаем лодку и выходим
+            stopBoat()
+            exitBoat()
+            task.wait(1)
+
+            -- Перемещаемся к острову
+            local islandPos = island:GetPivot().Position + Vector3.new(0, 20, 0)
+            moveCharacterTo(islandPos, WALK_SPEED)
+
+            -- Ждём яйцо
+            waitForDragonEgg()
+
+            -- Возвращаемся к лодке
+            print("[ISLAND] Возврат к лодке")
+            myBoat = findMyBoat()
+            if myBoat then
+                seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
+                rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+                if seat and rootPart then
+                    for _, part in ipairs(myBoat:GetDescendants()) do
+                        if part:IsA("BasePart") then part.CanCollide = false end
+                    end
+                    myBoat.DescendantAdded:Connect(function(desc)
+                        if desc:IsA("BasePart") then desc.CanCollide = false end
+                    end)
+                    local native = myBoat:FindFirstChild("Script")
+                    if native then native.Disabled = true end
+                else
+                    myBoat = nil
+                end
+            end
+            islandMode = false
+            needToSit = true
+            print("[ISLAND] Режим острова завершён")
+        end
+        task.wait(1)
+    end
+end)
 
 -- ===== МОНИТОР ПОСАДКИ =====
 task.spawn(function()
@@ -140,7 +219,7 @@ task.spawn(function()
             isSitting = sitting
             if isSitting then
                 needToSit = false
-                updateBoatMovement()
+                if not islandMode then updateBoatMovement() end
             else
                 needToSit = true
                 stopBoat()
@@ -159,7 +238,11 @@ task.spawn(function()
     task.wait(2)
 
     while not stopScript do
-        -- Обновляем ссылку на лодку
+        if islandMode then
+            task.wait(0.5)
+            continue
+        end
+
         local found = findMyBoat()
         if found then
             if myBoat ~= found then
@@ -214,7 +297,6 @@ task.spawn(function()
                 if native then native.Disabled = true end
             end
 
-            -- Непрерывная посадка
             local char = player.Character
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
             local humanoid = char and char:FindFirstChild("Humanoid")
@@ -227,7 +309,7 @@ task.spawn(function()
                 bv.Parent = hrp
 
                 local targetCF = seat.CFrame + SEAT_OFFSET
-                while needToSit and myBoat and myBoat.Parent and seat and hrp and hrp.Parent do
+                while needToSit and not islandMode and myBoat and myBoat.Parent and seat and hrp and hrp.Parent do
                     local direction = (targetCF.Position - hrp.Position).Unit
                     bv.Velocity = direction * WALK_SPEED
                     task.wait()
@@ -238,21 +320,23 @@ task.spawn(function()
                     targetCF = seat.CFrame + SEAT_OFFSET
                 end
                 bv:Destroy()
-                if hrp and hrp.Parent then
+                if hrp and hrp.Parent and not islandMode then
                     hrp.CFrame = seat.CFrame + SEAT_OFFSET
                     if humanoid then humanoid.Sit = true end
                 end
                 needToSit = false
                 isSitting = true
-                updateBoatMovement()
+                if not islandMode then updateBoatMovement() end
             else
                 task.wait(0.5)
             end
         else
-            if isSitting and myBoat and rootPart then
+            if isSitting and myBoat and rootPart and not islandMode then
                 updateBoatMovement()
             end
             task.wait(0.3)
         end
     end
 end)
+
+print("Скрипт запущен. Режим острова активен.")
