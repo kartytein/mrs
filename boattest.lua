@@ -1,8 +1,78 @@
--- Трекер для лодки (аналогично трекеру персонажа)
--- Запустите после того, как лодка появится и начнёт движение.
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ДВИЖЕНИЕМ ЛОДКИ ЧЕРЕЗ BODYVELOCITY (БЕЗ TWEEN) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
+-- НАСТРОЙКИ
+local MOVE_POINT = Vector3.new(-16917, 9.1, 447)
+local BOAT_POINT_A = Vector3.new(-77389.3, 26.8, 32606.2)
+local BOAT_POINT_B = Vector3.new(-47968.4, 26.8, 6048.2)
+local WALK_SPEED = 150
+local BOAT_SPEED = 420
+local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
+local COLLISION_INTERVAL = 0.2
+
+local stopScript = false
+local myBoat = nil
+local seat = nil
+local rootPart = nil
+local boatVelocity = nil
+local isSitting = false
+local needToSit = true
+local boatPoints = {BOAT_POINT_A, BOAT_POINT_B}
+local currentPointIndex = 1
+local collisionThread = nil
+
+-- Постоянное отключение коллизий
+local function maintainCollisions(char)
+    if collisionThread then task.cancel(collisionThread) end
+    collisionThread = task.spawn(function()
+        while char and char.Parent and not stopScript do
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") and part.CanCollide == true then
+                    part.CanCollide = false
+                end
+            end
+            task.wait(COLLISION_INTERVAL)
+        end
+    end)
+end
+
+-- Выбор команды
+local function selectMarines()
+    local replicatedStorage = game:GetService("ReplicatedStorage")
+    local remotes = replicatedStorage:WaitForChild("Remotes")
+    local commF = remotes:WaitForChild("CommF_")
+    commF:InvokeServer("SetTeam", "Marines")
+    local modules = replicatedStorage:WaitForChild("Modules")
+    local eventService = modules:FindFirstChild("RE/OnEventServiceActivity")
+    if eventService then eventService:FireServer() end
+end
+
+-- Перемещение персонажа (BodyVelocity)
+local function moveCharacterTo(targetPos, speed)
+    local char = player.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char:FindFirstChild("Humanoid")
+    if not hrp or not humanoid then return false end
+
+    maintainCollisions(char)
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bv.Parent = hrp
+
+    while (hrp.Position - targetPos).Magnitude > 2 do
+        if stopScript then break end
+        local direction = (targetPos - hrp.Position).Unit
+        bv.Velocity = direction * speed
+        task.wait()
+    end
+    bv:Destroy()
+    hrp.CFrame = CFrame.new(targetPos)
+    return true
+end
+
+-- Поиск своей лодки
 local function findMyBoat()
     local boatsFolder = workspace:FindFirstChild("Boats")
     if not boatsFolder then return nil end
@@ -19,90 +89,154 @@ local function findMyBoat()
     return nil
 end
 
-local boat = findMyBoat()
-if not boat then
-    warn("Лодка не найдена")
-    return
-end
-
-print("=== Трекер для лодки: " .. boat.Name .. " ===")
-
-local rootPart = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
-if not rootPart then
-    warn("Нет основной части")
-    return
-end
-
--- Отслеживание изменения CFrame
-local lastCF = rootPart.CFrame
-rootPart:GetPropertyChangedSignal("CFrame"):Connect(function()
-    local newCF = rootPart.CFrame
-    local delta = (newCF.Position - lastCF.Position).Magnitude
-    print(string.format("[CFRAME] delta: %.2f, new pos: %s", delta, tostring(newCF.Position)))
-    lastCF = newCF
-end)
-
--- Отслеживание изменения Position
-rootPart:GetPropertyChangedSignal("Position"):Connect(function()
-    print("[POSITION] " .. tostring(rootPart.Position))
-end)
-
--- Отслеживание изменения Velocity (если есть BodyVelocity)
-local function watchBodyVelocity(bv)
-    if not bv then return end
-    local lastVel = bv.Velocity
-    bv:GetPropertyChangedSignal("Velocity"):Connect(function()
-        print("[BODYVELOCITY] Velocity changed: " .. tostring(lastVel) .. " -> " .. tostring(bv.Velocity))
-        lastVel = bv.Velocity
-    end)
-    print("[BODYVELOCITY] Created, Velocity = " .. tostring(bv.Velocity))
-end
-
--- Поиск существующих BodyVelocity
-for _, bv in ipairs(boat:GetDescendants()) do
-    if bv:IsA("BodyVelocity") then
-        watchBodyVelocity(bv)
+-- Управление лодкой через BodyVelocity
+local function stopBoat()
+    if boatVelocity then
+        boatVelocity:Destroy()
+        boatVelocity = nil
     end
 end
-boat.DescendantAdded:Connect(function(desc)
-    if desc:IsA("BodyVelocity") then
-        watchBodyVelocity(desc)
-    end
-end)
 
--- Отслеживание появления Tween
-local function watchTween(tween)
-    print("[TWEEN] Created for " .. tween.Parent:GetFullName())
-    tween:GetPropertyChangedSignal("PlaybackState"):Connect(function()
-        print("[TWEEN] State: " .. tostring(tween.PlaybackState))
-    end)
-end
-for _, tween in ipairs(boat:GetDescendants()) do
-    if tween:IsA("Tween") then
-        watchTween(tween)
+local function updateBoatMovement()
+    if not myBoat or not rootPart then return end
+    if not isSitting then
+        stopBoat()
+        return
     end
+    if not boatVelocity then
+        boatVelocity = Instance.new("BodyVelocity")
+        boatVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        boatVelocity.Parent = rootPart
+    end
+    local target = boatPoints[currentPointIndex]
+    local dist = (rootPart.Position - target).Magnitude
+    if dist < 50 then
+        currentPointIndex = currentPointIndex % #boatPoints + 1
+        target = boatPoints[currentPointIndex]
+    end
+    local direction = (target - rootPart.Position).Unit
+    boatVelocity.Velocity = direction * BOAT_SPEED
 end
-boat.DescendantAdded:Connect(function(desc)
-    if desc:IsA("Tween") then
-        watchTween(desc)
+
+-- Монитор посадки
+task.spawn(function()
+    while not stopScript do
+        local char = player.Character
+        local humanoid = char and char:FindFirstChild("Humanoid")
+        local sitting = false
+        if humanoid and seat then
+            sitting = (humanoid.Sit and humanoid.SeatPart == seat)
+        end
+        if sitting ~= isSitting then
+            isSitting = sitting
+            if isSitting then
+                needToSit = false
+                if collisionThread then task.cancel(collisionThread); collisionThread = nil end
+                updateBoatMovement()
+            else
+                needToSit = true
+                stopBoat()
+                if char then maintainCollisions(char) end
+            end
+        end
+        if myBoat and (not myBoat.Parent or not seat or not rootPart) then
+            myBoat, seat, rootPart = nil, nil, nil
+            needToSit = true
+        end
+        task.wait(0.3)
     end
 end)
 
--- Отслеживание изменения CanCollide у частей лодки (если есть)
-local function trackPartCollision(part)
-    part:GetPropertyChangedSignal("CanCollide"):Connect(function()
-        print("[COLLIDE] " .. part.Name .. " CanCollide = " .. tostring(part.CanCollide))
-    end)
-end
-for _, part in ipairs(boat:GetDescendants()) do
-    if part:IsA("BasePart") then
-        trackPartCollision(part)
-    end
-end
-boat.DescendantAdded:Connect(function(desc)
-    if desc:IsA("BasePart") then
-        trackPartCollision(desc)
+-- Главный цикл
+task.spawn(function()
+    selectMarines()
+    task.wait(2)
+
+    while not stopScript do
+        local found = findMyBoat()
+        if found and not myBoat then
+            myBoat = found
+            seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
+            rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+            if seat and rootPart then
+                for _, part in ipairs(myBoat:GetDescendants()) do
+                    if part:IsA("BasePart") then part.CanCollide = false end
+                end
+                local native = myBoat:FindFirstChild("Script")
+                if native then native.Disabled = true end
+            else
+                myBoat = nil
+            end
+        end
+
+        if needToSit then
+            if not myBoat or not myBoat.Parent then
+                moveCharacterTo(MOVE_POINT, WALK_SPEED)
+                local remote = game:GetService("ReplicatedStorage").Remotes.CommF_
+                remote:InvokeServer("BuyBoat", "Guardian")
+                task.wait(3)
+                for i = 1, 10 do
+                    myBoat = findMyBoat()
+                    if myBoat then break end
+                    task.wait(1)
+                end
+                if not myBoat then
+                    task.wait(5)
+                    continue
+                end
+                seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
+                rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+                if not seat or not rootPart then
+                    myBoat = nil
+                    continue
+                end
+                for _, part in ipairs(myBoat:GetDescendants()) do
+                    if part:IsA("BasePart") then part.CanCollide = false end
+                end
+                local native = myBoat:FindFirstChild("Script")
+                if native then native.Disabled = true end
+            end
+
+            local char = player.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local humanoid = char and char:FindFirstChild("Humanoid")
+            if myBoat and seat and hrp and humanoid then
+                maintainCollisions(char)
+
+                local bv = Instance.new("BodyVelocity")
+                bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                bv.Parent = hrp
+
+                local targetCF = seat.CFrame + SEAT_OFFSET
+                while needToSit and myBoat and myBoat.Parent and seat and hrp and hrp.Parent do
+                    local direction = (targetCF.Position - hrp.Position).Unit
+                    bv.Velocity = direction * WALK_SPEED
+                    task.wait()
+                    local hum = hrp.Parent and hrp.Parent:FindFirstChild("Humanoid")
+                    if hum and hum.Sit and hum.SeatPart == seat then
+                        break
+                    end
+                    targetCF = seat.CFrame + SEAT_OFFSET
+                end
+                bv:Destroy()
+                if hrp and hrp.Parent then
+                    hrp.CFrame = seat.CFrame + SEAT_OFFSET
+                    if humanoid then humanoid.Sit = true end
+                end
+                needToSit = false
+                isSitting = true
+                if collisionThread then task.cancel(collisionThread); collisionThread = nil end
+                updateBoatMovement()
+            else
+                task.wait(0.5)
+            end
+        else
+            if isSitting and myBoat and rootPart then
+                updateBoatMovement()
+            end
+            task.wait(0.3)
+        end
     end
 end)
 
-print("Трекер запущен. Наблюдаем за лодкой.")
+print("Скрипт запущен. Лодка движется через BodyVelocity (без Tween), вылетов не должно быть.")
