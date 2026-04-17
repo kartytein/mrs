@@ -1,8 +1,8 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С ДВИЖЕНИЕМ ЛОДКИ ЧЕРЕЗ BODYVELOCITY (БЕЗ TWEEN) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С НЕПРЕРЫВНЫМ ДВИЖЕНИЕМ ЛОДКИ (BODYVELOCITY) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
--- НАСТРОЙКИ
+-- НАСТРОЙКИ (при необходимости измените)
 local MOVE_POINT = Vector3.new(-16917, 9.1, 447)
 local BOAT_POINT_A = Vector3.new(-77389.3, 26.8, 32606.2)
 local BOAT_POINT_B = Vector3.new(-47968.4, 26.8, 6048.2)
@@ -20,24 +20,15 @@ local isSitting = false
 local needToSit = true
 local boatPoints = {BOAT_POINT_A, BOAT_POINT_B}
 local currentPointIndex = 1
-local collisionThread = nil
 
--- Постоянное отключение коллизий
-local function maintainCollisions(char)
-    if collisionThread then task.cancel(collisionThread) end
-    collisionThread = task.spawn(function()
-        while char and char.Parent and not stopScript do
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") and part.CanCollide == true then
-                    part.CanCollide = false
-                end
-            end
-            task.wait(COLLISION_INTERVAL)
-        end
-    end)
+-- ===== ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ (один раз) =====
+local function disableCollisions(char)
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then part.CanCollide = false end
+    end
 end
 
--- Выбор команды
+-- ===== ВЫБОР КОМАНДЫ =====
 local function selectMarines()
     local replicatedStorage = game:GetService("ReplicatedStorage")
     local remotes = replicatedStorage:WaitForChild("Remotes")
@@ -48,7 +39,7 @@ local function selectMarines()
     if eventService then eventService:FireServer() end
 end
 
--- Перемещение персонажа (BodyVelocity)
+-- ===== ПЕРЕМЕЩЕНИЕ ПЕРСОНАЖА =====
 local function moveCharacterTo(targetPos, speed)
     local char = player.Character
     if not char then return false end
@@ -56,7 +47,8 @@ local function moveCharacterTo(targetPos, speed)
     local humanoid = char:FindFirstChild("Humanoid")
     if not hrp or not humanoid then return false end
 
-    maintainCollisions(char)
+    disableCollisions(char)
+
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
@@ -72,7 +64,7 @@ local function moveCharacterTo(targetPos, speed)
     return true
 end
 
--- Поиск своей лодки
+-- ===== ПОИСК СВОЕЙ ЛОДКИ =====
 local function findMyBoat()
     local boatsFolder = workspace:FindFirstChild("Boats")
     if not boatsFolder then return nil end
@@ -89,36 +81,39 @@ local function findMyBoat()
     return nil
 end
 
--- Управление лодкой через BodyVelocity
-local function stopBoat()
-    if boatVelocity then
-        boatVelocity:Destroy()
-        boatVelocity = nil
-    end
+-- ===== НЕПРЕРЫВНОЕ УПРАВЛЕНИЕ ЛОДКОЙ (ОТДЕЛЬНЫЙ ПОТОК) =====
+local function startBoatController()
+    task.spawn(function()
+        while not stopScript do
+            if myBoat and rootPart and isSitting then
+                -- Создаём BodyVelocity, если его нет
+                if not boatVelocity then
+                    boatVelocity = Instance.new("BodyVelocity")
+                    boatVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                    boatVelocity.Parent = rootPart
+                end
+                -- Определяем текущую цель
+                local target = boatPoints[currentPointIndex]
+                local dist = (rootPart.Position - target).Magnitude
+                if dist < 50 then
+                    currentPointIndex = currentPointIndex % #boatPoints + 1
+                    target = boatPoints[currentPointIndex]
+                end
+                local direction = (target - rootPart.Position).Unit
+                boatVelocity.Velocity = direction * BOAT_SPEED
+            else
+                -- Если не сидим, удаляем BodyVelocity
+                if boatVelocity then
+                    boatVelocity:Destroy()
+                    boatVelocity = nil
+                end
+            end
+            task.wait(0.1) -- частая проверка
+        end
+    end)
 end
 
-local function updateBoatMovement()
-    if not myBoat or not rootPart then return end
-    if not isSitting then
-        stopBoat()
-        return
-    end
-    if not boatVelocity then
-        boatVelocity = Instance.new("BodyVelocity")
-        boatVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        boatVelocity.Parent = rootPart
-    end
-    local target = boatPoints[currentPointIndex]
-    local dist = (rootPart.Position - target).Magnitude
-    if dist < 50 then
-        currentPointIndex = currentPointIndex % #boatPoints + 1
-        target = boatPoints[currentPointIndex]
-    end
-    local direction = (target - rootPart.Position).Unit
-    boatVelocity.Velocity = direction * BOAT_SPEED
-end
-
--- Монитор посадки
+-- ===== МОНИТОР ПОСАДКИ =====
 task.spawn(function()
     while not stopScript do
         local char = player.Character
@@ -131,12 +126,8 @@ task.spawn(function()
             isSitting = sitting
             if isSitting then
                 needToSit = false
-                if collisionThread then task.cancel(collisionThread); collisionThread = nil end
-                updateBoatMovement()
             else
                 needToSit = true
-                stopBoat()
-                if char then maintainCollisions(char) end
             end
         end
         if myBoat and (not myBoat.Parent or not seat or not rootPart) then
@@ -147,12 +138,13 @@ task.spawn(function()
     end
 end)
 
--- Главный цикл
+-- ===== ГЛАВНЫЙ ЦИКЛ (ПОКУПКА И ПОСАДКА) =====
 task.spawn(function()
     selectMarines()
     task.wait(2)
 
     while not stopScript do
+        -- Обновляем ссылку на лодку
         local found = findMyBoat()
         if found and not myBoat then
             myBoat = found
@@ -170,6 +162,7 @@ task.spawn(function()
         end
 
         if needToSit then
+            -- Если лодки нет, покупаем
             if not myBoat or not myBoat.Parent then
                 moveCharacterTo(MOVE_POINT, WALK_SPEED)
                 local remote = game:GetService("ReplicatedStorage").Remotes.CommF_
@@ -197,11 +190,12 @@ task.spawn(function()
                 if native then native.Disabled = true end
             end
 
+            -- Посадка
             local char = player.Character
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
             local humanoid = char and char:FindFirstChild("Humanoid")
             if myBoat and seat and hrp and humanoid then
-                maintainCollisions(char)
+                disableCollisions(char)
 
                 local bv = Instance.new("BodyVelocity")
                 bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
@@ -225,18 +219,16 @@ task.spawn(function()
                 end
                 needToSit = false
                 isSitting = true
-                if collisionThread then task.cancel(collisionThread); collisionThread = nil end
-                updateBoatMovement()
             else
                 task.wait(0.5)
             end
         else
-            if isSitting and myBoat and rootPart then
-                updateBoatMovement()
-            end
             task.wait(0.3)
         end
     end
 end)
 
-print("Скрипт запущен. Лодка движется через BodyVelocity (без Tween), вылетов не должно быть.")
+-- Запуск контроллера лодки
+startBoatController()
+
+print("Скрипт запущен. Лодка движется непрерывно через BodyVelocity, цель переключается при приближении.")
