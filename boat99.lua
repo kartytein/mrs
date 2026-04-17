@@ -1,16 +1,16 @@
--- ===== ОПТИМИЗИРОВАННЫЙ СКРИПТ С ПОДНЯТОЙ ЛОДКОЙ =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ПОСТОЯННЫМ ОТКЛЮЧЕНИЕМ КОЛЛИЗИЙ (ПЛАВНЫЙ ПОЛЁТ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local tweenService = game:GetService("TweenService")
 
--- НАСТРОЙКИ
+-- НАСТРОЙКИ (координаты)
 local MOVE_POINT = Vector3.new(-16917, 9.1, 447)
-local BOAT_POINT_A = Vector3.new(-77389.3, 24.8, 32606.2)   -- подняты на 2 студия
-local BOAT_POINT_B = Vector3.new(-47968.4, 24.8, 6048.2)    -- подняты на 2 студия
+local BOAT_POINT_A = Vector3.new(-77389.3, 26.8, 32606.2)   -- ещё выше (+4)
+local BOAT_POINT_B = Vector3.new(-47968.4, 26.8, 6048.2)    -- ещё выше (+4)
 local WALK_SPEED = 150
 local BOAT_SPEED = 420
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
-local COLLISION_INTERVAL = 1   -- реже
+local COLLISION_INTERVAL = 0.2   -- частое отключение коллизий
 
 -- Глобальные переменные
 local stopScript = false
@@ -23,12 +23,21 @@ local needToSit = true
 local boatPoints = {BOAT_POINT_A, BOAT_POINT_B}
 local currentPointIndex = 1
 local islandMode = false
+local collisionThread = nil
 
--- ===== УПРОЩЁННЫЕ КОЛЛИЗИИ =====
-local function disableCollisions(char)
-    for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") then part.CanCollide = false end
-    end
+-- ===== ПОСТОЯННОЕ ПОДДЕРЖАНИЕ КОЛЛИЗИЙ (ОТДЕЛЬНЫЙ ПОТОК) =====
+local function maintainCollisions(char)
+    if collisionThread then task.cancel(collisionThread) end
+    collisionThread = task.spawn(function()
+        while char and char.Parent and not stopScript do
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") and part.CanCollide == true then
+                    part.CanCollide = false
+                end
+            end
+            task.wait(COLLISION_INTERVAL)
+        end
+    end)
 end
 
 -- ===== ВЫБОР КОМАНДЫ =====
@@ -42,7 +51,7 @@ local function selectMarines()
     if eventService then eventService:FireServer() end
 end
 
--- ===== ПЕРЕМЕЩЕНИЕ ПЕРСОНАЖА =====
+-- ===== ПЕРЕМЕЩЕНИЕ ПЕРСОНАЖА (С ПОСТОЯННЫМ ОТКЛЮЧЕНИЕМ КОЛЛИЗИЙ) =====
 local function moveCharacterTo(targetPos, speed)
     local char = player.Character
     if not char then return false end
@@ -50,7 +59,7 @@ local function moveCharacterTo(targetPos, speed)
     local humanoid = char:FindFirstChild("Humanoid")
     if not hrp or not humanoid then return false end
 
-    disableCollisions(char)
+    maintainCollisions(char)   -- запускаем непрерывное отключение коллизий
 
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
@@ -128,8 +137,11 @@ end
 local function waitForDragonEgg()
     local egg = nil
     for _ = 1, 60 do
-        egg = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Prehistoricisland") and workspace.Map.Prehistoricisland:FindFirstChild("Core") and workspace.Map.Prehistoricisland.Core:FindFirstChild("SpawnedDragonEggs") and workspace.Map.Prehistoricisland.Core.SpawnedDragonEggs:FindFirstChild("DragonEgg")
-        if egg then break end
+        local island = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Prehistoricisland")
+        if island and island:FindFirstChild("Core") and island.Core:FindFirstChild("SpawnedDragonEggs") then
+            egg = island.Core.SpawnedDragonEggs:FindFirstChild("DragonEgg")
+            if egg then break end
+        end
         task.wait(1)
     end
     if not egg then return end
@@ -153,7 +165,6 @@ task.spawn(function()
 
             waitForDragonEgg()
 
-            -- Возврат к лодке
             myBoat = findMyBoat()
             if myBoat then
                 seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
@@ -171,7 +182,7 @@ task.spawn(function()
             islandMode = false
             needToSit = true
         end
-        task.wait(2)  -- реже проверяем остров
+        task.wait(2)
     end
 end)
 
@@ -188,17 +199,19 @@ task.spawn(function()
             isSitting = sitting
             if isSitting then
                 needToSit = false
+                if collisionThread then task.cancel(collisionThread); collisionThread = nil end
                 updateBoatMovement()
             else
                 needToSit = true
                 stopBoat()
+                if char then maintainCollisions(char) end
             end
         end
         if myBoat and (not myBoat.Parent or not seat or not rootPart) then
             myBoat, seat, rootPart = nil, nil, nil
             needToSit = true
         end
-        task.wait(0.5)  -- реже проверяем
+        task.wait(0.3)
     end
 end)
 
@@ -261,7 +274,7 @@ task.spawn(function()
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
             local humanoid = char and char:FindFirstChild("Humanoid")
             if myBoat and seat and hrp and humanoid then
-                disableCollisions(char)
+                maintainCollisions(char)
 
                 local bv = Instance.new("BodyVelocity")
                 bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
@@ -285,6 +298,7 @@ task.spawn(function()
                 end
                 needToSit = false
                 isSitting = true
+                if collisionThread then task.cancel(collisionThread); collisionThread = nil end
                 updateBoatMovement()
             else
                 task.wait(0.5)
@@ -298,4 +312,4 @@ task.spawn(function()
     end
 end)
 
-print("Оптимизированный скрипт запущен. Лодка поднята в воздух.")
+print("Скрипт запущен. Коллизии постоянно отключаются, лодка поднята выше.")
