@@ -1,51 +1,46 @@
--- ===== ЛОГГЕР БЕЗ МОДИФИКАЦИИ ГЛОБАЛЬНЫХ ФУНКЦИЙ =====
+-- ===== БЕЗОПАСНЫЙ ЛОГГЕР (без модификации глобальных таблиц) =====
 local function log(msg)
     print(string.format("[%s] %s", os.date("%H:%M:%S"), msg))
 end
 
--- 1. Отслеживаем появление новых объектов в workspace и ReplicatedStorage
-local function trackNewObjects(container, name)
+-- 1. Отслеживаем появление объектов в workspace и ReplicatedStorage
+local function trackDescendants(container, name)
     container.ChildAdded:Connect(function(child)
         log(name .. " + " .. child:GetFullName() .. " (" .. child.ClassName .. ")")
-        -- Если это лодка, начинаем следить за её частями
-        if child.Name == "Guardian" and child:IsA("Model") then
-            log("!!! ЛОДКА ПОЯВИЛАСЬ: " .. child:GetFullName())
-            watchBoat(child)
-        end
     end)
     container.ChildRemoved:Connect(function(child)
         log(name .. " - " .. child:GetFullName())
     end)
 end
+trackDescendants(workspace, "WS")
+trackDescendants(game:GetService("ReplicatedStorage"), "RS")
 
--- Функция наблюдения за лодкой (её частями и движителями)
-function watchBoat(boat)
-    local function watchPart(part)
-        if part:IsA("BasePart") then
-            part:GetPropertyChangedSignal("Position"):Connect(function()
-                log("Boat " .. part:GetFullName() .. " Position = " .. tostring(part.Position))
-            end)
-            part:GetPropertyChangedSignal("CFrame"):Connect(function()
-                log("Boat " .. part:GetFullName() .. " CFrame = " .. tostring(part.CFrame))
-            end)
-            part:GetPropertyChangedSignal("Velocity"):Connect(function()
-                log("Boat " .. part:GetFullName() .. " Velocity = " .. tostring(part.Velocity))
-            end)
-        elseif part:IsA("BodyVelocity") then
-            part:GetPropertyChangedSignal("Velocity"):Connect(function()
-                log("Boat BodyVelocity Velocity = " .. tostring(part.Velocity))
-            end)
+-- 2. Следим за появлением лодки (Guardian) и подписываемся на её изменения
+workspace.DescendantAdded:Connect(function(desc)
+    if desc.Name == "Guardian" and desc:IsA("Model") then
+        log("!!! ЛОДКА ПОЯВИЛАСЬ: " .. desc:GetFullName())
+        -- Отслеживаем изменения свойств частей лодки
+        for _, part in ipairs(desc:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part:GetPropertyChangedSignal("Position"):Connect(function()
+                    log("Boat " .. part:GetFullName() .. " Position = " .. tostring(part.Position))
+                end)
+                part:GetPropertyChangedSignal("CFrame"):Connect(function()
+                    log("Boat " .. part:GetFullName() .. " CFrame = " .. tostring(part.CFrame))
+                end)
+                part:GetPropertyChangedSignal("CanCollide"):Connect(function()
+                    log("Boat " .. part:GetFullName() .. " CanCollide = " .. tostring(part.CanCollide))
+                end)
+            elseif part:IsA("BodyVelocity") then
+                part:GetPropertyChangedSignal("Velocity"):Connect(function()
+                    log("BodyVelocity " .. part:GetFullName() .. " Velocity = " .. tostring(part.Velocity))
+                end)
+            end
         end
     end
-    -- Наблюдаем за всеми существующими частями
-    for _, part in ipairs(boat:GetDescendants()) do
-        watchPart(part)
-    end
-    -- Наблюдаем за новыми частями
-    boat.DescendantAdded:Connect(watchPart)
-end
+end)
 
--- 2. Отслеживаем изменения позиции персонажа
+-- 3. Отслеживаем изменения позиции персонажа
 local player = game.Players.LocalPlayer
 local char = player.Character or player.CharacterAdded:Wait()
 local hrp = char:WaitForChild("HumanoidRootPart")
@@ -58,7 +53,7 @@ hrp:GetPropertyChangedSignal("Position"):Connect(function()
     end
 end)
 
--- 3. Отслеживаем состояние PlatformStand и Sit
+-- 4. Отслеживаем изменения PlatformStand и Sit
 local humanoid = char:WaitForChild("Humanoid")
 humanoid:GetPropertyChangedSignal("PlatformStand"):Connect(function()
     log("PLATFORMSTAND = " .. tostring(humanoid.PlatformStand))
@@ -67,18 +62,14 @@ humanoid:GetPropertyChangedSignal("Sit"):Connect(function()
     log("SIT = " .. tostring(humanoid.Sit) .. ", SeatPart = " .. tostring(humanoid.SeatPart))
 end)
 
--- 4. Отслеживаем появление BodyVelocity (без перехвата Instance.new)
-workspace.DescendantAdded:Connect(function(desc)
+-- 5. Отслеживаем появление BodyVelocity у персонажа
+char.DescendantAdded:Connect(function(desc)
     if desc:IsA("BodyVelocity") then
-        log("NEW BodyVelocity, Parent = " .. tostring(desc.Parent))
+        log("CHAR BodyVelocity added, Velocity = " .. tostring(desc.Velocity))
         desc:GetPropertyChangedSignal("Velocity"):Connect(function()
-            log("BodyVelocity Velocity = " .. tostring(desc.Velocity))
+            log("CHAR BodyVelocity Velocity = " .. tostring(desc.Velocity))
         end)
     end
 end)
-
--- Запускаем отслеживание
-trackNewObjects(workspace, "WS")
-trackNewObjects(game:GetService("ReplicatedStorage"), "RS")
 
 log("Логгер запущен. Теперь активируйте эталонный скрипт. Все изменения будут в консоли.")
