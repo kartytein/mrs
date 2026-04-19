@@ -1,15 +1,22 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ: ЛОДКА ДВИЖЕТСЯ ВПЕРЁД-НАЗАД, ПРИ ВЫЛЕЗАНИИ ПЕРСОНАЖ ОСТАНАВЛИВАЕТСЯ =====
+-- ===== ФИНАЛЬНЫЙ РАБОЧИЙ СКРИПТ =====
+-- 1. Выбор команды Marines
+-- 2. Перемещение в точку покупки
+-- 3. Призыв лодки
+-- 4. Посадка на сиденье
+-- 5. Движение лодки вперёд-назад между двумя X координатами через BodyVelocity на персонажа
+-- 6. При вылезании персонаж останавливается и автоматически возвращается на сиденье
+
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
--- НАСТРОЙКИ (измените под свои координаты)
-local MOVE_POINT = Vector3.new(-16917, 9.1, 447)          -- где покупать лодку
-local BOAT_X_MIN = -77389.3   -- дальняя левая граница
-local BOAT_X_MAX = -47968.4   -- ближняя правая граница
-local BOAT_SPEED = 250        -- скорость по X (положительная = вправо, отрицательная = влево)
-local WALK_SPEED = 150
-local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
-local COLLISION_INTERVAL = 0.2
+-- НАСТРОЙКИ (при необходимости измените)
+local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)      -- где покупать лодку
+local BOAT_X_MIN = -77389.3                               -- левая граница (дальняя)
+local BOAT_X_MAX = -47968.4                               -- правая граница (ближняя)
+local BOAT_SPEED = 250                                    -- скорость лодки по X (положительная = вправо)
+local WALK_SPEED = 150                                    -- скорость ходьбы/полёта
+local SEAT_OFFSET = Vector3.new(0, 2.5, 0)                -- высота над сиденьем
+local COLLISION_INTERVAL = 0.2                            -- частота отключения коллизий
 
 local stopScript = false
 local myBoat = nil
@@ -17,9 +24,9 @@ local seat = nil
 local charVelocity = nil          -- BodyVelocity персонажа
 local isSitting = false
 local needToSit = true
-local currentDirection = -1       -- -1 = движение влево (к -77389), 1 = вправо (к -47968)
+local currentDirection = -1       -- -1 = влево, 1 = вправо
 
--- ===== УПРАВЛЕНИЕ КОЛЛИЗИЯМИ ПЕРСОНАЖА =====
+-- ========== УПРАВЛЕНИЕ КОЛЛИЗИЯМИ ==========
 local function maintainCollisions(char)
     task.spawn(function()
         while char and char.Parent and not stopScript do
@@ -44,18 +51,19 @@ local function disableAllCollisions(char)
     end
 end
 
--- ===== ВЫБОР КОМАНДЫ =====
+-- ========== ВЫБОР КОМАНДЫ ==========
 local function selectMarines()
-    local replicatedStorage = game:GetService("ReplicatedStorage")
-    local remotes = replicatedStorage:WaitForChild("Remotes")
-    local commF = remotes:WaitForChild("CommF_")
-    commF:InvokeServer("SetTeam", "Marines")
-    local modules = replicatedStorage:WaitForChild("Modules")
-    local eventService = modules:FindFirstChild("RE/OnEventServiceActivity")
-    if eventService then eventService:FireServer() end
+    local rs = game:GetService("ReplicatedStorage")
+    local remote = rs:FindFirstChild("Remotes") and rs.Remotes:FindFirstChild("CommF_")
+    if remote then
+        remote:InvokeServer("SetTeam", "Marines")
+        local modules = rs:FindFirstChild("Modules")
+        local event = modules and modules:FindFirstChild("RE/OnEventServiceActivity")
+        if event then event:FireServer() end
+    end
 end
 
--- ===== ПЕРЕМЕЩЕНИЕ ПЕРСОНАЖА К ТОЧКЕ =====
+-- ========== ПЕРЕМЕЩЕНИЕ ПЕРСОНАЖА ==========
 local function moveCharacterTo(targetPos, speed)
     local char = player.Character
     if not char then return false end
@@ -81,14 +89,14 @@ local function moveCharacterTo(targetPos, speed)
     return true
 end
 
--- ===== ПОИСК СВОЕЙ ЛОДКИ (ПО OWNER) =====
+-- ========== ПОИСК СВОЕЙ ЛОДКИ (ПО OWNER) ==========
 local function findMyBoat()
-    local boatsFolder = workspace:FindFirstChild("Boats")
-    if not boatsFolder then return nil end
-    for _, boat in ipairs(boatsFolder:GetChildren()) do
+    local boats = workspace:FindFirstChild("Boats")
+    if not boats then return nil end
+    for _, boat in ipairs(boats:GetChildren()) do
         if boat:IsA("Model") and boat:FindFirstChildWhichIsA("VehicleSeat") then
-            local ownerAttr = boat:GetAttribute("Owner")
-            if ownerAttr == playerName then return boat end
+            local owner = boat:GetAttribute("Owner")
+            if owner == playerName then return boat end
             local ownerObj = boat:FindFirstChild("Owner")
             if ownerObj and (ownerObj:IsA("StringValue") or ownerObj:IsA("ObjectValue")) then
                 if tostring(ownerObj.Value) == playerName then return boat end
@@ -98,7 +106,7 @@ local function findMyBoat()
     return nil
 end
 
--- ===== ПОСАДКА НА СИДЕНЬЕ =====
+-- ========== ПОСАДКА НА СИДЕНЬЕ ==========
 local function sitOnSeat(boatSeat, hrp, humanoid)
     local char = hrp.Parent
     if not char then return false end
@@ -125,7 +133,7 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     return true
 end
 
--- ===== УПРАВЛЕНИЕ BODYVELOCITY ПЕРСОНАЖА =====
+-- ========== УПРАВЛЕНИЕ BODYVELOCITY ПЕРСОНАЖА ==========
 local function stopCharVelocity()
     if charVelocity then
         charVelocity:Destroy()
@@ -146,7 +154,7 @@ local function setCharVelocity(speedX)
     charVelocity.Velocity = Vector3.new(speedX, 0, 0)
 end
 
--- ===== ОБНОВЛЕНИЕ НАПРАВЛЕНИЯ НА ОСНОВЕ ПОЗИЦИИ ЛОДКИ =====
+-- ========== ОБНОВЛЕНИЕ НАПРАВЛЕНИЯ ПО ГРАНИЦАМ ==========
 local function updateDirection()
     if not myBoat then return end
     local root = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
@@ -154,14 +162,14 @@ local function updateDirection()
     local x = root.Position.X
     if x <= BOAT_X_MIN and currentDirection == -1 then
         currentDirection = 1
-        if isSitting then setCharVelocity(BOAT_SPEED * currentDirection) end
+        if isSitting then setCharVelocity(BOAT_SPEED) end
     elseif x >= BOAT_X_MAX and currentDirection == 1 then
         currentDirection = -1
-        if isSitting then setCharVelocity(BOAT_SPEED * currentDirection) end
+        if isSitting then setCharVelocity(-BOAT_SPEED) end
     end
 end
 
--- ===== НЕПРЕРЫВНЫЙ МОНИТОР СОСТОЯНИЯ =====
+-- ========== МОНИТОР ПОСАДКИ И ДВИЖЕНИЯ ==========
 task.spawn(function()
     while not stopScript do
         local char = player.Character
@@ -173,26 +181,22 @@ task.spawn(function()
 
         if sitting then
             if not isSitting then
-                -- только что сел
                 isSitting = true
                 needToSit = false
-                setCharVelocity(BOAT_SPEED * currentDirection)
+                setCharVelocity(currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED)
             end
             updateDirection()
         else
             if isSitting then
-                -- только что слез
                 isSitting = false
                 needToSit = true
                 stopCharVelocity()
             end
-            -- если лодки нет, тоже удаляем скорость
             if not myBoat or not myBoat.Parent then
                 stopCharVelocity()
             end
         end
 
-        -- проверка существования лодки
         if myBoat and (not myBoat.Parent or not seat) then
             myBoat = nil
             seat = nil
@@ -204,13 +208,13 @@ task.spawn(function()
     end
 end)
 
--- ===== ГЛАВНЫЙ ЦИКЛ (ПОКУПКА И ПОСАДКА) =====
+-- ========== ГЛАВНЫЙ ЦИКЛ (ПОКУПКА И ПОСАДКА) ==========
 task.spawn(function()
     selectMarines()
     task.wait(2)
 
     while not stopScript do
-        -- обновляем ссылку на лодку
+        -- Обновляем ссылку на лодку
         local found = findMyBoat()
         if found and not myBoat then
             myBoat = found
@@ -227,9 +231,11 @@ task.spawn(function()
         end
 
         if needToSit then
-            -- если нет лодки, покупаем
+            -- Если лодки нет, перемещаемся в точку покупки и покупаем
             if not myBoat or not myBoat.Parent then
-                moveCharacterTo(MOVE_POINT, WALK_SPEED)
+                print("Перемещение к точке покупки...")
+                moveCharacterTo(PURCHASE_POINT, WALK_SPEED)
+                print("Покупка лодки...")
                 local remote = game:GetService("ReplicatedStorage").Remotes.CommF_
                 remote:InvokeServer("BuyBoat", "Guardian")
                 task.wait(3)
@@ -254,7 +260,7 @@ task.spawn(function()
                 if native then native.Disabled = true end
             end
 
-            -- садимся
+            -- Посадка
             local char = player.Character
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
             local humanoid = char and char:FindFirstChild("Humanoid")
@@ -292,4 +298,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт запущен. Лодка движется между X=" .. BOAT_X_MIN .. " и X=" .. BOAT_X_MAX .. ", скорость " .. BOAT_SPEED .. ". При вылезании персонаж останавливается.")
+print("Скрипт запущен. Лодка будет двигаться между X=" .. BOAT_X_MIN .. " и X=" .. BOAT_X_MAX .. ". При вылезании персонаж останавливается.")
