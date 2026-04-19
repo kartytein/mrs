@@ -1,36 +1,33 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С ОБРАБОТКОЙ СМЕРТИ =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ПОДНЯТИЕМ ЛОДКИ И СТРОГИМ ДВИЖЕНИЕМ ПО X =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
--- НАСТРОЙКИ (при необходимости измените)
-local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)      -- где покупать лодку
-local BOAT_X_MIN = -77389.3                               -- левая граница (дальняя)
-local BOAT_X_MAX = -47968.4                               -- правая граница (ближняя)
-local BOAT_SPEED = 250                                    -- скорость лодки по X (положительная = вправо)
-local WALK_SPEED = 150                                    -- скорость ходьбы/полёта
-local SEAT_OFFSET = Vector3.new(0, 2.5, 0)                -- высота над сиденьем
-local COLLISION_INTERVAL = 0.2                            -- частота отключения коллизий
+-- НАСТРОЙКИ
+local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
+local BOAT_X_MIN = -77389.3
+local BOAT_X_MAX = -47968.4
+local BOAT_SPEED = 250
+local WALK_SPEED = 150
+local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
+local BOAT_Y = 26.8       -- фиксированная высота
+local COLLISION_INTERVAL = 0.2
 
 local stopScript = false
 local myBoat = nil
 local seat = nil
-local charVelocity = nil          -- BodyVelocity персонажа
+local charVelocity = nil
 local isSitting = false
 local needToSit = true
-local currentDirection = -1       -- -1 = влево, 1 = вправо
+local currentDirection = -1
 
--- ========== УПРАВЛЕНИЕ КОЛЛИЗИЯМИ ==========
+-- КОЛЛИЗИИ (как раньше)
 local function maintainCollisions(char)
     task.spawn(function()
         while char and char.Parent and not stopScript do
             local lower = char:FindFirstChild("LowerTorso")
             local upper = char:FindFirstChild("UpperTorso")
-            if lower and lower:IsA("BasePart") and lower.CanCollide == true then
-                lower.CanCollide = false
-            end
-            if upper and upper:IsA("BasePart") and upper.CanCollide == true then
-                upper.CanCollide = false
-            end
+            if lower and lower:IsA("BasePart") and lower.CanCollide == true then lower.CanCollide = false end
+            if upper and upper:IsA("BasePart") and upper.CanCollide == true then upper.CanCollide = false end
             task.wait(COLLISION_INTERVAL)
         end
     end)
@@ -38,13 +35,11 @@ end
 
 local function disableAllCollisions(char)
     for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") then
-            part.CanCollide = false
-        end
+        if part:IsA("BasePart") then part.CanCollide = false end
     end
 end
 
--- ========== ВЫБОР КОМАНДЫ ==========
+-- ВЫБОР КОМАНДЫ
 local function selectMarines()
     local rs = game:GetService("ReplicatedStorage")
     local remote = rs:FindFirstChild("Remotes") and rs.Remotes:FindFirstChild("CommF_")
@@ -56,7 +51,7 @@ local function selectMarines()
     end
 end
 
--- ========== ПЕРЕМЕЩЕНИЕ ПЕРСОНАЖА ==========
+-- ПЕРЕМЕЩЕНИЕ ПЕРСОНАЖА
 local function moveCharacterTo(targetPos, speed)
     local char = player.Character
     if not char then return false end
@@ -82,7 +77,7 @@ local function moveCharacterTo(targetPos, speed)
     return true
 end
 
--- ========== ПОИСК СВОЕЙ ЛОДКИ (ПО OWNER) ==========
+-- ПОИСК ЛОДКИ
 local function findMyBoat()
     local boats = workspace:FindFirstChild("Boats")
     if not boats then return nil end
@@ -99,7 +94,16 @@ local function findMyBoat()
     return nil
 end
 
--- ========== ПОСАДКА НА СИДЕНЬЕ ==========
+-- ПОДНЯТИЕ ЛОДКИ И ФИКСАЦИЯ ВЫСОТЫ И ПОЛОЖЕНИЯ ПО Y/Z
+local function fixBoatPosition()
+    if not myBoat then return end
+    local root = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+    if not root then return end
+    local pos = root.Position
+    root.CFrame = CFrame.new(pos.X, BOAT_Y, pos.Z)
+end
+
+-- ПОСАДКА
 local function sitOnSeat(boatSeat, hrp, humanoid)
     local char = hrp.Parent
     if not char then return false end
@@ -126,7 +130,7 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     return true
 end
 
--- ========== УПРАВЛЕНИЕ BODYVELOCITY ПЕРСОНАЖА ==========
+-- УПРАВЛЕНИЕ СКОРОСТЬЮ ПЕРСОНАЖА (ТОЛЬКО ПО X)
 local function stopCharVelocity()
     if charVelocity then
         charVelocity:Destroy()
@@ -147,12 +151,18 @@ local function setCharVelocity(speedX)
     charVelocity.Velocity = Vector3.new(speedX, 0, 0)
 end
 
--- ========== ОБНОВЛЕНИЕ НАПРАВЛЕНИЯ ПО ГРАНИЦАМ ==========
-local function updateDirection()
+-- ОБНОВЛЕНИЕ НАПРАВЛЕНИЯ И ФИКСАЦИЯ ПОЗИЦИИ ЛОДКИ
+local function updateDirectionAndFix()
     if not myBoat then return end
     local root = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
     if not root then return end
-    local x = root.Position.X
+
+    -- Фиксируем высоту и Z
+    local pos = root.Position
+    root.CFrame = CFrame.new(pos.X, BOAT_Y, pos.Z)
+
+    -- Смена направления по X
+    local x = pos.X
     if x <= BOAT_X_MIN and currentDirection == -1 then
         currentDirection = 1
         if isSitting then setCharVelocity(BOAT_SPEED) end
@@ -162,11 +172,10 @@ local function updateDirection()
     end
 end
 
--- ========== МОНИТОР ПОСАДКИ И ДВИЖЕНИЯ (С ОБРАБОТКОЙ СМЕРТИ) ==========
+-- МОНИТОР ПОСАДКИ И ДВИЖЕНИЯ
 task.spawn(function()
     while not stopScript do
         local char = player.Character
-        -- Если персонаж умер, ждём появления нового
         if not char then
             if isSitting then
                 isSitting = false
@@ -175,14 +184,10 @@ task.spawn(function()
             end
             player.CharacterAdded:Wait()
             char = player.Character
-            -- Обновляем ссылки на HRP и Humanoid
-            local hrp = char:WaitForChild("HumanoidRootPart")
-            local humanoid = char:WaitForChild("Humanoid")
-            -- После смерти лодка может быть потеряна, сбросим флаги
             myBoat = nil
             seat = nil
             needToSit = true
-            task.wait(1) -- небольшая задержка
+            task.wait(1)
             continue
         end
 
@@ -197,8 +202,9 @@ task.spawn(function()
                 isSitting = true
                 needToSit = false
                 setCharVelocity(currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED)
+                fixBoatPosition() -- поднимаем при посадке
             end
-            updateDirection()
+            updateDirectionAndFix()
         else
             if isSitting then
                 isSitting = false
@@ -217,17 +223,16 @@ task.spawn(function()
             stopCharVelocity()
         end
 
-        task.wait(0.2)
+        task.wait(0.1) -- частая проверка
     end
 end)
 
--- ========== ГЛАВНЫЙ ЦИКЛ (ПОКУПКА И ПОСАДКА) ==========
+-- ГЛАВНЫЙ ЦИКЛ (ПОКУПКА И ПОСАДКА)
 task.spawn(function()
     selectMarines()
     task.wait(2)
 
     while not stopScript do
-        -- Обновляем ссылку на лодку
         local found = findMyBoat()
         if found and not myBoat then
             myBoat = found
@@ -238,13 +243,13 @@ task.spawn(function()
                 end
                 local native = myBoat:FindFirstChild("Script")
                 if native then native.Disabled = true end
+                fixBoatPosition()
             else
                 myBoat = nil
             end
         end
 
         if needToSit then
-            -- Если лодки нет, перемещаемся в точку покупки и покупаем
             if not myBoat or not myBoat.Parent then
                 print("Перемещение к точке покупки...")
                 moveCharacterTo(PURCHASE_POINT, WALK_SPEED)
@@ -271,9 +276,9 @@ task.spawn(function()
                 end
                 local native = myBoat:FindFirstChild("Script")
                 if native then native.Disabled = true end
+                fixBoatPosition()
             end
 
-            -- Посадка
             local char = player.Character
             if not char then
                 task.wait(0.5)
@@ -315,4 +320,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт запущен. Лодка движется между X=" .. BOAT_X_MIN .. " и X=" .. BOAT_X_MAX .. ". При смерти персонаж автоматически вернётся в лодку.")
+print("Скрипт запущен. Лодка фиксирована на высоте " .. BOAT_Y .. ", движение строго по X.")
