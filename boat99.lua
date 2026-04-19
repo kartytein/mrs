@@ -1,26 +1,27 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С ПОДНЯТИЕМ ЛОДКИ И СТРОГИМ ДВИЖЕНИЕМ ПО X =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (ТОЛЬКО ПОДНЯТИЕ ПРИ ПОСАДКЕ, БЕЗ ПОСТОЯННОЙ ФИКСАЦИИ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
--- НАСТРОЙКИ
+-- НАСТРОЙКИ (при необходимости измените)
 local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
 local BOAT_X_MIN = -77389.3
 local BOAT_X_MAX = -47968.4
 local BOAT_SPEED = 250
 local WALK_SPEED = 150
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
-local BOAT_Y = 26.8       -- фиксированная высота
+local BOAT_Y = 26.8       -- высота, на которую поднимаем лодку при посадке
 local COLLISION_INTERVAL = 0.2
 
 local stopScript = false
 local myBoat = nil
 local seat = nil
+local rootPart = nil
 local charVelocity = nil
 local isSitting = false
 local needToSit = true
 local currentDirection = -1
 
--- КОЛЛИЗИИ (как раньше)
+-- ========== КОЛЛИЗИИ ==========
 local function maintainCollisions(char)
     task.spawn(function()
         while char and char.Parent and not stopScript do
@@ -39,7 +40,7 @@ local function disableAllCollisions(char)
     end
 end
 
--- ВЫБОР КОМАНДЫ
+-- ========== ВЫБОР КОМАНДЫ ==========
 local function selectMarines()
     local rs = game:GetService("ReplicatedStorage")
     local remote = rs:FindFirstChild("Remotes") and rs.Remotes:FindFirstChild("CommF_")
@@ -51,7 +52,7 @@ local function selectMarines()
     end
 end
 
--- ПЕРЕМЕЩЕНИЕ ПЕРСОНАЖА
+-- ========== ПЕРЕМЕЩЕНИЕ ПЕРСОНАЖА ==========
 local function moveCharacterTo(targetPos, speed)
     local char = player.Character
     if not char then return false end
@@ -77,7 +78,7 @@ local function moveCharacterTo(targetPos, speed)
     return true
 end
 
--- ПОИСК ЛОДКИ
+-- ========== ПОИСК ЛОДКИ ==========
 local function findMyBoat()
     local boats = workspace:FindFirstChild("Boats")
     if not boats then return nil end
@@ -94,16 +95,14 @@ local function findMyBoat()
     return nil
 end
 
--- ПОДНЯТИЕ ЛОДКИ И ФИКСАЦИЯ ВЫСОТЫ И ПОЛОЖЕНИЯ ПО Y/Z
-local function fixBoatPosition()
-    if not myBoat then return end
-    local root = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
-    if not root then return end
-    local pos = root.Position
-    root.CFrame = CFrame.new(pos.X, BOAT_Y, pos.Z)
+-- ========== ПОДНЯТИЕ ЛОДКИ (ОДНОКРАТНОЕ) ==========
+local function liftBoat()
+    if not rootPart then return
+    local pos = rootPart.Position
+    rootPart.CFrame = CFrame.new(pos.X, BOAT_Y, pos.Z)
 end
 
--- ПОСАДКА
+-- ========== ПОСАДКА ==========
 local function sitOnSeat(boatSeat, hrp, humanoid)
     local char = hrp.Parent
     if not char then return false end
@@ -130,7 +129,7 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     return true
 end
 
--- УПРАВЛЕНИЕ СКОРОСТЬЮ ПЕРСОНАЖА (ТОЛЬКО ПО X)
+-- ========== УПРАВЛЕНИЕ ДВИЖЕНИЕМ (BODYVELOCITY НА ПЕРСОНАЖА) ==========
 local function stopCharVelocity()
     if charVelocity then
         charVelocity:Destroy()
@@ -151,18 +150,10 @@ local function setCharVelocity(speedX)
     charVelocity.Velocity = Vector3.new(speedX, 0, 0)
 end
 
--- ОБНОВЛЕНИЕ НАПРАВЛЕНИЯ И ФИКСАЦИЯ ПОЗИЦИИ ЛОДКИ
-local function updateDirectionAndFix()
-    if not myBoat then return end
-    local root = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
-    if not root then return end
-
-    -- Фиксируем высоту и Z
-    local pos = root.Position
-    root.CFrame = CFrame.new(pos.X, BOAT_Y, pos.Z)
-
-    -- Смена направления по X
-    local x = pos.X
+-- ========== ОБНОВЛЕНИЕ НАПРАВЛЕНИЯ ==========
+local function updateDirection()
+    if not rootPart then return
+    local x = rootPart.Position.X
     if x <= BOAT_X_MIN and currentDirection == -1 then
         currentDirection = 1
         if isSitting then setCharVelocity(BOAT_SPEED) end
@@ -172,7 +163,7 @@ local function updateDirectionAndFix()
     end
 end
 
--- МОНИТОР ПОСАДКИ И ДВИЖЕНИЯ
+-- ========== МОНИТОР ПОСАДКИ И ДВИЖЕНИЯ ==========
 task.spawn(function()
     while not stopScript do
         local char = player.Character
@@ -184,8 +175,7 @@ task.spawn(function()
             end
             player.CharacterAdded:Wait()
             char = player.Character
-            myBoat = nil
-            seat = nil
+            myBoat = nil; seat = nil; rootPart = nil
             needToSit = true
             task.wait(1)
             continue
@@ -202,9 +192,9 @@ task.spawn(function()
                 isSitting = true
                 needToSit = false
                 setCharVelocity(currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED)
-                fixBoatPosition() -- поднимаем при посадке
+                liftBoat() -- поднимаем один раз при посадке
             end
-            updateDirectionAndFix()
+            updateDirection()
         else
             if isSitting then
                 isSitting = false
@@ -216,18 +206,17 @@ task.spawn(function()
             end
         end
 
-        if myBoat and (not myBoat.Parent or not seat) then
-            myBoat = nil
-            seat = nil
+        if myBoat and (not myBoat.Parent or not seat or not rootPart) then
+            myBoat = nil; seat = nil; rootPart = nil
             needToSit = true
             stopCharVelocity()
         end
 
-        task.wait(0.1) -- частая проверка
+        task.wait(0.1)
     end
 end)
 
--- ГЛАВНЫЙ ЦИКЛ (ПОКУПКА И ПОСАДКА)
+-- ========== ГЛАВНЫЙ ЦИКЛ (ПОКУПКА И ПОСАДКА) ==========
 task.spawn(function()
     selectMarines()
     task.wait(2)
@@ -237,13 +226,14 @@ task.spawn(function()
         if found and not myBoat then
             myBoat = found
             seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
-            if seat then
+            rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+            if seat and rootPart then
                 for _, part in ipairs(myBoat:GetDescendants()) do
                     if part:IsA("BasePart") then part.CanCollide = false end
                 end
                 local native = myBoat:FindFirstChild("Script")
                 if native then native.Disabled = true end
-                fixBoatPosition()
+                liftBoat() -- поднимаем при первом обнаружении
             else
                 myBoat = nil
             end
@@ -267,7 +257,8 @@ task.spawn(function()
                     continue
                 end
                 seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
-                if not seat then
+                rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+                if not seat or not rootPart then
                     myBoat = nil
                     continue
                 end
@@ -276,7 +267,7 @@ task.spawn(function()
                 end
                 local native = myBoat:FindFirstChild("Script")
                 if native then native.Disabled = true end
-                fixBoatPosition()
+                liftBoat()
             end
 
             local char = player.Character
@@ -320,4 +311,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт запущен. Лодка фиксирована на высоте " .. BOAT_Y .. ", движение строго по X.")
+print("Скрипт запущен. Лодка поднимается один раз при посадке и при первом обнаружении. Движение по X с реверсом.")
