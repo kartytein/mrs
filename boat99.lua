@@ -1,4 +1,4 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С ПОДНЯТИЕМ ЛОДКИ ПРИ ПОСАДКЕ =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ОБРАБОТКОЙ СМЕРТИ =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
@@ -6,16 +6,15 @@ local playerName = player.Name
 local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)      -- где покупать лодку
 local BOAT_X_MIN = -77389.3                               -- левая граница (дальняя)
 local BOAT_X_MAX = -47968.4                               -- правая граница (ближняя)
-local BOAT_SPEED = 250                                    -- скорость лодки по X
-local WALK_SPEED = 150
+local BOAT_SPEED = 250                                    -- скорость лодки по X (положительная = вправо)
+local WALK_SPEED = 150                                    -- скорость ходьбы/полёта
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)                -- высота над сиденьем
-local BOAT_Y = 26.8                                       -- желаемая высота лодки
-local COLLISION_INTERVAL = 0.2
+local COLLISION_INTERVAL = 0.2                            -- частота отключения коллизий
 
 local stopScript = false
 local myBoat = nil
 local seat = nil
-local charVelocity = nil
+local charVelocity = nil          -- BodyVelocity персонажа
 local isSitting = false
 local needToSit = true
 local currentDirection = -1       -- -1 = влево, 1 = вправо
@@ -39,7 +38,9 @@ end
 
 local function disableAllCollisions(char)
     for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") then part.CanCollide = false end
+        if part:IsA("BasePart") then
+            part.CanCollide = false
+        end
     end
 end
 
@@ -98,18 +99,6 @@ local function findMyBoat()
     return nil
 end
 
--- ========== ПОДНЯТИЕ ЛОДКИ НА НУЖНУЮ ВЫСОТУ ==========
-local function liftBoat()
-    if not myBoat then return end
-    local root = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
-    if not root then return end
-    local pos = root.Position
-    if math.abs(pos.Y - BOAT_Y) > 0.5 then
-        root.CFrame = CFrame.new(pos.X, BOAT_Y, pos.Z)
-        print("[LIFT] Лодка поднята до Y = " .. BOAT_Y)
-    end
-end
-
 -- ========== ПОСАДКА НА СИДЕНЬЕ ==========
 local function sitOnSeat(boatSeat, hrp, humanoid)
     local char = hrp.Parent
@@ -134,9 +123,6 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     hrp.CFrame = targetCF
     humanoid.Sit = true
     task.wait(0.3)
-
-    -- После посадки поднимаем лодку
-    liftBoat()
     return true
 end
 
@@ -174,19 +160,13 @@ local function updateDirection()
         currentDirection = -1
         if isSitting then setCharVelocity(-BOAT_SPEED) end
     end
-    -- Дополнительно поддерживаем высоту лодки во время движения
-    if isSitting then
-        local pos = root.Position
-        if math.abs(pos.Y - BOAT_Y) > 0.5 then
-            root.CFrame = CFrame.new(pos.X, BOAT_Y, pos.Z)
-        end
-    end
 end
 
 -- ========== МОНИТОР ПОСАДКИ И ДВИЖЕНИЯ (С ОБРАБОТКОЙ СМЕРТИ) ==========
 task.spawn(function()
     while not stopScript do
         local char = player.Character
+        -- Если персонаж умер, ждём появления нового
         if not char then
             if isSitting then
                 isSitting = false
@@ -195,12 +175,14 @@ task.spawn(function()
             end
             player.CharacterAdded:Wait()
             char = player.Character
+            -- Обновляем ссылки на HRP и Humanoid
             local hrp = char:WaitForChild("HumanoidRootPart")
             local humanoid = char:WaitForChild("Humanoid")
+            -- После смерти лодка может быть потеряна, сбросим флаги
             myBoat = nil
             seat = nil
             needToSit = true
-            task.wait(1)
+            task.wait(1) -- небольшая задержка
             continue
         end
 
@@ -215,7 +197,6 @@ task.spawn(function()
                 isSitting = true
                 needToSit = false
                 setCharVelocity(currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED)
-                liftBoat()  -- дополнительно поднимаем при входе
             end
             updateDirection()
         else
@@ -246,6 +227,7 @@ task.spawn(function()
     task.wait(2)
 
     while not stopScript do
+        -- Обновляем ссылку на лодку
         local found = findMyBoat()
         if found and not myBoat then
             myBoat = found
@@ -256,14 +238,13 @@ task.spawn(function()
                 end
                 local native = myBoat:FindFirstChild("Script")
                 if native then native.Disabled = true end
-                -- Поднимаем лодку при первом обнаружении
-                liftBoat()
             else
                 myBoat = nil
             end
         end
 
         if needToSit then
+            -- Если лодки нет, перемещаемся в точку покупки и покупаем
             if not myBoat or not myBoat.Parent then
                 print("Перемещение к точке покупки...")
                 moveCharacterTo(PURCHASE_POINT, WALK_SPEED)
@@ -290,9 +271,9 @@ task.spawn(function()
                 end
                 local native = myBoat:FindFirstChild("Script")
                 if native then native.Disabled = true end
-                liftBoat()
             end
 
+            -- Посадка
             local char = player.Character
             if not char then
                 task.wait(0.5)
@@ -334,4 +315,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт запущен. Лодка будет поднята на высоту " .. BOAT_Y .. " при посадке и во время движения.")
+print("Скрипт запущен. Лодка движется между X=" .. BOAT_X_MIN .. " и X=" .. BOAT_X_MAX .. ". При смерти персонаж автоматически вернётся в лодку.")
