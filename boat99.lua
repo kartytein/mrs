@@ -1,4 +1,4 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ (НЕПРЕРЫВНАЯ ПОСАДКА, ДВИЖЕНИЕ БЕЗ ОСТАНОВОК) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ПЕРЕСОЗДАНИЕМ BODYVELOCITY ПРИ УРОНЕ =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
@@ -15,7 +15,6 @@ local stopScript = false
 local myBoat = nil
 local seat = nil
 local rootPart = nil
-local charVelocity = nil
 local currentDirection = -1   -- -1 = влево, 1 = вправо
 
 -- ========== КОЛЛИЗИИ ==========
@@ -93,7 +92,7 @@ local function findMyBoat()
     return nil
 end
 
--- ========== ПОСАДКА НА СИДЕНЬЕ (РАБОЧАЯ) ==========
+-- ========== ПОСАДКА НА СИДЕНЬЕ ==========
 local function sitOnSeat(boatSeat, hrp, humanoid)
     local char = hrp.Parent
     if not char then return false end
@@ -120,25 +119,37 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     return true
 end
 
--- ========== УПРАВЛЕНИЕ ДВИЖЕНИЕМ ЛОДКИ ==========
-local function stopBoatMovement()
-    if charVelocity then
-        charVelocity:Destroy()
-        charVelocity = nil
+-- ========== УПРАВЛЕНИЕ BODYVELOCITY ПЕРСОНАЖА (С ПЕРЕСОЗДАНИЕМ) ==========
+local function ensureBodyVelocity(speedX)
+    local char = player.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    -- Проверяем, есть ли уже BodyVelocity с правильной скоростью
+    local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
+    if bv then
+        if bv.Velocity.X ~= speedX then
+            bv.Velocity = Vector3.new(speedX, 0, 0)
+        end
+        return true
+    else
+        -- Создаём новый
+        bv = Instance.new("BodyVelocity")
+        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        bv.Parent = hrp
+        bv.Velocity = Vector3.new(speedX, 0, 0)
+        return true
     end
 end
 
-local function setBoatSpeed(speedX)
+local function stopBoatMovement()
     local char = player.Character
     if not char then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    if not charVelocity then
-        charVelocity = Instance.new("BodyVelocity")
-        charVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        charVelocity.Parent = hrp
+    if hrp then
+        local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
+        if bv then bv:Destroy() end
     end
-    charVelocity.Velocity = Vector3.new(speedX, 0, 0)
 end
 
 -- ========== ОБНОВЛЕНИЕ НАПРАВЛЕНИЯ ==========
@@ -147,14 +158,18 @@ local function updateDirection()
     local x = rootPart.Position.X
     if x <= BOAT_X_MIN and currentDirection == -1 then
         currentDirection = 1
-        if charVelocity then setBoatSpeed(BOAT_SPEED) end
+        if player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Sit and player.Character.Humanoid.SeatPart == seat then
+            ensureBodyVelocity(BOAT_SPEED)
+        end
     elseif x >= BOAT_X_MAX and currentDirection == 1 then
         currentDirection = -1
-        if charVelocity then setBoatSpeed(-BOAT_SPEED) end
+        if player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Sit and player.Character.Humanoid.SeatPart == seat then
+            ensureBodyVelocity(-BOAT_SPEED)
+        end
     end
 end
 
--- ========== ГЛАВНЫЙ БЕСКОНЕЧНЫЙ ЦИКЛ (ПОКУПКА, ПОСАДКА, ДВИЖЕНИЕ) ==========
+-- ========== ГЛАВНЫЙ БЕСКОНЕЧНЫЙ ЦИКЛ ==========
 task.spawn(function()
     selectMarines()
     task.wait(2)
@@ -219,10 +234,9 @@ task.spawn(function()
                 player.CharacterAdded:Wait()
             end
         else
-            -- Сидит: обеспечиваем движение
-            if not charVelocity then
-                setBoatSpeed(currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED)
-            end
+            -- Сидит: обеспечиваем движение (пересоздаём BodyVelocity, если нужно)
+            local currentSpeed = currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED
+            ensureBodyVelocity(currentSpeed)
             updateDirection()
         end
 
@@ -230,4 +244,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт запущен. Лодка будет двигаться между X=" .. BOAT_X_MIN .. " и X=" .. BOAT_X_MAX .. ". Посадка и возврат после смерти гарантированы.")
+print("Скрипт запущен. BodyVelocity будет автоматически восстанавливаться при удалении (например, после получения урона).")
