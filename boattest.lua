@@ -1,100 +1,111 @@
--- Тестер разных способов управления лодкой
+-- Тестовый скрипт: перебор способов движения лодки (вывод в чат)
 local player = game.Players.LocalPlayer
-local boat = workspace:FindFirstChild("Boats") and workspace.Boats:FindFirstChild("Guardian")
+local char = player.Character or player.CharacterAdded:Wait()
+local hrp = char:WaitForChild("HumanoidRootPart")
+local humanoid = char:WaitForChild("Humanoid")
+
+-- Ждём, пока игрок сядет в лодку (чтобы лодка была известна)
+local seat = nil
+repeat
+    task.wait(0.5)
+    seat = humanoid.SeatPart
+until seat
+local boat = seat:FindFirstAncestorWhichIsA("Model")
 if not boat then
-    warn("Лодка не найдена. Убедитесь, что вы сидите в лодке Guardian.")
-    return
+    error("Лодка не найдена")
+end
+print("Игрок сидит в лодке:", boat.Name)
+
+-- Функция для вывода сообщения в чат
+local function chat(msg)
+    game:GetService("StarterGui"):SetCore("ChatMakeSystemMessage", {Text = msg, Color = Color3.new(0,1,0)})
 end
 
-local rootPart = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
-if not rootPart then
-    warn("Не найдена основная часть лодки")
-    return
-end
-
-local function log(msg)
-    print("[TEST] " .. msg)
-    game:GetService("StarterGui"):SetCore("ChatMakeSystemMessage", {Text = msg, Color = Color3.new(1,1,0)})
-end
-
-local function waitForMovement(duration)
-    local startPos = rootPart.Position
-    for i = 1, duration * 2 do
-        task.wait(0.5)
-        if (rootPart.Position - startPos).Magnitude > 1 then
+-- Функция для проверки начала движения лодки
+local function waitForBoatMove(initialPos)
+    local timeout = 5
+    local start = tick()
+    while tick() - start < timeout do
+        local currentPos = boat:GetPivot().Position
+        if (currentPos - initialPos).Magnitude > 0.5 then
             return true
         end
+        task.wait(0.2)
     end
     return false
 end
 
--- Список методов для тестирования
+-- Сохраняем начальную позицию лодки
+local startPos = boat:GetPivot().Position
+
+-- Список способов для тестирования
 local methods = {
-    -- Метод 1: BodyVelocity с постоянной скоростью по X
-    function()
-        log("Метод 1: BodyVelocity по X (скорость 420)")
-        local bv = Instance.new("BodyVelocity")
-        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        bv.Velocity = Vector3.new(420, 0, 0)
-        bv.Parent = rootPart
-        task.wait(3)
-        bv:Destroy()
-        return waitForMovement(3)
-    end,
-    -- Метод 2: BodyVelocity по Z
-    function()
-        log("Метод 2: BodyVelocity по Z (скорость 420)")
-        local bv = Instance.new("BodyVelocity")
-        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        bv.Velocity = Vector3.new(0, 0, 420)
-        bv.Parent = rootPart
-        task.wait(3)
-        bv:Destroy()
-        return waitForMovement(3)
-    end,
-    -- Метод 3: Tween к точке
-    function()
-        log("Метод 3: Tween к точке (500 столов по X)")
-        local target = rootPart.Position + Vector3.new(500, 0, 0)
-        local tween = game:GetService("TweenService"):Create(rootPart, TweenInfo.new(5, Enum.EasingStyle.Linear), {CFrame = CFrame.new(target)})
-        tween:Play()
-        tween.Completed:Wait()
-        return waitForMovement(5)
-    end,
-    -- Метод 4: Применение силы к сиденью (если сиденье есть)
-    function()
-        log("Метод 4: BodyVelocity к VehicleSeat")
-        local seat = boat:FindFirstChildWhichIsA("VehicleSeat")
-        if not seat then
-            log("Сиденье не найдено, пропуск")
-            return false
+    {
+        name = "BodyVelocity на персонажа, скорость -250 по X (как в эталоне)",
+        func = function()
+            local bv = Instance.new("BodyVelocity")
+            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+            bv.Parent = hrp
+            bv.Velocity = Vector3.new(-250, 0, 0)
+            return bv
         end
-        local bv = Instance.new("BodyVelocity")
-        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        bv.Velocity = Vector3.new(420, 0, 0)
-        bv.Parent = seat
-        task.wait(3)
-        bv:Destroy()
-        return waitForMovement(3)
-    end,
-    -- Метод 5: Изменение CFrame через цикл
-    function()
-        log("Метод 5: Прямое изменение CFrame (пошагово)")
-        for i = 1, 50 do
-            rootPart.CFrame = rootPart.CFrame * CFrame.new(10, 0, 0)
-            task.wait(0.1)
+    },
+    {
+        name = "BodyVelocity на персонажа, скорость -420 по X (как у нас)",
+        func = function()
+            local bv = Instance.new("BodyVelocity")
+            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+            bv.Parent = hrp
+            bv.Velocity = Vector3.new(-420, 0, 0)
+            return bv
         end
-        return waitForMovement(5)
-    end,
+    },
+    {
+        name = "BodyVelocity на лодку (HumanoidRootPart), скорость -420 по X",
+        func = function()
+            local root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
+            if not root then return nil end
+            local bv = Instance.new("BodyVelocity")
+            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+            bv.Parent = root
+            bv.Velocity = Vector3.new(-420, 0, 0)
+            return bv
+        end
+    },
+    {
+        name = "BodyVelocity на персонажа, скорость -250 по X, но с отключением коллизий (как в эталоне)",
+        func = function()
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then part.CanCollide = false end
+            end
+            local bv = Instance.new("BodyVelocity")
+            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+            bv.Parent = hrp
+            bv.Velocity = Vector3.new(-250, 0, 0)
+            return bv
+        end
+    },
 }
 
+-- Перебираем способы
 for i, method in ipairs(methods) do
-    if method() then
-        log("УСПЕХ! Лодка сдвинулась при использовании метода " .. i)
-        break
+    chat("Тест " .. i .. ": " .. method.name)
+    print("Тест " .. i .. ": " .. method.name)
+    local bv = method.func()
+    if bv then
+        local moved = waitForBoatMove(startPos)
+        if moved then
+            chat("УСПЕХ! Лодка начала двигаться при способе: " .. method.name)
+            print("Успех, лодка движется")
+            break
+        else
+            chat("Не удалось: лодка не двигается при способе " .. i)
+            if bv then bv:Destroy() end
+        end
     else
-        log("Метод " .. i .. " не сдвинул лодку")
+        chat("Ошибка: способ " .. i .. " не применим")
     end
+    task.wait(1)
 end
 
-log("Тестирование завершено. Если лодка не сдвинулась, возможно, она заблокирована физикой или якорь.")
+chat("Тестирование завершено. Если ни один способ не сработал, проверьте, что вы сидите в лодке и эталонный скрипт не активен.")
