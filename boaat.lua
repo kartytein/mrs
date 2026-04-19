@@ -1,4 +1,4 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С ПРОВЕРКАМИ (исправлен) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ПРОВЕРКАМИ НА NIL =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
@@ -21,18 +21,14 @@ local needToSit = true
 local boatPoints = {BOAT_POINT_A, BOAT_POINT_B}
 local currentPointIndex = 1
 
--- ========== 1. УПРАВЛЕНИЕ КОЛЛИЗИЯМИ ==========
+-- ========== 1. КОЛЛИЗИИ ==========
 local function maintainCollisions(char)
     task.spawn(function()
         while char and char.Parent and not stopScript do
             local lower = char:FindFirstChild("LowerTorso")
             local upper = char:FindFirstChild("UpperTorso")
-            if lower and lower:IsA("BasePart") and lower.CanCollide == true then
-                lower.CanCollide = false
-            end
-            if upper and upper:IsA("BasePart") and upper.CanCollide == true then
-                upper.CanCollide = false
-            end
+            if lower and lower:IsA("BasePart") and lower.CanCollide == true then lower.CanCollide = false end
+            if upper and upper:IsA("BasePart") and upper.CanCollide == true then upper.CanCollide = false end
             task.wait(COLLISION_INTERVAL)
         end
     end)
@@ -40,33 +36,35 @@ end
 
 local function disableAllCollisions(char)
     for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") then
-            part.CanCollide = false
-        end
+        if part:IsA("BasePart") then part.CanCollide = false end
     end
 end
 
 -- ========== 2. ВЫБОР КОМАНДЫ ==========
 local function selectMarines()
     local replicatedStorage = game:GetService("ReplicatedStorage")
+    if not replicatedStorage then
+        warn("ReplicatedStorage не найдена")
+        return false
+    end
     local remotes = replicatedStorage:FindFirstChild("Remotes")
     if not remotes then
-        warn("Remotes not found")
-        return
+        warn("Remotes не найдены")
+        return false
     end
     local commF = remotes:FindFirstChild("CommF_")
     if not commF then
-        warn("CommF_ not found")
-        return
+        warn("CommF_ не найден")
+        return false
     end
     commF:InvokeServer("SetTeam", "Marines")
+    print("[TEAM] Marines выбрана")
     local modules = replicatedStorage:FindFirstChild("Modules")
     if modules then
         local eventService = modules:FindFirstChild("RE/OnEventServiceActivity")
-        if eventService then
-            eventService:FireServer()
-        end
+        if eventService then eventService:FireServer() end
     end
+    return true
 end
 
 -- ========== 3. ПЕРЕМЕЩЕНИЕ ПЕРСОНАЖА ==========
@@ -95,7 +93,20 @@ local function moveCharacterTo(targetPos, speed)
     return true
 end
 
--- ========== 4. ПОИСК СВОЕЙ ЛОДКИ ==========
+-- ========== 4. ПРИЗЫВ ЛОДКИ ==========
+local function summonBoat()
+    local replicatedStorage = game:GetService("ReplicatedStorage")
+    if not replicatedStorage then return false end
+    local remotes = replicatedStorage:FindFirstChild("Remotes")
+    if not remotes then return false end
+    local commF = remotes:FindFirstChild("CommF_")
+    if not commF then return false end
+    commF:InvokeServer("BuyBoat", "Guardian")
+    print("[SUMMON] Лодка призвана")
+    return true
+end
+
+-- ========== 5. ПОИСК СВОЕЙ ЛОДКИ ==========
 local function findMyBoat()
     local boatsFolder = workspace:FindFirstChild("Boats")
     if not boatsFolder then return nil end
@@ -112,7 +123,7 @@ local function findMyBoat()
     return nil
 end
 
--- ========== 5. ПОСАДКА ==========
+-- ========== 6. ПОСАДКА НА СИДЕНЬЕ ==========
 local function sitOnSeat(boatSeat, hrp, humanoid)
     local char = hrp.Parent
     if not char then return false end
@@ -139,7 +150,7 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     return true
 end
 
--- ========== 6. УПРАВЛЕНИЕ ЛОДКОЙ ==========
+-- ========== 7. УПРАВЛЕНИЕ ЛОДКОЙ ==========
 local function stopBoat()
     if boatVelocity then
         boatVelocity:Destroy()
@@ -148,7 +159,7 @@ local function stopBoat()
 end
 
 local function updateBoatMovement()
-    if not myBoat or not rootPart then return
+    if not myBoat or not rootPart then return end
     if not isSitting then
         stopBoat()
         return
@@ -168,7 +179,7 @@ local function updateBoatMovement()
     boatVelocity.Velocity = direction * BOAT_SPEED
 end
 
--- ========== 7. МОНИТОР ПОСАДКИ ==========
+-- ========== 8. МОНИТОР ПОСАДКИ ==========
 task.spawn(function()
     while not stopScript do
         local char = player.Character
@@ -188,31 +199,32 @@ task.spawn(function()
             end
         end
         if myBoat and (not myBoat.Parent or not seat or not rootPart) then
-            myBoat = nil; seat = nil; rootPart = nil
+            myBoat, seat, rootPart = nil, nil, nil
             needToSit = true
         end
         task.wait(0.2)
     end
 end)
 
--- ========== 8. ПРИЗЫВ ЛОДКИ ==========
-local function summonBoat()
-    local replicatedStorage = game:GetService("ReplicatedStorage")
-    local remotes = replicatedStorage:FindFirstChild("Remotes")
-    if not remotes then return false end
-    local commF = remotes:FindFirstChild("CommF_")
-    if not commF then return false end
-    commF:InvokeServer("BuyBoat", "Guardian")
-    return true
-end
-
 -- ========== 9. ГЛАВНЫЙ ЦИКЛ ==========
 task.spawn(function()
-    selectMarines()
+    -- Выбор команды с повторными попытками
+    local teamSelected = false
+    for i = 1, 5 do
+        if selectMarines() then
+            teamSelected = true
+            break
+        end
+        print("[MAIN] Ожидание доступа к CommF_, попытка " .. i)
+        task.wait(2)
+    end
+    if not teamSelected then
+        error("Не удалось выбрать команду Marines: CommF_ не найден")
+    end
     task.wait(2)
 
     while not stopScript do
-        -- Обновляем ссылку на существующую лодку
+        -- Обновляем ссылку на лодку
         local found = findMyBoat()
         if found and not myBoat then
             myBoat = found
@@ -233,9 +245,8 @@ task.spawn(function()
             -- Если лодки нет, покупаем
             if not myBoat or not myBoat.Parent then
                 moveCharacterTo(MOVE_POINT, WALK_SPEED)
-                local success = summonBoat()
-                if not success then
-                    warn("Не удалось призвать лодку, повтор через 5 сек")
+                if not summonBoat() then
+                    print("[MAIN] Не удалось призвать лодку, повтор через 5 сек")
                     task.wait(5)
                     continue
                 end
@@ -262,7 +273,7 @@ task.spawn(function()
                 if native then native.Disabled = true end
             end
 
-            -- Пытаемся сесть
+            -- Посадка
             local char = player.Character
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
             local humanoid = char and char:FindFirstChild("Humanoid")
@@ -305,4 +316,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт запущен. Лодка движется через BodyVelocity, коллизии постоянно отключаются.")
+print("Скрипт запущен. Проверки на nil добавлены. Лодка движется через BodyVelocity.")
