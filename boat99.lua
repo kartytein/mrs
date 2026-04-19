@@ -1,4 +1,4 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С ПЕРЕСОЗДАНИЕМ BODYVELOCITY ПРИ УРОНЕ =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ОБРАБОТКОЙ СМЕРТИ И ТАЙМАУТОМ =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
@@ -10,12 +10,14 @@ local BOAT_SPEED = 250
 local WALK_SPEED = 150
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
 local COLLISION_INTERVAL = 0.2
+local RESET_TIMEOUT = 30  -- секунд без посадки для перезапуска
 
 local stopScript = false
 local myBoat = nil
 local seat = nil
 local rootPart = nil
-local currentDirection = -1   -- -1 = влево, 1 = вправо
+local currentDirection = -1
+local lastSitAttempt = os.time()  -- время последней попытки сесть
 
 -- ========== КОЛЛИЗИИ ==========
 local function maintainCollisions(char)
@@ -119,13 +121,12 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     return true
 end
 
--- ========== УПРАВЛЕНИЕ BODYVELOCITY ПЕРСОНАЖА (С ПЕРЕСОЗДАНИЕМ) ==========
+-- ========== УПРАВЛЕНИЕ BODYVELOCITY ПЕРСОНАЖА ==========
 local function ensureBodyVelocity(speedX)
     local char = player.Character
     if not char then return false end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return false end
-    -- Проверяем, есть ли уже BodyVelocity с правильной скоростью
     local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
     if bv then
         if bv.Velocity.X ~= speedX then
@@ -133,7 +134,6 @@ local function ensureBodyVelocity(speedX)
         end
         return true
     else
-        -- Создаём новый
         bv = Instance.new("BodyVelocity")
         bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
         bv.Parent = hrp
@@ -167,6 +167,22 @@ local function updateDirection()
             ensureBodyVelocity(-BOAT_SPEED)
         end
     end
+end
+
+-- ========== ПЕРЕЗАПУСК ПРОЦЕССА ==========
+local function fullReset()
+    print("FULL RESET: таймаут или потеря лодки")
+    myBoat = nil
+    seat = nil
+    rootPart = nil
+    stopBoatMovement()
+    -- Принудительно выходим из лодки, если сидим
+    local char = player.Character
+    if char then
+        local hum = char:FindFirstChild("Humanoid")
+        if hum and hum.Sit then hum.Sit = false end
+    end
+    task.wait(1)
 end
 
 -- ========== ГЛАВНЫЙ БЕСКОНЕЧНЫЙ ЦИКЛ ==========
@@ -220,28 +236,48 @@ task.spawn(function()
         end
 
         if not sitting then
-            -- Не сидит: останавливаем движение и садимся
+            -- Не сидит: останавливаем движение и пытаемся сесть
             stopBoatMovement()
             if char and humanoid and seat then
                 local hrp = char:FindFirstChild("HumanoidRootPart")
                 if hrp then
                     print("Посадка...")
                     sitOnSeat(seat, hrp, humanoid)
+                    lastSitAttempt = os.time()
                 end
             elseif not char then
                 -- Персонаж мёртв, ждём появления
                 print("Ожидание появления персонажа...")
                 player.CharacterAdded:Wait()
+                -- После появления персонажа нужно сбросить ссылки на лодку, чтобы заново сесть
+                myBoat = nil
+                seat = nil
+                rootPart = nil
+                lastSitAttempt = os.time()
+                task.wait(1)
+                continue
+            end
+            -- Таймаут: если долго не можем сесть, перезапускаем всё
+            if os.time() - lastSitAttempt > RESET_TIMEOUT then
+                fullReset()
+                lastSitAttempt = os.time()
+                continue
             end
         else
-            -- Сидит: обеспечиваем движение (пересоздаём BodyVelocity, если нужно)
+            -- Сидит: обеспечиваем движение и сбрасываем таймер
+            lastSitAttempt = os.time()
             local currentSpeed = currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED
             ensureBodyVelocity(currentSpeed)
             updateDirection()
+        end
+
+        -- 3. Если лодка потеряна, перезапускаем
+        if myBoat and (not myBoat.Parent or not seat or not rootPart) then
+            fullReset()
         end
 
         task.wait(0.2)
     end
 end)
 
-print("Скрипт запущен. BodyVelocity будет автоматически восстанавливаться при удалении (например, после получения урона).")
+print("Скрипт запущен. Автоматический возврат на лодку после смерти и таймаут перезапуска (" .. RESET_TIMEOUT .. " сек) активны.")
