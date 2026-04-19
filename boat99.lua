@@ -1,15 +1,14 @@
--- ===== ФИНАЛЬНЫЙ РАБОЧИЙ СКРИПТ (БЕЗ ОШИБОК NIL) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ИСПРАВЛЕНИЕМ ОШИБКИ nil =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
--- НАСТРОЙКИ (при необходимости измените)
+-- НАСТРОЙКИ (измените под свои координаты)
 local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
 local BOAT_X_MIN = -77389.3
 local BOAT_X_MAX = -47968.4
 local BOAT_SPEED = 250
 local WALK_SPEED = 150
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
-local BOAT_Y = 26.8          -- высота из эталонного скрипта
 local COLLISION_INTERVAL = 0.2
 
 local stopScript = false
@@ -20,16 +19,6 @@ local charVelocity = nil
 local isSitting = false
 local needToSit = true
 local currentDirection = -1
-
--- ========== БЕЗОПАСНОЕ ПОЛУЧЕНИЕ REMOTE ==========
-local function getCommF()
-    local rs = game:GetService("ReplicatedStorage")
-    local remotes = rs and rs:FindFirstChild("Remotes")
-    if remotes then
-        return remotes:FindFirstChild("CommF_")
-    end
-    return nil
-end
 
 -- ========== КОЛЛИЗИИ ==========
 local function maintainCollisions(char)
@@ -50,13 +39,17 @@ local function disableAllCollisions(char)
     end
 end
 
--- ========== ВЫБОР КОМАНДЫ ==========
+-- ========== ВЫБОР КОМАНДЫ (С ПРОВЕРКОЙ) ==========
 local function selectMarines()
-    local commF = getCommF()
-    if commF then
-        commF:InvokeServer("SetTeam", "Marines")
-        local modules = game:GetService("ReplicatedStorage"):FindFirstChild("Modules")
-        local event = modules and modules:FindFirstChild("RE/OnEventServiceActivity")
+    local rs = game:GetService("ReplicatedStorage")
+    local remotes = rs:FindFirstChild("Remotes")
+    if not remotes then warn("Remotes not found"); return end
+    local commF = remotes:FindFirstChild("CommF_")
+    if not commF then warn("CommF_ not found"); return end
+    commF:InvokeServer("SetTeam", "Marines")
+    local modules = rs:FindFirstChild("Modules")
+    if modules then
+        local event = modules:FindFirstChild("RE/OnEventServiceActivity")
         if event then event:FireServer() end
     end
 end
@@ -104,15 +97,6 @@ local function findMyBoat()
     return nil
 end
 
--- ========== ФИКСАЦИЯ ВЫСОТЫ ЛОДКИ ==========
-local function fixBoatY()
-    if not rootPart then return end
-    local pos = rootPart.Position
-    if math.abs(pos.Y - BOAT_Y) > 0.1 then
-        rootPart.CFrame = CFrame.new(pos.X, BOAT_Y, pos.Z)
-    end
-end
-
 -- ========== ПОСАДКА ==========
 local function sitOnSeat(boatSeat, hrp, humanoid)
     local char = hrp.Parent
@@ -140,7 +124,7 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     return true
 end
 
--- ========== УПРАВЛЕНИЕ СКОРОСТЬЮ ==========
+-- ========== УПРАВЛЕНИЕ СКОРОСТЬЮ ПЕРСОНАЖА ==========
 local function stopCharVelocity()
     if charVelocity then
         charVelocity:Destroy()
@@ -161,9 +145,9 @@ local function setCharVelocity(speedX)
     charVelocity.Velocity = Vector3.new(speedX, 0, 0)
 end
 
--- ========== ОБНОВЛЕНИЕ НАПРАВЛЕНИЯ И ФИКСАЦИЯ ВЫСОТЫ ==========
-local function updateDirectionAndFix()
-    if not rootPart then return
+-- ========== ОБНОВЛЕНИЕ НАПРАВЛЕНИЯ ==========
+local function updateDirection()
+    if not myBoat or not rootPart then return
     local x = rootPart.Position.X
     if x <= BOAT_X_MIN and currentDirection == -1 then
         currentDirection = 1
@@ -172,7 +156,6 @@ local function updateDirectionAndFix()
         currentDirection = -1
         if isSitting then setCharVelocity(-BOAT_SPEED) end
     end
-    fixBoatY()
 end
 
 -- ========== МОНИТОР ПОСАДКИ ==========
@@ -204,9 +187,8 @@ task.spawn(function()
                 isSitting = true
                 needToSit = false
                 setCharVelocity(currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED)
-                fixBoatY()
             end
-            updateDirectionAndFix()
+            updateDirection()
         else
             if isSitting then
                 isSitting = false
@@ -224,11 +206,11 @@ task.spawn(function()
             stopCharVelocity()
         end
 
-        task.wait(0.1)
+        task.wait(0.2)
     end
 end)
 
--- ========== ГЛАВНЫЙ ЦИКЛ ==========
+-- ========== ГЛАВНЫЙ ЦИКЛ (ПОКУПКА И ПОСАДКА) ==========
 task.spawn(function()
     selectMarines()
     task.wait(2)
@@ -245,7 +227,6 @@ task.spawn(function()
                 end
                 local native = myBoat:FindFirstChild("Script")
                 if native then native.Disabled = true end
-                fixBoatY()
             else
                 myBoat = nil
             end
@@ -256,14 +237,12 @@ task.spawn(function()
                 print("Перемещение к точке покупки...")
                 moveCharacterTo(PURCHASE_POINT, WALK_SPEED)
                 print("Покупка лодки...")
-                local commF = getCommF()
-                if commF then
-                    commF:InvokeServer("BuyBoat", "Guardian")
-                else
-                    print("CommF_ не найден, покупка невозможна")
-                    task.wait(5)
-                    continue
-                end
+                local rs = game:GetService("ReplicatedStorage")
+                local remotes = rs:FindFirstChild("Remotes")
+                if not remotes then warn("Remotes not found"); task.wait(5); continue end
+                local commF = remotes:FindFirstChild("CommF_")
+                if not commF then warn("CommF_ not found"); task.wait(5); continue end
+                commF:InvokeServer("BuyBoat", "Guardian")
                 task.wait(3)
                 for i = 1, 10 do
                     myBoat = findMyBoat()
@@ -285,7 +264,6 @@ task.spawn(function()
                 end
                 local native = myBoat:FindFirstChild("Script")
                 if native then native.Disabled = true end
-                fixBoatY()
             end
 
             local char = player.Character
@@ -329,4 +307,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт запущен. Лодка будет двигаться между X=" .. BOAT_X_MIN .. " и X=" .. BOAT_X_MAX .. ", высота фиксирована " .. BOAT_Y)
+print("Скрипт запущен. Лодка движется между X=" .. BOAT_X_MIN .. " и X=" .. BOAT_X_MAX .. ". Высота не фиксируется (как в эталоне).")
