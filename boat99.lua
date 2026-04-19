@@ -1,11 +1,4 @@
--- ===== ФИНАЛЬНЫЙ РАБОЧИЙ СКРИПТ =====
--- 1. Выбор команды Marines
--- 2. Перемещение в точку покупки
--- 3. Призыв лодки
--- 4. Посадка на сиденье
--- 5. Движение лодки вперёд-назад между двумя X координатами через BodyVelocity на персонажа
--- 6. При вылезании персонаж останавливается и автоматически возвращается на сиденье
-
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ОБРАБОТКОЙ СМЕРТИ =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
@@ -169,11 +162,31 @@ local function updateDirection()
     end
 end
 
--- ========== МОНИТОР ПОСАДКИ И ДВИЖЕНИЯ ==========
+-- ========== МОНИТОР ПОСАДКИ И ДВИЖЕНИЯ (С ОБРАБОТКОЙ СМЕРТИ) ==========
 task.spawn(function()
     while not stopScript do
         local char = player.Character
-        local humanoid = char and char:FindFirstChild("Humanoid")
+        -- Если персонаж умер, ждём появления нового
+        if not char then
+            if isSitting then
+                isSitting = false
+                needToSit = true
+                stopCharVelocity()
+            end
+            player.CharacterAdded:Wait()
+            char = player.Character
+            -- Обновляем ссылки на HRP и Humanoid
+            local hrp = char:WaitForChild("HumanoidRootPart")
+            local humanoid = char:WaitForChild("Humanoid")
+            -- После смерти лодка может быть потеряна, сбросим флаги
+            myBoat = nil
+            seat = nil
+            needToSit = true
+            task.wait(1) -- небольшая задержка
+            continue
+        end
+
+        local humanoid = char:FindFirstChild("Humanoid")
         local sitting = false
         if humanoid and seat then
             sitting = (humanoid.Sit and humanoid.SeatPart == seat)
@@ -262,8 +275,12 @@ task.spawn(function()
 
             -- Посадка
             local char = player.Character
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            local humanoid = char and char:FindFirstChild("Humanoid")
+            if not char then
+                task.wait(0.5)
+                continue
+            end
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            local humanoid = char:FindFirstChild("Humanoid")
             if myBoat and seat and hrp and humanoid then
                 disableAllCollisions(char)
                 maintainCollisions(char)
@@ -298,4 +315,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт запущен. Лодка будет двигаться между X=" .. BOAT_X_MIN .. " и X=" .. BOAT_X_MAX .. ". При вылезании персонаж останавливается.")
+print("Скрипт запущен. Лодка движется между X=" .. BOAT_X_MIN .. " и X=" .. BOAT_X_MAX .. ". При смерти персонаж автоматически вернётся в лодку.")
