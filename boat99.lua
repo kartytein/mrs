@@ -1,8 +1,13 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С ОБРАБОТКОЙ СМЕРТИ И ТАЙМАУТОМ =====
+-- ===== АБСОЛЮТНО НАДЁЖНЫЙ СКРИПТ (МНОГОУРОВНЕВЫЕ ПРОВЕРКИ) =====
+-- 1. Постоянная проверка: если персонаж не сидит в лодке → сажаем (при необходимости покупаем лодку)
+-- 2. Движение лодки пересоздаётся при любом сбое (урон, смерть, разрушение лодки)
+-- 3. Если лодка сломалась → автоматическая покупка новой
+-- 4. Если персонаж застрял (30 сек без изменения позиции) → перезапуск процесса
+
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
--- НАСТРОЙКИ
+-- НАСТРОЙКИ (измените под свои координаты)
 local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
 local BOAT_X_MIN = -77389.3
 local BOAT_X_MAX = -47968.4
@@ -10,14 +15,15 @@ local BOAT_SPEED = 250
 local WALK_SPEED = 150
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
 local COLLISION_INTERVAL = 0.2
-local RESET_TIMEOUT = 30  -- секунд без посадки для перезапуска
+local STUCK_TIMEOUT = 30   -- секунд без изменения позиции для перезапуска
 
 local stopScript = false
 local myBoat = nil
 local seat = nil
 local rootPart = nil
-local currentDirection = -1
-local lastSitAttempt = os.time()  -- время последней попытки сесть
+local currentDirection = -1   -- -1 = влево, 1 = вправо
+local lastPosition = nil
+local stuckTimer = 0
 
 -- ========== КОЛЛИЗИИ ==========
 local function maintainCollisions(char)
@@ -51,7 +57,7 @@ local function selectMarines()
     end
 end
 
--- ========== ПЕРЕМЕЩЕНИЕ ПЕРСОНАЖА К ТОЧКЕ ==========
+-- ========== ПЕРЕМЕЩЕНИЕ ПЕРСОНАЖА ==========
 local function moveCharacterTo(targetPos, speed)
     local char = player.Character
     if not char then return false end
@@ -121,7 +127,7 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     return true
 end
 
--- ========== УПРАВЛЕНИЕ BODYVELOCITY ПЕРСОНАЖА ==========
+-- ========== УПРАВЛЕНИЕ ДВИЖЕНИЕМ ЛОДКИ (С ПЕРЕСОЗДАНИЕМ) ==========
 local function ensureBodyVelocity(speedX)
     local char = player.Character
     if not char then return false end
@@ -169,20 +175,30 @@ local function updateDirection()
     end
 end
 
--- ========== ПЕРЕЗАПУСК ПРОЦЕССА ==========
-local function fullReset()
-    print("FULL RESET: таймаут или потеря лодки")
-    myBoat = nil
-    seat = nil
-    rootPart = nil
-    stopBoatMovement()
-    -- Принудительно выходим из лодки, если сидим
+-- ========== ПРОВЕРКА НА ЗАСТРЕВАНИЕ ==========
+local function checkStuck()
     local char = player.Character
-    if char then
-        local hum = char:FindFirstChild("Humanoid")
-        if hum and hum.Sit then hum.Sit = false end
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local currentPos = hrp.Position
+    if lastPosition then
+        if (currentPos - lastPosition).Magnitude < 0.5 then
+            stuckTimer = stuckTimer + 0.2
+            if stuckTimer >= STUCK_TIMEOUT then
+                print("Застревание: персонаж не двигается более " .. STUCK_TIMEOUT .. " секунд. Перезапуск процесса...")
+                -- Сбрасываем лодку и заставляем перепокупать
+                myBoat = nil
+                seat = nil
+                rootPart = nil
+                stopBoatMovement()
+                stuckTimer = 0
+            end
+        else
+            stuckTimer = 0
+        end
     end
-    task.wait(1)
+    lastPosition = currentPos
 end
 
 -- ========== ГЛАВНЫЙ БЕСКОНЕЧНЫЙ ЦИКЛ ==========
@@ -191,27 +207,43 @@ task.spawn(function()
     task.wait(2)
 
     while not stopScript do
-        -- 1. Поиск или покупка лодки
+        -- 1. Обновляем ссылки на лодку (если она существует)
         if not myBoat or not myBoat.Parent then
-            print("Поиск/покупка лодки...")
             myBoat = findMyBoat()
+            if myBoat then
+                seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
+                rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+                if seat and rootPart then
+                    for _, part in ipairs(myBoat:GetDescendants()) do
+                        if part:IsA("BasePart") then part.CanCollide = false end
+                    end
+                    local native = myBoat:FindFirstChild("Script")
+                    if native then native.Disabled = true end
+                else
+                    myBoat = nil
+                end
+            end
+        end
+
+        -- 2. Если лодки нет, покупаем новую
+        if not myBoat or not myBoat.Parent then
+            print("Лодка отсутствует, перемещение к точке покупки...")
+            moveCharacterTo(PURCHASE_POINT, WALK_SPEED)
+            print("Покупка лодки...")
+            local rs = game:GetService("ReplicatedStorage")
+            local remotes = rs and rs:FindFirstChild("Remotes")
+            local commF = remotes and remotes:FindFirstChild("CommF_")
+            if commF then pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end) end
+            task.wait(3)
+            for i = 1, 10 do
+                myBoat = findMyBoat()
+                if myBoat then break end
+                task.wait(1)
+            end
             if not myBoat then
-                moveCharacterTo(PURCHASE_POINT, WALK_SPEED)
-                local rs = game:GetService("ReplicatedStorage")
-                local remotes = rs and rs:FindFirstChild("Remotes")
-                local commF = remotes and remotes:FindFirstChild("CommF_")
-                if commF then pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end) end
-                task.wait(3)
-                for i = 1, 10 do
-                    myBoat = findMyBoat()
-                    if myBoat then break end
-                    task.wait(1)
-                end
-                if not myBoat then
-                    print("Не удалось получить лодку, повтор через 5 сек")
-                    task.wait(5)
-                    continue
-                end
+                print("Не удалось получить лодку, повтор через 5 сек")
+                task.wait(5)
+                continue
             end
             seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
             rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
@@ -219,7 +251,6 @@ task.spawn(function()
                 myBoat = nil
                 continue
             end
-            -- Отключаем коллизии лодки и родной скрипт
             for _, part in ipairs(myBoat:GetDescendants()) do
                 if part:IsA("BasePart") then part.CanCollide = false end
             end
@@ -227,7 +258,7 @@ task.spawn(function()
             if native then native.Disabled = true end
         end
 
-        -- 2. Проверка, сидит ли персонаж
+        -- 3. Проверка, сидит ли персонаж
         local char = player.Character
         local humanoid = char and char:FindFirstChild("Humanoid")
         local sitting = false
@@ -243,41 +274,24 @@ task.spawn(function()
                 if hrp then
                     print("Посадка...")
                     sitOnSeat(seat, hrp, humanoid)
-                    lastSitAttempt = os.time()
                 end
             elseif not char then
                 -- Персонаж мёртв, ждём появления
                 print("Ожидание появления персонажа...")
                 player.CharacterAdded:Wait()
-                -- После появления персонажа нужно сбросить ссылки на лодку, чтобы заново сесть
-                myBoat = nil
-                seat = nil
-                rootPart = nil
-                lastSitAttempt = os.time()
-                task.wait(1)
-                continue
-            end
-            -- Таймаут: если долго не можем сесть, перезапускаем всё
-            if os.time() - lastSitAttempt > RESET_TIMEOUT then
-                fullReset()
-                lastSitAttempt = os.time()
-                continue
             end
         else
-            -- Сидит: обеспечиваем движение и сбрасываем таймер
-            lastSitAttempt = os.time()
+            -- Сидит: обеспечиваем движение и обновляем направление
             local currentSpeed = currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED
             ensureBodyVelocity(currentSpeed)
             updateDirection()
         end
 
-        -- 3. Если лодка потеряна, перезапускаем
-        if myBoat and (not myBoat.Parent or not seat or not rootPart) then
-            fullReset()
-        end
+        -- 4. Проверка на застревание
+        checkStuck()
 
         task.wait(0.2)
     end
 end)
 
-print("Скрипт запущен. Автоматический возврат на лодку после смерти и таймаут перезапуска (" .. RESET_TIMEOUT .. " сек) активны.")
+print("Скрипт запущен. Многоуровневые проверки активны. Лодка будет восстанавливаться после любых сбоев.")
