@@ -1,27 +1,27 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ: ПОКУПКА ЛОДКИ, ПОСАДКА, ДВИЖЕНИЕ ЧЕРЕЗ BODYVELOCITY =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ПРОВЕРКАМИ (исправлен) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
--- НАСТРОЙКИ (при необходимости измените координаты)
-local MOVE_POINT = Vector3.new(-16917, 9.1, 447)               -- точка покупки
-local BOAT_POINT_A = Vector3.new(-77389.3, 26.8, 32606.2)      -- дальняя точка
-local BOAT_POINT_B = Vector3.new(-47968.4, 26.8, 6048.2)       -- ближняя точка
-local WALK_SPEED = 150          -- скорость персонажа (студий/сек)
-local BOAT_SPEED = 420          -- скорость лодки
-local SEAT_OFFSET = Vector3.new(0, 2.5, 0)    -- высота над сиденьем
-local COLLISION_INTERVAL = 0.2  -- частота принудительного отключения коллизий
+-- НАСТРОЙКИ
+local MOVE_POINT = Vector3.new(-16917, 9.1, 447)
+local BOAT_POINT_A = Vector3.new(-77389.3, 26.8, 32606.2)
+local BOAT_POINT_B = Vector3.new(-47968.4, 26.8, 6048.2)
+local WALK_SPEED = 150
+local BOAT_SPEED = 420
+local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
+local COLLISION_INTERVAL = 0.2
 
 local stopScript = false
 local myBoat = nil
 local seat = nil
-local rootPart = nil          -- основная часть лодки (для движения)
-local boatVelocity = nil      -- BodyVelocity лодки
+local rootPart = nil
+local boatVelocity = nil
 local isSitting = false
 local needToSit = true
 local boatPoints = {BOAT_POINT_A, BOAT_POINT_B}
 local currentPointIndex = 1
 
--- ========== 1. УПРАВЛЕНИЕ КОЛЛИЗИЯМИ ПЕРСОНАЖА ==========
+-- ========== 1. УПРАВЛЕНИЕ КОЛЛИЗИЯМИ ==========
 local function maintainCollisions(char)
     task.spawn(function()
         while char and char.Parent and not stopScript do
@@ -49,15 +49,27 @@ end
 -- ========== 2. ВЫБОР КОМАНДЫ ==========
 local function selectMarines()
     local replicatedStorage = game:GetService("ReplicatedStorage")
-    local remotes = replicatedStorage:WaitForChild("Remotes")
-    local commF = remotes:WaitForChild("CommF_")
+    local remotes = replicatedStorage:FindFirstChild("Remotes")
+    if not remotes then
+        warn("Remotes not found")
+        return
+    end
+    local commF = remotes:FindFirstChild("CommF_")
+    if not commF then
+        warn("CommF_ not found")
+        return
+    end
     commF:InvokeServer("SetTeam", "Marines")
-    local modules = replicatedStorage:WaitForChild("Modules")
-    local eventService = modules:FindFirstChild("RE/OnEventServiceActivity")
-    if eventService then eventService:FireServer() end
+    local modules = replicatedStorage:FindFirstChild("Modules")
+    if modules then
+        local eventService = modules:FindFirstChild("RE/OnEventServiceActivity")
+        if eventService then
+            eventService:FireServer()
+        end
+    end
 end
 
--- ========== 3. ПЕРЕМЕЩЕНИЕ ПЕРСОНАЖА К ТОЧКЕ ==========
+-- ========== 3. ПЕРЕМЕЩЕНИЕ ПЕРСОНАЖА ==========
 local function moveCharacterTo(targetPos, speed)
     local char = player.Character
     if not char then return false end
@@ -83,7 +95,7 @@ local function moveCharacterTo(targetPos, speed)
     return true
 end
 
--- ========== 4. ПОИСК СВОЕЙ ЛОДКИ (ПО OWNER) ==========
+-- ========== 4. ПОИСК СВОЕЙ ЛОДКИ ==========
 local function findMyBoat()
     local boatsFolder = workspace:FindFirstChild("Boats")
     if not boatsFolder then return nil end
@@ -100,7 +112,7 @@ local function findMyBoat()
     return nil
 end
 
--- ========== 5. ПОСАДКА НА СИДЕНЬЕ (BODYVELOCITY) ==========
+-- ========== 5. ПОСАДКА ==========
 local function sitOnSeat(boatSeat, hrp, humanoid)
     local char = hrp.Parent
     if not char then return false end
@@ -127,7 +139,7 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     return true
 end
 
--- ========== 6. УПРАВЛЕНИЕ ДВИЖЕНИЕМ ЛОДКИ (BODYVELOCITY) ==========
+-- ========== 6. УПРАВЛЕНИЕ ЛОДКОЙ ==========
 local function stopBoat()
     if boatVelocity then
         boatVelocity:Destroy()
@@ -156,7 +168,7 @@ local function updateBoatMovement()
     boatVelocity.Velocity = direction * BOAT_SPEED
 end
 
--- ========== 7. МОНИТОР ПОСАДКИ И ВОЗВРАТА ==========
+-- ========== 7. МОНИТОР ПОСАДКИ ==========
 task.spawn(function()
     while not stopScript do
         local char = player.Character
@@ -183,7 +195,18 @@ task.spawn(function()
     end
 end)
 
--- ========== 8. ГЛАВНЫЙ ЦИКЛ (ПОКУПКА, ПОСАДКА, ПЕРЕЗАПУСК) ==========
+-- ========== 8. ПРИЗЫВ ЛОДКИ ==========
+local function summonBoat()
+    local replicatedStorage = game:GetService("ReplicatedStorage")
+    local remotes = replicatedStorage:FindFirstChild("Remotes")
+    if not remotes then return false end
+    local commF = remotes:FindFirstChild("CommF_")
+    if not commF then return false end
+    commF:InvokeServer("BuyBoat", "Guardian")
+    return true
+end
+
+-- ========== 9. ГЛАВНЫЙ ЦИКЛ ==========
 task.spawn(function()
     selectMarines()
     task.wait(2)
@@ -210,8 +233,12 @@ task.spawn(function()
             -- Если лодки нет, покупаем
             if not myBoat or not myBoat.Parent then
                 moveCharacterTo(MOVE_POINT, WALK_SPEED)
-                local remote = game:GetService("ReplicatedStorage").Remotes.CommF_
-                remote:InvokeServer("BuyBoat", "Guardian")
+                local success = summonBoat()
+                if not success then
+                    warn("Не удалось призвать лодку, повтор через 5 сек")
+                    task.wait(5)
+                    continue
+                end
                 task.wait(3)
                 for i = 1, 10 do
                     myBoat = findMyBoat()
