@@ -1,4 +1,4 @@
--- ===== ПОЛНАЯ ВЕРСИЯ С ИСПРАВЛЕНИЕМ ПОСЛЕДОВАТЕЛЬНОСТИ =====
+-- ===== ИСПРАВЛЕННЫЙ СКРИПТ (ПЕРСОНАЖ ОСТАНАВЛИВАЕТСЯ ПРИ ВЫЛЕЗАНИИ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
@@ -161,7 +161,18 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     return true
 end
 
--- ========== 7. ПОДДЕРЖАНИЕ ДВИЖЕНИЯ ЛОДКИ (BODYVELOCITY НА ПЕРСОНАЖЕ) ==========
+-- ========== 7. УПРАВЛЕНИЕ ДВИЖЕНИЕМ ЛОДКИ ==========
+local function stopBoatMovement()
+    local char = player.Character
+    if char then
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
+            if bv then bv:Destroy() end
+        end
+    end
+end
+
 local function ensureBoatMovement()
     if not isSitting then return end
     local char = player.Character
@@ -205,7 +216,8 @@ task.spawn(function()
             player.CharacterAdded:Wait()
             myBoat = nil; seat = nil; rootPart = nil
             isSitting = false; needToSit = true
-            needToMove = true   -- после смерти нужно снова переместиться
+            needToMove = true
+            stopBoatMovement()  -- останавливаем скорость после смерти
             task.wait(1)
         end
 
@@ -216,11 +228,9 @@ task.spawn(function()
         -- Если лодки нет или она исчезла
         if not myBoat or not myBoat.Parent then
             if needToMove then
-                -- Перемещаемся в точку покупки
                 moveToPoint(PURCHASE_POINT, WALK_SPEED)
                 needToMove = false
             end
-            -- Покупаем лодку
             buyBoat()
             task.wait(3)
             for i = 1, 10 do
@@ -238,7 +248,6 @@ task.spawn(function()
                 myBoat = nil
                 continue
             end
-            -- Отключаем коллизии у лодки и её родной скрипт
             for _, part in ipairs(myBoat:GetDescendants()) do
                 if part:IsA("BasePart") then part.CanCollide = false end
             end
@@ -261,6 +270,7 @@ task.spawn(function()
             else
                 isSitting = false
                 needToSit = true
+                stopBoatMovement()   -- останавливаем при вылезании
             end
         else
             if not isSitting then
@@ -275,4 +285,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт запущен. Коллизии постоянно отключаются, покупка лодки только после перемещения.")
+print("Скрипт запущен. Персонаж останавливается при вылезании из лодки.")
