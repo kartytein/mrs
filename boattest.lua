@@ -1,38 +1,29 @@
--- ===== АБСОЛЮТНО ПОЛНЫЙ СКРИПТ (КОЛЛИЗИИ, ПОСАДКА, ДВИЖЕНИЕ, ВОССТАНОВЛЕНИЕ) =====
--- Основан на диагностике: BodyVelocity должен быть на персонаже, коллизии постоянно отключены.
-
+-- ===== ИСПРАВЛЕННЫЙ СКРИПТ (УСТРАНЕНА ОШИБКА nil) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
--- НАСТРОЙКИ (измените под свои координаты)
-local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)   -- где покупать лодку
-local BOAT_X_MIN = -77389.3                           -- левая граница
-local BOAT_X_MAX = -47968.4                           -- правая граница
-local BOAT_SPEED = 250                                -- скорость лодки (по модулю)
-local WALK_SPEED = 150                                -- скорость при перемещении к сиденью
-local SEAT_OFFSET = Vector3.new(0, 2.5, 0)            -- высота над сиденьем
-local COLLISION_INTERVAL = 0.2                        -- частота принудительного отключения коллизий
+-- НАСТРОЙКИ
+local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
+local BOAT_X_MIN = -77389.3
+local BOAT_X_MAX = -47968.4
+local BOAT_SPEED = 250
+local WALK_SPEED = 150
+local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
+local COLLISION_INTERVAL = 0.2
 
--- Глобальные переменные
 local myBoat = nil
 local seat = nil
-local rootPart = nil          -- основная часть лодки (для определения направления)
-local currentDirection = -1   -- -1 = влево, 1 = вправо
-local needToMove = true       -- нужно ли сначала переместиться в точку покупки
+local rootPart = nil
+local currentDirection = -1
+local needToMove = true
 
--- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ (ПЕРСОНАЖ + ЛОДКА) ==========
--- Отключаем у персонажа все части, особенно LowerTorso и UpperTorso (как в эталоне)
--- Также отключаем у лодки, чтобы она не цеплялась за препятствия
+-- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
 local function maintainCollisions()
     local char = player.Character
     if char then
-        -- Отключаем у всех частей персонажа
         for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = false
-            end
+            if part:IsA("BasePart") then part.CanCollide = false end
         end
-        -- Особый упор на LowerTorso и UpperTorso (как в эталонном логгере)
         local lower = char:FindFirstChild("LowerTorso")
         local upper = char:FindFirstChild("UpperTorso")
         if lower then lower.CanCollide = false end
@@ -40,14 +31,11 @@ local function maintainCollisions()
     end
     if myBoat then
         for _, part in ipairs(myBoat:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = false
-            end
+            if part:IsA("BasePart") then part.CanCollide = false end
         end
     end
 end
 
--- Запускаем фоновый поток для постоянного отключения коллизий
 task.spawn(function()
     while true do
         maintainCollisions()
@@ -55,20 +43,23 @@ task.spawn(function()
     end
 end)
 
--- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+-- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ С ПРОВЕРКАМИ ==========
 local function selectMarines()
     local rs = game:GetService("ReplicatedStorage")
-    local remotes = rs:FindFirstChild("Remotes")
+    local remotes = rs and rs:FindFirstChild("Remotes")
     if remotes then
         local commF = remotes:FindFirstChild("CommF_")
-        if commF then pcall(function() commF:InvokeServer("SetTeam", "Marines") end) end
+        if commF then
+            pcall(function() commF:InvokeServer("SetTeam", "Marines") end)
+        end
         local modules = rs:FindFirstChild("Modules")
         local event = modules and modules:FindFirstChild("RE/OnEventServiceActivity")
-        if event then pcall(function() event:FireServer() end) end
+        if event then
+            pcall(function() event:FireServer() end)
+        end
     end
 end
 
--- Перемещение персонажа к точке (BodyVelocity)
 local function moveToPoint(target, speed)
     local char = player.Character
     if not char then return end
@@ -76,7 +67,7 @@ local function moveToPoint(target, speed)
     if not hrp then return end
     local humanoid = char:FindFirstChild("Humanoid")
     if humanoid then humanoid.PlatformStand = true end
-    maintainCollisions() -- гарантируем отключение коллизий
+    maintainCollisions()
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
@@ -90,7 +81,6 @@ local function moveToPoint(target, speed)
     if humanoid then humanoid.PlatformStand = false end
 end
 
--- Поиск своей лодки по Owner
 local function findMyBoat()
     local boats = workspace:FindFirstChild("Boats")
     if not boats then return nil end
@@ -105,17 +95,17 @@ local function findMyBoat()
     return nil
 end
 
--- Покупка лодки
 local function buyBoat()
     local rs = game:GetService("ReplicatedStorage")
-    local remotes = rs:FindFirstChild("Remotes")
+    local remotes = rs and rs:FindFirstChild("Remotes")
     if remotes then
         local commF = remotes:FindFirstChild("CommF_")
-        if commF then pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end) end
+        if commF then
+            pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end)
+        end
     end
 end
 
--- Посадка на сиденье (BodyVelocity, плавно)
 local function sitOnSeat()
     if not seat then return end
     local char = player.Character
@@ -139,16 +129,14 @@ local function sitOnSeat()
     task.wait(0.3)
 end
 
--- ========== 3. ПРИНУДИТЕЛЬНОЕ ПОДДЕРЖАНИЕ ДВИЖЕНИЯ ЛОДКИ (BODYVELOCITY НА ПЕРСОНАЖЕ) ==========
+-- ========== 3. ДВИЖЕНИЕ ЛОДКИ ==========
 local function ensureBoatVelocity()
     local char = player.Character
-    if not char then return
+    if not char then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return
+    if not hrp then return end
     local humanoid = char:FindFirstChild("Humanoid")
-    -- Двигаем лодку только если персонаж сидит на нужном сиденье
     if not (humanoid and humanoid.Sit and humanoid.SeatPart == seat) then
-        -- Удаляем BodyVelocity, если он есть
         local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
         if bv then bv:Destroy() end
         return
@@ -167,7 +155,6 @@ local function ensureBoatVelocity()
     end
 end
 
--- Обновление направления по X лодки (достижение границ)
 local function updateDirection()
     if not rootPart then return end
     local x = rootPart.Position.X
@@ -178,13 +165,12 @@ local function updateDirection()
     end
 end
 
--- ========== 4. ГЛАВНЫЙ БЕСКОНЕЧНЫЙ ЦИКЛ ==========
+-- ========== 4. ГЛАВНЫЙ ЦИКЛ ==========
 task.spawn(function()
     selectMarines()
     task.wait(2)
 
     while true do
-        -- Ожидание появления персонажа (если умер)
         if not player.Character then
             player.CharacterAdded:Wait()
             myBoat = nil; seat = nil; rootPart = nil
@@ -194,9 +180,12 @@ task.spawn(function()
 
         local char = player.Character
         local humanoid = char and char:FindFirstChild("Humanoid")
-        if not humanoid then task.wait(0.1) continue end
+        if not humanoid then
+            task.wait(0.1)
+            continue
+        end
 
-        -- Если лодки нет, покупаем (с предварительным перемещением)
+        -- Покупка/поиск лодки
         if not myBoat or not myBoat.Parent then
             if needToMove then
                 moveToPoint(PURCHASE_POINT, WALK_SPEED)
@@ -219,7 +208,6 @@ task.spawn(function()
                 myBoat = nil
                 continue
             end
-            -- Отключаем коллизии лодки и её родной скрипт
             for _, part in ipairs(myBoat:GetDescendants()) do
                 if part:IsA("BasePart") then part.CanCollide = false end
             end
@@ -227,19 +215,16 @@ task.spawn(function()
             if native then native.Disabled = true end
         end
 
-        -- Если персонаж не сидит, сажаем
+        -- Посадка или движение
         if not (humanoid.Sit and humanoid.SeatPart == seat) then
             sitOnSeat()
         else
-            -- Обновляем направление движения лодки
             updateDirection()
         end
 
-        -- Принудительно поддерживаем BodyVelocity на персонаже (даже если он сидит)
         ensureBoatVelocity()
-
         task.wait(0.1)
     end
 end)
 
-print("Скрипт запущен. Коллизии постоянно отключены, BodyVelocity принудительно создаётся на персонаже.")
+print("Скрипт запущен. Ошибка nil устранена.")
