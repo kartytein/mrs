@@ -1,24 +1,24 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С УСИЛЕННЫМ ОТКЛЮЧЕНИЕМ КОЛЛИЗИЙ =====
+-- ===== АБСОЛЮТНО НАДЁЖНЫЙ СКРИПТ (ПРИНУДИТЕЛЬНОЕ ЗАДАНИЕ СКОРОСТИ КАЖДЫЙ ЦИКЛ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
 -- НАСТРОЙКИ (измените под свои координаты)
-local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
-local BOAT_X_MIN = -77389.3
-local BOAT_X_MAX = -47968.4
-local BOAT_SPEED = 250
-local WALK_SPEED = 150
-local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
-local COLLISION_INTERVAL = 0.2   -- частота принудительного отключения коллизий
+local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)      -- где покупать лодку
+local BOAT_X_MIN = -77389.3                               -- левая граница
+local BOAT_X_MAX = -47968.4                               -- правая граница
+local BOAT_SPEED = 250                                    -- скорость лодки
+local WALK_SPEED = 150                                    -- скорость при перемещении и посадке
+local SEAT_OFFSET = Vector3.new(0, 2.5, 0)                -- высота над сиденьем
+local COLLISION_INTERVAL = 0.2                            -- частота отключения коллизий
 
--- Глобальные переменные
+-- Состояние
 local myBoat = nil
 local seat = nil
 local rootPart = nil
-local currentDirection = -1
+local currentDirection = -1   -- -1 = влево, 1 = вправо
 local collisionThread = nil
 
--- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ДЛЯ НИЖНЕЙ И ВЕРХНЕЙ ЧАСТИ ==========
+-- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
 local function startCollisionFix(char)
     if collisionThread then task.cancel(collisionThread) end
     collisionThread = task.spawn(function()
@@ -36,12 +36,9 @@ local function startCollisionFix(char)
     end)
 end
 
--- Полное отключение коллизий у всех частей персонажа (на время движения)
 local function disableAllCollisions(char)
     for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") then
-            part.CanCollide = false
-        end
+        if part:IsA("BasePart") then part.CanCollide = false end
     end
 end
 
@@ -58,7 +55,7 @@ local function selectMarines()
     end
 end
 
--- Перемещение персонажа к точке (с полным отключением коллизий и постоянной фиксацией)
+-- Перемещение персонажа к точке (с отключением коллизий)
 local function moveToPoint(target, speed)
     local char = player.Character
     if not char then return false end
@@ -67,7 +64,7 @@ local function moveToPoint(target, speed)
     local humanoid = char:FindFirstChild("Humanoid")
     if humanoid then humanoid.PlatformStand = true end
     disableAllCollisions(char)
-    startCollisionFix(char)   -- запускаем фоновое отключение
+    startCollisionFix(char)
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
@@ -106,7 +103,7 @@ local function buyBoat()
     end
 end
 
--- Посадка на сиденье (с отключением коллизий)
+-- Посадка на сиденье
 local function sitOnSeat(boatSeat, hrp, humanoid)
     local char = hrp.Parent
     disableAllCollisions(char)
@@ -126,59 +123,19 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     task.wait(0.3)
 end
 
--- Управление движением лодки (BodyVelocity на персонаже)
-local function setBoatSpeed(speedX)
-    local char = player.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
-    if bv then
-        bv.Velocity = Vector3.new(speedX, 0, 0)
-    else
-        bv = Instance.new("BodyVelocity")
-        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        bv.Parent = hrp
-        bv.Velocity = Vector3.new(speedX, 0, 0)
-    end
-end
-
-local function stopBoat()
-    local char = player.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if hrp then
-        local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
-        if bv then bv:Destroy() end
-    end
-end
-
-local function updateDirection()
-    if not rootPart then return end
-    local x = rootPart.Position.X
-    if x <= BOAT_X_MIN and currentDirection == -1 then
-        currentDirection = 1
-        setBoatSpeed(BOAT_SPEED)
-    elseif x >= BOAT_X_MAX and currentDirection == 1 then
-        currentDirection = -1
-        setBoatSpeed(-BOAT_SPEED)
-    end
-end
-
--- ========== 3. ГЛАВНЫЙ БЕСКОНЕЧНЫЙ ЦИКЛ ==========
+-- ========== 3. ГЛАВНЫЙ ЦИКЛ (ПРИНУДИТЕЛЬНОЕ ЗАДАНИЕ СКОРОСТИ КАЖДЫЕ 0.1 СЕК) ==========
 task.spawn(function()
     selectMarines()
     task.wait(2)
 
     while true do
-        -- Ожидание появления персонажа (если умер)
+        -- Ожидание персонажа (если умер)
         local char = player.Character
         if not char then
             print("Ожидание появления персонажа...")
             player.CharacterAdded:Wait()
             char = player.Character
             myBoat = nil; seat = nil; rootPart = nil
-            stopBoat()
             if collisionThread then task.cancel(collisionThread) end
             task.wait(1)
         end
@@ -215,7 +172,7 @@ task.spawn(function()
             if native then native.Disabled = true end
         end
 
-        -- Проверка, сидит ли персонаж
+        -- Проверяем, сидит ли персонаж
         local humanoid = char:FindFirstChild("Humanoid")
         local sitting = false
         if humanoid and seat then
@@ -223,24 +180,51 @@ task.spawn(function()
         end
 
         if not sitting then
-            stopBoat()
+            -- Не сидит: останавливаем и пытаемся сесть
+            -- Удаляем BodyVelocity, если есть
             local hrp = char:FindFirstChild("HumanoidRootPart")
-            if hrp and humanoid then
-                print("Посадка...")
-                sitOnSeat(seat, hrp, humanoid)
-            else
-                task.wait(0.5)
+            if hrp then
+                local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
+                if bv then bv:Destroy() end
+            end
+            if humanoid and seat then
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    print("Посадка...")
+                    sitOnSeat(seat, hrp, humanoid)
+                end
             end
         else
-            -- Поддерживаем движение и фиксируем коллизии
-            startCollisionFix(char)   -- постоянно перезапускаем, чтобы не отключалось
-            local currentSpeed = currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED
-            setBoatSpeed(currentSpeed)
-            updateDirection()
+            -- Сидит: ПРИНУДИТЕЛЬНО ЗАДАЁМ СКОРОСТЬ (каждый цикл)
+            -- Обновляем направление по X лодки
+            if rootPart then
+                local x = rootPart.Position.X
+                if x <= BOAT_X_MIN and currentDirection == -1 then
+                    currentDirection = 1
+                elseif x >= BOAT_X_MAX and currentDirection == 1 then
+                    currentDirection = -1
+                end
+            end
+            local targetSpeed = currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED
+            -- Применяем скорость к персонажу
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
+                if bv then
+                    bv.Velocity = Vector3.new(targetSpeed, 0, 0)
+                else
+                    bv = Instance.new("BodyVelocity")
+                    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                    bv.Parent = hrp
+                    bv.Velocity = Vector3.new(targetSpeed, 0, 0)
+                end
+            end
+            -- Поддерживаем отключение коллизий
+            startCollisionFix(char)
         end
 
-        task.wait(0.2)
+        task.wait(0.1)   -- частая проверка для мгновенного восстановления скорости
     end
 end)
 
-print("Скрипт запущен. Коллизии постоянно отключаются, лодка движется, посадка гарантирована.")
+print("Скрипт запущен. Скорость лодки принудительно задаётся каждые 0.1 секунды, пока вы сидите.")
