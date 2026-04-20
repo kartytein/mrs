@@ -1,14 +1,14 @@
--- ===== ИСПРАВЛЕННЫЙ СКРИПТ (ПОСАДКА С ТЕЛЕПОРТАЦИЕЙ ПРИ ЗАСТРЕВАНИИ, УЛУЧШЕННОЕ ВОССТАНОВЛЕНИЕ) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (УВЕЛИЧЕННАЯ СКОРОСТЬ, БЫСТРАЯ ПОСАДКА) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
--- НАСТРОЙКИ
+-- НАСТРОЙКИ (измените под свои координаты)
 local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
 local BOAT_X_MIN = -77389.3
 local BOAT_X_MAX = -47968.4
-local BOAT_SPEED = 250
-local WALK_SPEED = 150
-local SEAT_OFFSET = Vector3.new(0, 3.5, 0)  -- выше
+local BOAT_SPEED = 500          -- увеличена скорость (было 250)
+local WALK_SPEED = 200           -- увеличена скорость посадки
+local SEAT_OFFSET = Vector3.new(0, 3.5, 0)  -- выше, чтобы не застревать
 local COLLISION_INTERVAL = 0.2
 local BOAT_Y = 26.8
 
@@ -108,14 +108,14 @@ local function buyBoat()
     end
 end
 
--- ========== УЛУЧШЕННАЯ ПОСАДКА (С ТЕЛЕПОРТАЦИЕЙ ПРИ ЗАСТРЕВАНИИ) ==========
+-- ========== ПОСАДКА (С ВЫСОКОЙ СКОРОСТЬЮ) ==========
 local function sitOnSeat()
-    if not seat then return false end
+    if not seat then return end
     local char = player.Character
-    if not char then return false end
+    if not char then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local humanoid = char:FindFirstChild("Humanoid")
-    if not hrp or not humanoid then return false end
+    if not hrp or not humanoid then return end
 
     liftBoat()
     local targetCF = seat.CFrame + SEAT_OFFSET
@@ -123,36 +123,31 @@ local function sitOnSeat()
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
     local startTime = tick()
-    local lastDist = (hrp.Position - targetCF.Position).Magnitude
-    local stuckTime = 0
-
     while (hrp.Position - targetCF.Position).Magnitude > 1.5 do
         if tick() - startTime > 8 then break end
         local dir = (targetCF.Position - hrp.Position).Unit
-        bv.Velocity = dir * (WALK_SPEED * 2)  -- увеличенная скорость
+        bv.Velocity = dir * WALK_SPEED
         task.wait(0.05)
-        local newDist = (hrp.Position - targetCF.Position).Magnitude
-        if newDist >= lastDist - 0.1 then
-            stuckTime = stuckTime + 0.05
-            if stuckTime > 1.5 then
-                -- Застревание: телепортируем
-                hrp.CFrame = targetCF
-                break
-            end
-        else
-            stuckTime = 0
-        end
-        lastDist = newDist
     end
     bv:Destroy()
     hrp.CFrame = targetCF
     humanoid.Sit = true
     task.wait(0.3)
     liftBoat()
-    return true
 end
 
--- ========== ПОДДЕРЖАНИЕ ДВИЖЕНИЯ ЛОДКИ ==========
+-- ========== УПРАВЛЕНИЕ ДВИЖЕНИЕМ ЛОДКИ ==========
+local function stopAllMovement()
+    local char = player.Character
+    if char then
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
+            if bv then bv:Destroy() end
+        end
+    end
+end
+
 local function ensureBoatVelocity()
     local char = player.Character
     if not char then return end
@@ -160,9 +155,7 @@ local function ensureBoatVelocity()
     if not hrp then return end
     local humanoid = char:FindFirstChild("Humanoid")
     if not (humanoid and humanoid.Sit and humanoid.SeatPart == seat) then
-        -- Если не сидит, удаляем BodyVelocity
-        local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
-        if bv then bv:Destroy() end
+        stopAllMovement()
         return
     end
     local speedX = currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED
@@ -199,6 +192,7 @@ task.spawn(function()
             player.CharacterAdded:Wait()
             myBoat = nil; seat = nil; rootPart = nil
             needToMove = true
+            stopAllMovement()
             task.wait(1)
         end
 
@@ -206,7 +200,7 @@ task.spawn(function()
         local humanoid = char and char:FindFirstChild("Humanoid")
         if not humanoid then task.wait(0.1) continue end
 
-        -- Покупка лодки (если нет)
+        -- Покупка лодки
         if not myBoat or not myBoat.Parent then
             if needToMove then
                 moveToPoint(PURCHASE_POINT, WALK_SPEED)
@@ -237,8 +231,9 @@ task.spawn(function()
             liftBoat()
         end
 
-        -- Если не сидит, сажаем (с повторными попытками)
+        -- Если не сидит, сажаем (и предварительно останавливаем движение)
         if not (humanoid.Sit and humanoid.SeatPart == seat) then
+            stopAllMovement()
             sitOnSeat()
         else
             updateDirection()
@@ -249,4 +244,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт запущен. Посадка с телепортацией при застревании, лодка поднимается.")
+print("Скрипт запущен. Скорость лодки увеличена до " .. BOAT_SPEED .. ", посадка ускорена.")
