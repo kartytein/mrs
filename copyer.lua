@@ -1,75 +1,78 @@
--- ===== БЕЗОПАСНЫЙ ЛОГГЕР (без модификации глобальных таблиц) =====
-local function log(msg)
-    print(string.format("[%s] %s", os.date("%H:%M:%S"), msg))
-end
+-- Трекер проблем (запустить отдельно)
+local player = game.Players.LocalPlayer
+local lastSit = nil
+local lastSeatPart = nil
+local lastBVPresent = nil
+local lastBVSpeed = nil
+local lastBoatPos = nil
+local lastCharPos = nil
 
--- 1. Отслеживаем появление объектов в workspace и ReplicatedStorage
-local function trackDescendants(container, name)
-    container.ChildAdded:Connect(function(child)
-        log(name .. " + " .. child:GetFullName() .. " (" .. child.ClassName .. ")")
-    end)
-    container.ChildRemoved:Connect(function(child)
-        log(name .. " - " .. child:GetFullName())
-    end)
-end
-trackDescendants(workspace, "WS")
-trackDescendants(game:GetService("ReplicatedStorage"), "RS")
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        local char = player.Character
+        if not char then
+            print("[TRACKER] Персонаж отсутствует")
+            continue
+        end
+        local humanoid = char:FindFirstChild("Humanoid")
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if not humanoid or not hrp then
+            print("[TRACKER] Нет Humanoid или HRP")
+            continue
+        end
 
--- 2. Следим за появлением лодки (Guardian) и подписываемся на её изменения
-workspace.DescendantAdded:Connect(function(desc)
-    if desc.Name == "Guardian" and desc:IsA("Model") then
-        log("!!! ЛОДКА ПОЯВИЛАСЬ: " .. desc:GetFullName())
-        -- Отслеживаем изменения свойств частей лодки
-        for _, part in ipairs(desc:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part:GetPropertyChangedSignal("Position"):Connect(function()
-                    log("Boat " .. part:GetFullName() .. " Position = " .. tostring(part.Position))
-                end)
-                part:GetPropertyChangedSignal("CFrame"):Connect(function()
-                    log("Boat " .. part:GetFullName() .. " CFrame = " .. tostring(part.CFrame))
-                end)
-                part:GetPropertyChangedSignal("CanCollide"):Connect(function()
-                    log("Boat " .. part:GetFullName() .. " CanCollide = " .. tostring(part.CanCollide))
-                end)
-            elseif part:IsA("BodyVelocity") then
-                part:GetPropertyChangedSignal("Velocity"):Connect(function()
-                    log("BodyVelocity " .. part:GetFullName() .. " Velocity = " .. tostring(part.Velocity))
-                end)
+        local sit = humanoid.Sit
+        local seatPart = humanoid.SeatPart
+        local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
+        local bvPresent = bv ~= nil
+        local bvSpeed = bv and bv.Velocity or Vector3.new(0,0,0)
+        local charPos = hrp.Position
+
+        -- Поиск лодки (если есть)
+        local boat = nil
+        if seatPart then
+            boat = seatPart:FindFirstAncestorWhichIsA("Model")
+        end
+        local boatPos = boat and (boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")) and boat:GetPivot().Position or nil
+
+        -- Проверка изменений
+        if sit ~= lastSit then
+            print("[TRACKER] Sit изменился на", sit)
+            lastSit = sit
+        end
+        if seatPart ~= lastSeatPart then
+            print("[TRACKER] SeatPart изменился на", seatPart and seatPart:GetFullName() or "nil")
+            lastSeatPart = seatPart
+        end
+        if bvPresent ~= lastBVPresent then
+            print("[TRACKER] BodyVelocity присутствует:", bvPresent)
+            lastBVPresent = bvPresent
+        end
+        if bvSpeed.X ~= lastBVSpeed then
+            print("[TRACKER] Скорость BodyVelocity изменилась:", bvSpeed.X)
+            lastBVSpeed = bvSpeed.X
+        end
+
+        -- Критические события
+        if sit and seatPart and bvPresent and bvSpeed.X == 0 then
+            print("[TRACKER] ВНИМАНИЕ: персонаж сидит, но скорость BodyVelocity = 0")
+        end
+        if sit and not bvPresent then
+            print("[TRACKER] ВНИМАНИЕ: персонаж сидит, но BodyVelocity отсутствует")
+        end
+        if sit and not seatPart then
+            print("[TRACKER] ВНИМАНИЕ: персонаж сидит, но SeatPart = nil")
+        end
+
+        -- Отслеживание движения лодки
+        if boatPos and lastBoatPos then
+            local delta = (boatPos - lastBoatPos).Magnitude
+            if delta < 0.1 and sit and bvPresent and bvSpeed.X ~= 0 then
+                print("[TRACKER] ВНИМАНИЕ: лодка не двигается, хотя скорость задана")
             end
         end
+        lastBoatPos = boatPos
+        lastCharPos = charPos
     end
 end)
-
--- 3. Отслеживаем изменения позиции персонажа
-local player = game.Players.LocalPlayer
-local char = player.Character or player.CharacterAdded:Wait()
-local hrp = char:WaitForChild("HumanoidRootPart")
-local lastPos = hrp.Position
-hrp:GetPropertyChangedSignal("Position"):Connect(function()
-    local newPos = hrp.Position
-    if (newPos - lastPos).Magnitude > 0.5 then
-        log("CHAR POS: " .. tostring(newPos))
-        lastPos = newPos
-    end
-end)
-
--- 4. Отслеживаем изменения PlatformStand и Sit
-local humanoid = char:WaitForChild("Humanoid")
-humanoid:GetPropertyChangedSignal("PlatformStand"):Connect(function()
-    log("PLATFORMSTAND = " .. tostring(humanoid.PlatformStand))
-end)
-humanoid:GetPropertyChangedSignal("Sit"):Connect(function()
-    log("SIT = " .. tostring(humanoid.Sit) .. ", SeatPart = " .. tostring(humanoid.SeatPart))
-end)
-
--- 5. Отслеживаем появление BodyVelocity у персонажа
-char.DescendantAdded:Connect(function(desc)
-    if desc:IsA("BodyVelocity") then
-        log("CHAR BodyVelocity added, Velocity = " .. tostring(desc.Velocity))
-        desc:GetPropertyChangedSignal("Velocity"):Connect(function()
-            log("CHAR BodyVelocity Velocity = " .. tostring(desc.Velocity))
-        end)
-    end
-end)
-
-log("Логгер запущен. Теперь активируйте эталонный скрипт. Все изменения будут в консоли.")
