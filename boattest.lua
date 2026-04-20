@@ -1,11 +1,8 @@
--- ===== АБСОЛЮТНО НАДЁЖНЫЙ СКРИПТ (ПОСТОЯННЫЕ ПОВТОРНЫЕ ПОПЫТКИ ДВИЖЕНИЯ) =====
--- Все перемещения (к точке покупки, к сиденью, движение лодки) выполняются через BodyVelocity
--- с постоянной проверкой достижения цели и автоматическим пересозданием при остановке.
-
+-- ===== ПРОСТОЙ НАДЁЖНЫЙ СКРИПТ (С ФЛАГОМ ПЕРЕМЕЩЕНИЯ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
--- НАСТРОЙКИ (измените под свои координаты)
+-- НАСТРОЙКИ
 local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
 local BOAT_X_MIN = -77389.3
 local BOAT_X_MAX = -47968.4
@@ -13,31 +10,28 @@ local BOAT_SPEED = 250
 local WALK_SPEED = 150
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
 
--- Глобальные переменные
 local myBoat = nil
 local seat = nil
 local rootPart = nil
-local currentDirection = -1   -- -1 = влево, 1 = вправо
-local isSitting = false
-local needToSit = true
+local currentDirection = -1
+local needToMove = true   -- флаг: нужно ли перемещаться к точке покупки
 
--- ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
-local function log(msg)
-    print(string.format("[%s] %s", os.date("%H:%M:%S"), msg))
-end
-
--- Отключение коллизий у персонажа (всех частей)
-local function disableCollisions(char)
-    for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") then
-            part.CanCollide = false
+-- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
+task.spawn(function()
+    while true do
+        local char = player.Character
+        if char then
+            local lower = char:FindFirstChild("LowerTorso")
+            local upper = char:FindFirstChild("UpperTorso")
+            if lower and lower:IsA("BasePart") and lower.CanCollide == true then lower.CanCollide = false end
+            if upper and upper:IsA("BasePart") and upper.CanCollide == true then upper.CanCollide = false end
         end
+        task.wait(0.2)
     end
-end
+end)
 
--- Выбор команды Marines
+-- ========== 2. ВЫБОР КОМАНДЫ ==========
 local function selectMarines()
-    log("Выбор команды Marines...")
     local rs = game:GetService("ReplicatedStorage")
     local remotes = rs:FindFirstChild("Remotes")
     if remotes then
@@ -47,10 +41,9 @@ local function selectMarines()
         local event = modules and modules:FindFirstChild("RE/OnEventServiceActivity")
         if event then pcall(function() event:FireServer() end) end
     end
-    log("Команда Marines выбрана")
 end
 
--- Поиск своей лодки
+-- ========== 3. ПОИСК ЛОДКИ ==========
 local function findMyBoat()
     local boats = workspace:FindFirstChild("Boats")
     if not boats then return nil end
@@ -65,122 +58,53 @@ local function findMyBoat()
     return nil
 end
 
--- Покупка лодки (без перемещения, только вызов)
-local function buyBoat()
-    log("Покупка лодки...")
-    local rs = game:GetService("ReplicatedStorage")
-    local remotes = rs:FindFirstChild("Remotes")
-    if remotes then
-        local commF = remotes:FindFirstChild("CommF_")
-        if commF then pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end) end
-    end
-end
-
--- ========== УНИВЕРСАЛЬНОЕ ПЕРЕМЕЩЕНИЕ К ЦЕЛИ (С ПОВТОРНЫМИ ПОПЫТКАМИ) ==========
-local function moveToTarget(targetPos, speed, stopDistance)
-    local char = player.Character
-    if not char then return false end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return false end
-    local humanoid = char:FindFirstChild("Humanoid")
-    if humanoid then humanoid.PlatformStand = true end
-
-    disableCollisions(char)
-
-    local bv = nil
-    local lastDist = math.huge
-    local stuckCount = 0
-
-    while true do
-        local dist = (hrp.Position - targetPos).Magnitude
-        if dist <= stopDistance then break end
-
-        -- Создаём или обновляем BodyVelocity
-        if not bv or bv.Parent == nil then
-            bv = Instance.new("BodyVelocity")
-            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-            bv.Parent = hrp
-        end
-        local dir = (targetPos - hrp.Position).Unit
-        bv.Velocity = dir * speed
-
-        task.wait(0.1)
-
-        -- Проверка на застревание
-        if math.abs(dist - lastDist) < 0.1 then
-            stuckCount = stuckCount + 1
-            if stuckCount > 10 then
-                log("Застревание, пересоздаём BodyVelocity")
-                bv:Destroy()
-                bv = nil
-                stuckCount = 0
-            end
-        else
-            stuckCount = 0
-        end
-        lastDist = dist
-    end
-
-    if bv then bv:Destroy() end
-    hrp.CFrame = CFrame.new(targetPos)
-    if humanoid then humanoid.PlatformStand = false end
-    return true
-end
-
--- ========== ПОСАДКА НА СИДЕНЬЕ (С ПОВТОРНЫМИ ПОПЫТКАМИ) ==========
-local function sitOnSeat(boatSeat, hrp, humanoid)
-    log("Начинаем посадку...")
-    local char = hrp.Parent
-    disableCollisions(char)
-    local targetCF = boatSeat.CFrame + SEAT_OFFSET
-    local bv = nil
-    local lastDist = math.huge
-    local stuckCount = 0
-
-    while true do
-        local dist = (hrp.Position - targetCF.Position).Magnitude
-        if dist <= 0.5 then break end
-
-        if not bv or bv.Parent == nil then
-            bv = Instance.new("BodyVelocity")
-            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-            bv.Parent = hrp
-        end
-        local dir = (targetCF.Position - hrp.Position).Unit
-        bv.Velocity = dir * WALK_SPEED
-
-        task.wait(0.1)
-
-        if math.abs(dist - lastDist) < 0.1 then
-            stuckCount = stuckCount + 1
-            if stuckCount > 10 then
-                log("Застревание при посадке, пересоздаём")
-                bv:Destroy()
-                bv = nil
-                stuckCount = 0
-            end
-        else
-            stuckCount = 0
-        end
-        lastDist = dist
-    end
-
-    if bv then bv:Destroy() end
-    hrp.CFrame = targetCF
-    humanoid.Sit = true
-    task.wait(0.3)
-    log("Посадка завершена")
-    return true
-end
-
--- ========== ПОДДЕРЖАНИЕ ДВИЖЕНИЯ ЛОДКИ (ПОСТОЯННОЕ ОБНОВЛЕНИЕ) ==========
-local function ensureBoatMovement()
+-- ========== 4. ПЕРЕМЕЩЕНИЕ К ТОЧКЕ ==========
+local function moveTo(target, speed)
     local char = player.Character
     if not char then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
-    if not isSitting then return end
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bv.Parent = hrp
+    while (hrp.Position - target).Magnitude > 2 do
+        local dir = (target - hrp.Position).Unit
+        bv.Velocity = dir * speed
+        task.wait()
+    end
+    bv:Destroy()
+    hrp.CFrame = CFrame.new(target)
+end
 
+-- ========== 5. ПОСАДКА ==========
+local function sitOnSeat()
+    if not seat then return end
+    local char = player.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char:FindFirstChild("Humanoid")
+    if not hrp or not humanoid then return end
+    local targetCF = seat.CFrame + SEAT_OFFSET
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bv.Parent = hrp
+    while (hrp.Position - targetCF.Position).Magnitude > 1.5 do
+        local dir = (targetCF.Position - hrp.Position).Unit
+        bv.Velocity = dir * WALK_SPEED
+        task.wait()
+    end
+    bv:Destroy()
+    hrp.CFrame = targetCF
+    humanoid.Sit = true
+    task.wait(0.3)
+end
+
+-- ========== 6. ПОДДЕРЖАНИЕ СКОРОСТИ ==========
+local function ensureVelocity()
+    local char = player.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
     local speedX = currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED
     local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
     if bv then
@@ -195,42 +119,36 @@ local function ensureBoatMovement()
     end
 end
 
-local function updateDirection()
-    if not rootPart then return end
-    local x = rootPart.Position.X
-    if x <= BOAT_X_MIN and currentDirection == -1 then
-        currentDirection = 1
-        ensureBoatMovement()
-    elseif x >= BOAT_X_MAX and currentDirection == 1 then
-        currentDirection = -1
-        ensureBoatMovement()
-    end
-end
-
--- ========== ГЛАВНЫЙ БЕСКОНЕЧНЫЙ ЦИКЛ ==========
+-- ========== 7. ОСНОВНОЙ ЦИКЛ ==========
 task.spawn(function()
     selectMarines()
     task.wait(2)
 
     while true do
-        -- 1. Ожидание персонажа (если умер)
-        local char = player.Character
-        if not char then
-            log("Персонаж отсутствует, ожидание...")
+        -- Ожидание появления персонажа (если умер)
+        if not player.Character then
             player.CharacterAdded:Wait()
-            char = player.Character
-            log("Персонаж появился")
             myBoat = nil; seat = nil; rootPart = nil
-            isSitting = false; needToSit = true
-            disableCollisions(char)
+            needToMove = true   -- после смерти нужно снова переместиться
             task.wait(1)
         end
 
-        -- 2. Если лодки нет, покупаем новую
+        local char = player.Character
+        local humanoid = char and char:FindFirstChild("Humanoid")
+        if not humanoid then task.wait(0.1) continue end
+
+        -- Если лодки нет, выполняем перемещение (только если needToMove == true)
+        if (not myBoat or not myBoat.Parent) and needToMove then
+            moveTo(PURCHASE_POINT, WALK_SPEED)
+            needToMove = false   -- перемещение выполнено
+        end
+
+        -- Если лодки нет, покупаем
         if not myBoat or not myBoat.Parent then
-            log("Лодка отсутствует, начинаем процесс покупки")
-            moveToTarget(PURCHASE_POINT, WALK_SPEED, 2)
-            buyBoat()
+            local rs = game:GetService("ReplicatedStorage")
+            local remotes = rs and rs:FindFirstChild("Remotes")
+            local commF = remotes and remotes:FindFirstChild("CommF_")
+            if commF then pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end) end
             task.wait(3)
             for i = 1, 10 do
                 myBoat = findMyBoat()
@@ -238,67 +156,38 @@ task.spawn(function()
                 task.wait(1)
             end
             if not myBoat then
-                log("Не удалось призвать лодку, повтор через 5 сек")
                 task.wait(5)
                 continue
             end
             seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
             rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
             if not seat or not rootPart then
-                log("Ошибка: нет сиденья или основной части")
                 myBoat = nil
                 continue
             end
-            -- Отключаем коллизии лодки и её скрипт
             for _, part in ipairs(myBoat:GetDescendants()) do
                 if part:IsA("BasePart") then part.CanCollide = false end
             end
             local native = myBoat:FindFirstChild("Script")
             if native then native.Disabled = true end
-            log("Лодка готова")
         end
 
-        -- 3. Проверка, сидит ли персонаж
-        local humanoid = char:FindFirstChild("Humanoid")
-        local sitting = false
-        if humanoid and seat then
-            sitting = (humanoid.Sit and humanoid.SeatPart == seat)
-        end
-
+        -- Проверка, сидит ли персонаж
+        local sitting = (humanoid.Sit and humanoid.SeatPart == seat)
         if not sitting then
-            if needToSit then
-                log("Персонаж не сидит, посадка...")
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                if hrp and humanoid then
-                    sitOnSeat(seat, hrp, humanoid)
-                    if humanoid.Sit and humanoid.SeatPart == seat then
-                        isSitting = true
-                        needToSit = false
-                        log("Успешно сел")
-                    else
-                        log("Посадка не удалась, повтор")
-                        task.wait(0.5)
-                    end
-                else
-                    task.wait(0.5)
-                end
-            else
-                isSitting = false
-                needToSit = true
-                log("Персонаж слез")
-            end
+            sitOnSeat()
         else
-            if not isSitting then
-                isSitting = true
-                needToSit = false
-                log("Персонаж сидит, запускаем движение")
+            local x = rootPart.Position.X
+            if x <= BOAT_X_MIN and currentDirection == -1 then
+                currentDirection = 1
+            elseif x >= BOAT_X_MAX and currentDirection == 1 then
+                currentDirection = -1
             end
-            ensureBoatMovement()
-            updateDirection()
+            ensureVelocity()
         end
 
         task.wait(0.1)
     end
 end)
 
-log("Скрипт запущен. Все перемещения с автоматическими повторными попытками.")
+print("Скрипт запущен. Перемещение к точке покупки происходит только после смерти/возрождения.")
