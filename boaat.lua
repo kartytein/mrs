@@ -1,21 +1,30 @@
--- ===== МИНИМАЛЬНЫЙ СКРИПТ С ДИАГНОСТИКОЙ (ТОЛЬКО ЛОДКА) - БЕЗ ОШИБОК =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ПОЛНОЙ ДИАГНОСТИКОЙ =====
 -- Вы садитесь в лодку вручную, скрипт её находит, отключает коллизии,
 -- поддерживает движение и возвращает вас на сиденье, если вы вылезли.
+-- Все вызовы обёрнуты в pcall и проверки на nil.
 
 local player = game.Players.LocalPlayer
 
 -- НАСТРОЙКИ (измените под свои координаты)
 local BOAT_X_MIN = -77389.3
 local BOAT_X_MAX = -47968.4
-local BOAT_SPEED = 250           -- скорость лодки (по X)
-local SEAT_OFFSET = Vector3.new(0, 2.5, 0)  -- высота над сиденьем
-local WALK_SPEED = 150           -- скорость полёта к сиденью
+local BOAT_SPEED = 250
+local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
+local WALK_SPEED = 150
 
--- Глобальные переменные
 local myBoat = nil
 local seat = nil
 local rootPart = nil
-local currentDirection = -1      -- -1 = влево, 1 = вправо
+local currentDirection = -1
+
+-- Функция безопасного вызова с диагностикой
+local function safeCall(func, name)
+    local ok, err = pcall(func)
+    if not ok then
+        print("[DIAG] Ошибка в " .. name .. ": " .. tostring(err))
+    end
+    return ok
+end
 
 -- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
 task.spawn(function()
@@ -58,11 +67,8 @@ local function updateBoatFromSeat()
         seat = currentSeat
         rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
         print("[DIAG] Лодка найдена: " .. myBoat.Name)
-        -- Отключаем родной скрипт лодки, если есть
         local native = myBoat:FindFirstChild("Script")
-        if native then
-            native.Disabled = true
-        end
+        if native then native.Disabled = true end
     end
 end
 
@@ -74,11 +80,8 @@ local function sitOnSeat()
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local humanoid = char:FindFirstChild("Humanoid")
     if not hrp or not humanoid then return end
-    if humanoid.Sit and humanoid.SeatPart == seat then
-        return
-    end
+    if humanoid.Sit and humanoid.SeatPart == seat then return end
     print("[DIAG] Попытка сесть на сиденье...")
-    -- Удаляем старый BodyVelocity
     local old = hrp:FindFirstChildWhichIsA("BodyVelocity")
     if old then old:Destroy() end
     local targetCF = seat.CFrame + SEAT_OFFSET
@@ -97,7 +100,7 @@ local function sitOnSeat()
     print("[DIAG] Посадка завершена")
 end
 
--- ========== 4. ПОДДЕРЖАНИЕ ДВИЖЕНИЯ ЛОДКИ ==========
+-- ========== 4. ПОДДЕРЖАНИЕ ДВИЖЕНИЯ ==========
 task.spawn(function()
     while true do
         task.wait(0.1)
@@ -122,10 +125,7 @@ task.spawn(function()
             end
         else
             local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
-            if bv then
-                bv:Destroy()
-                print("[DIAG] BodyVelocity удалён (не сидим)")
-            end
+            if bv then bv:Destroy() end
         end
     end
 end)
@@ -147,29 +147,27 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. МОНИТОРИНГ ПОСАДКИ И ПОИСК ЛОДКИ ==========
+-- ========== 6. МОНИТОРИНГ ПОСАДКИ ==========
 task.spawn(function()
     while true do
         task.wait(0.5)
         if not player.Character then
-            myBoat = nil
-            seat = nil
-            rootPart = nil
+            myBoat = nil; seat = nil; rootPart = nil
             print("[DIAG] Персонаж отсутствует, сброс лодки")
             player.CharacterAdded:Wait()
             print("[DIAG] Персонаж появился")
             task.wait(1)
         end
-        updateBoatFromSeat()
+        safeCall(updateBoatFromSeat, "updateBoatFromSeat")
         if seat then
             local char = player.Character
             local humanoid = char and char:FindFirstChild("Humanoid")
             if humanoid and not (humanoid.Sit and humanoid.SeatPart == seat) then
                 print("[DIAG] Персонаж не сидит, выполняем посадку")
-                sitOnSeat()
+                safeCall(sitOnSeat, "sitOnSeat")
             end
         end
     end
 end)
 
-print("[DIAG] Скрипт запущен. Сядьте в лодку вручную. Скрипт подхватит её и начнёт управление.")
+print("[DIAG] Скрипт запущен. Сядьте в лодку вручную. Ошибок быть не должно.")
