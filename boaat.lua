@@ -1,23 +1,23 @@
--- ===== МИНИМАЛЬНЫЙ СКРИПТ ДЛЯ УПРАВЛЕНИЯ ЛОДКОЙ (БЕЗ ПОКУПКИ И ПЕРЕМЕЩЕНИЯ) =====
--- Скрипт предполагает, что лодка уже существует, и вы уже сидите в ней или сядете вручную.
--- Он будет поддерживать движение лодки и возвращать вас на сиденье, если вы слезете.
+-- ===== МИНИМАЛЬНЫЙ СКРИПТ С ДИАГНОСТИКОЙ (ТОЛЬКО ЛОДКА) =====
+-- Вы садитесь в лодку вручную, скрипт её находит, отключает коллизии,
+-- поддерживает движение и возвращает вас на сиденье, если вы вылезли.
 
 local player = game.Players.LocalPlayer
 
--- НАСТРОЙКИ (измените под свою игру)
-local BOAT_X_MIN = -77389.3      -- левая граница (дальняя)
-local BOAT_X_MAX = -47968.4      -- правая граница (ближняя)
-local BOAT_SPEED = 250           -- скорость лодки (по модулю)
-local WALK_SPEED = 150           -- скорость при полёте к сиденью
-local SEAT_OFFSET = Vector3.new(0, 2.5, 0)   -- высота над сиденьем
+-- НАСТРОЙКИ (измените под свои координаты)
+local BOAT_X_MIN = -77389.3
+local BOAT_X_MAX = -47968.4
+local BOAT_SPEED = 250           -- скорость лодки (по X)
+local SEAT_OFFSET = Vector3.new(0, 2.5, 0)  -- высота над сиденьем
+local WALK_SPEED = 150           -- скорость полёта к сиденью
 
 -- Глобальные переменные
-local myBoat = nil      -- модель лодки (будет определена, когда вы сядете)
-local seat = nil        -- VehicleSeat
-local rootPart = nil    -- основная часть лодки для определения X
-local currentDirection = -1   -- -1 = влево, 1 = вправо
+local myBoat = nil
+local seat = nil
+local rootPart = nil
+local currentDirection = -1      -- -1 = влево, 1 = вправо
 
--- ===== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ (для персонажа) =====
+-- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
 task.spawn(function()
     while true do
         local char = player.Character
@@ -25,18 +25,56 @@ task.spawn(function()
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then part.CanCollide = false end
             end
+            -- Нижняя и верхняя часть (особо важно)
             local lower = char:FindFirstChild("LowerTorso")
             local upper = char:FindFirstChild("UpperTorso")
             if lower then lower.CanCollide = false end
             if upper then upper.CanCollide = false end
         end
+        if myBoat then
+            for _, part in ipairs(myBoat:GetDescendants()) do
+                if part:IsA("BasePart") then part.CanCollide = false end
+            end
+        end
         task.wait(0.2)
     end
 end)
 
--- ===== 2. ФУНКЦИЯ ПОСАДКИ НА СИДЕНЬЕ =====
-local function sitOnSeat(boatSeat, hrp, humanoid)
-    local targetCF = boatSeat.CFrame + SEAT_OFFSET
+-- ========== 2. ПОИСК ЛОДКИ ПО СИДЕНЬЮ (вызывается, когда персонаж сел) ==========
+local function updateBoatFromSeat()
+    local char = player.Character
+    if not char then return end
+    local humanoid = char:FindFirstChild("Humanoid")
+    if not humanoid then return end
+    local currentSeat = humanoid.SeatPart
+    if not currentSeat then return end
+    local boat = currentSeat:FindFirstAncestorWhichIsA("Model")
+    if not boat then return end
+    if myBoat ~= boat then
+        myBoat = boat
+        seat = currentSeat
+        rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+        print("[DIAG] Лодка найдена: " .. myBoat.Name)
+        -- Отключаем родной скрипт лодки, если есть
+        local native = myBoat:FindFirstChild("Script")
+        if native then native.Disabled = true end
+    end
+end
+
+-- ========== 3. ПОСАДКА НА СИДЕНЬЕ (ЕСЛИ ВЫЛЕЗЛИ) ==========
+local function sitOnSeat()
+    if not seat then return end
+    local char = player.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char:FindFirstChild("Humanoid")
+    if not hrp or not humanoid then return end
+    if humanoid.Sit and humanoid.SeatPart == seat then return  -- уже сидит
+    print("[DIAG] Попытка сесть на сиденье...")
+    -- Удаляем старый BodyVelocity, чтобы не мешал
+    local old = hrp:FindFirstChildWhichIsA("BodyVelocity")
+    if old then old:Destroy() end
+    local targetCF = seat.CFrame + SEAT_OFFSET
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
@@ -49,9 +87,10 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     hrp.CFrame = targetCF
     humanoid.Sit = true
     task.wait(0.3)
+    print("[DIAG] Посадка завершена")
 end
 
--- ===== 3. ПОСТОЯННОЕ ПОДДЕРЖАНИЕ BODYVELOCITY ДЛЯ ДВИЖЕНИЯ =====
+-- ========== 4. ПОСТОЯННОЕ ПОДДЕРЖАНИЕ ДВИЖЕНИЯ ЛОДКИ ==========
 task.spawn(function()
     while true do
         task.wait(0.1)
@@ -60,37 +99,8 @@ task.spawn(function()
         local hrp = char:FindFirstChild("HumanoidRootPart")
         local humanoid = char:FindFirstChild("Humanoid")
         if not hrp or not humanoid then continue end
-
-        -- Определяем лодку и сиденье по SeatPart (если персонаж сидит)
-        local currentSeat = humanoid.SeatPart
-        if currentSeat and currentSeat:IsA("VehicleSeat") then
-            -- Если лодка изменилась, обновляем ссылки
-            local boat = currentSeat:FindFirstAncestorWhichIsA("Model")
-            if boat ~= myBoat then
-                myBoat = boat
-                seat = currentSeat
-                rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
-                -- Отключаем коллизии у лодки
-                if myBoat then
-                    for _, part in ipairs(myBoat:GetDescendants()) do
-                        if part:IsA("BasePart") then part.CanCollide = false end
-                    end
-                end
-            end
-        end
-
-        -- Если персонаж сидит на нужном сиденье
+        -- Если мы сидим на нашем сиденье, поддерживаем скорость
         if seat and humanoid.Sit and humanoid.SeatPart == seat then
-            -- Обновляем направление по X лодки
-            if rootPart then
-                local x = rootPart.Position.X
-                if x <= BOAT_X_MIN and currentDirection == -1 then
-                    currentDirection = 1
-                elseif x >= BOAT_X_MAX and currentDirection == 1 then
-                    currentDirection = -1
-                end
-            end
-            -- Устанавливаем скорость
             local speedX = currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED
             local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
             if bv then
@@ -102,16 +112,60 @@ task.spawn(function()
                 bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
                 bv.Parent = hrp
                 bv.Velocity = Vector3.new(speedX, 0, 0)
+                print("[DIAG] Создан BodyVelocity, скорость " .. speedX)
             end
         else
-            -- Если не сидит, удаляем BodyVelocity и, если есть лодка, пытаемся сесть
+            -- Не сидим: удаляем BodyVelocity
             local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
-            if bv then bv:Destroy() end
-            if seat and myBoat and myBoat.Parent then
-                sitOnSeat(seat, hrp, humanoid)
+            if bv then
+                bv:Destroy()
+                print("[DIAG] BodyVelocity удалён (не сидим)")
             end
         end
     end
 end)
 
-print("Скрипт запущен. Сядьте в лодку вручную, и скрипт начнёт управлять движением и возвращать вас на сиденье.")
+-- ========== 5. ОБНОВЛЕНИЕ НАПРАВЛЕНИЯ ==========
+task.spawn(function()
+    while true do
+        task.wait(0.2)
+        if rootPart then
+            local x = rootPart.Position.X
+            if x <= BOAT_X_MIN and currentDirection == -1 then
+                currentDirection = 1
+                print("[DIAG] Смена направления → вправо")
+            elseif x >= BOAT_X_MAX and currentDirection == 1 then
+                currentDirection = -1
+                print("[DIAG] Смена направления → влево")
+            end
+        end
+    end
+end)
+
+-- ========== 6. МОНИТОРИНГ ПОСАДКИ И ПОИСК ЛОДКИ ==========
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        -- Если персонаж умер, сбрасываем ссылки
+        if not player.Character then
+            myBoat = nil; seat = nil; rootPart = nil
+            print("[DIAG] Персонаж отсутствует, сброс лодки")
+            player.CharacterAdded:Wait()
+            print("[DIAG] Персонаж появился")
+            task.wait(1)
+        end
+        -- Обновляем лодку, если она изменилась
+        updateBoatFromSeat()
+        -- Если лодка есть, но персонаж не сидит, сажаем
+        if seat then
+            local char = player.Character
+            local humanoid = char and char:FindFirstChild("Humanoid")
+            if humanoid and not (humanoid.Sit and humanoid.SeatPart == seat) then
+                print("[DIAG] Персонаж не сидит, выполняем посадку")
+                sitOnSeat()
+            end
+        end
+    end
+end)
+
+print("[DIAG] Скрипт запущен. Сядьте в лодку вручную. Скрипт подхватит её и начнёт управление.")
