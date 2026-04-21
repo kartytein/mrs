@@ -1,4 +1,4 @@
--- ===== МИНИМАЛЬНЫЙ СКРИПТ С ДИАГНОСТИКОЙ (ТОЛЬКО ЛОДКА) =====
+-- ===== МИНИМАЛЬНЫЙ СКРИПТ С ДИАГНОСТИКОЙ (ТОЛЬКО ЛОДКА) - ИСПРАВЛЕНА ОШИБКА =====
 -- Вы садитесь в лодку вручную, скрипт её находит, отключает коллизии,
 -- поддерживает движение и возвращает вас на сиденье, если вы вылезли.
 
@@ -23,17 +23,20 @@ task.spawn(function()
         local char = player.Character
         if char then
             for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") then part.CanCollide = false end
+                if part:IsA("BasePart") then
+                    pcall(function() part.CanCollide = false end)
+                end
             end
-            -- Нижняя и верхняя часть (особо важно)
             local lower = char:FindFirstChild("LowerTorso")
             local upper = char:FindFirstChild("UpperTorso")
-            if lower then lower.CanCollide = false end
-            if upper then upper.CanCollide = false end
+            if lower then pcall(function() lower.CanCollide = false end) end
+            if upper then pcall(function() upper.CanCollide = false end) end
         end
         if myBoat then
             for _, part in ipairs(myBoat:GetDescendants()) do
-                if part:IsA("BasePart") then part.CanCollide = false end
+                if part:IsA("BasePart") then
+                    pcall(function() part.CanCollide = false end)
+                end
             end
         end
         task.wait(0.2)
@@ -57,7 +60,9 @@ local function updateBoatFromSeat()
         print("[DIAG] Лодка найдена: " .. myBoat.Name)
         -- Отключаем родной скрипт лодки, если есть
         local native = myBoat:FindFirstChild("Script")
-        if native then native.Disabled = true end
+        if native then
+            pcall(function() native.Disabled = true end)
+        end
     end
 end
 
@@ -73,7 +78,7 @@ local function sitOnSeat()
     print("[DIAG] Попытка сесть на сиденье...")
     -- Удаляем старый BodyVelocity, чтобы не мешал
     local old = hrp:FindFirstChildWhichIsA("BodyVelocity")
-    if old then old:Destroy() end
+    if old then pcall(function() old:Destroy() end) end
     local targetCF = seat.CFrame + SEAT_OFFSET
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
@@ -83,9 +88,9 @@ local function sitOnSeat()
         bv.Velocity = dir * WALK_SPEED
         task.wait()
     end
-    bv:Destroy()
-    hrp.CFrame = targetCF
-    humanoid.Sit = true
+    pcall(function() bv:Destroy() end)
+    pcall(function() hrp.CFrame = targetCF end)
+    pcall(function() humanoid.Sit = true end)
     task.wait(0.3)
     print("[DIAG] Посадка завершена")
 end
@@ -104,9 +109,7 @@ task.spawn(function()
             local speedX = currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED
             local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
             if bv then
-                if bv.Velocity.X ~= speedX then
-                    bv.Velocity = Vector3.new(speedX, 0, 0)
-                end
+                pcall(function() bv.Velocity = Vector3.new(speedX, 0, 0) end)
             else
                 bv = Instance.new("BodyVelocity")
                 bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
@@ -118,7 +121,7 @@ task.spawn(function()
             -- Не сидим: удаляем BodyVelocity
             local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
             if bv then
-                bv:Destroy()
+                pcall(function() bv:Destroy() end)
                 print("[DIAG] BodyVelocity удалён (не сидим)")
             end
         end
@@ -130,13 +133,15 @@ task.spawn(function()
     while true do
         task.wait(0.2)
         if rootPart then
-            local x = rootPart.Position.X
-            if x <= BOAT_X_MIN and currentDirection == -1 then
-                currentDirection = 1
-                print("[DIAG] Смена направления → вправо")
-            elseif x >= BOAT_X_MAX and currentDirection == 1 then
-                currentDirection = -1
-                print("[DIAG] Смена направления → влево")
+            local success, x = pcall(function() return rootPart.Position.X end)
+            if success then
+                if x <= BOAT_X_MIN and currentDirection == -1 then
+                    currentDirection = 1
+                    print("[DIAG] Смена направления → вправо")
+                elseif x >= BOAT_X_MAX and currentDirection == 1 then
+                    currentDirection = -1
+                    print("[DIAG] Смена направления → влево")
+                end
             end
         end
     end
