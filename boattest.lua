@@ -1,4 +1,9 @@
--- ===== МАКСИМАЛЬНО ПОЛНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ (ВСЕ МЕХАНИЗМЫ) =====
+-- ===== ФИНАЛЬНЫЙ ПОЛНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ (РАБОЧАЯ ВЕРСИЯ) =====
+-- Все механизмы: выбор команды, перемещение к точке покупки, покупка лодки, посадка,
+-- поддержание движения лодки через BodyVelocity на персонаже, смена направления,
+-- постоянное отключение коллизий, возврат на сиденье при вылезании/смерти,
+-- пересоздание BodyVelocity при застревании.
+
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
@@ -19,20 +24,19 @@ local currentDirection = -1          -- -1 = влево, 1 = вправо
 local needToMove = true               -- нужно ли сначала переместиться в точку покупки
 local isSitting = false
 
--- ========== 1. ДИАГНОСТИКА (опционально, можно закомментировать) ==========
+-- ========== 1. ДИАГНОСТИКА ==========
 local function log(msg)
     print(string.format("[%s] %s", os.date("%H:%M:%S"), msg))
 end
 
--- ========== 2. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ (ПЕРСОНАЖ + ЛОДКА) ==========
+-- ========== 2. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
 local function disableAllCollisions()
     local char = player.Character
     if char then
-        -- Все части персонажа
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") then part.CanCollide = false end
         end
-        -- Особый упор на LowerTorso и UpperTorso (как в эталонном скрипте)
+        -- Особо важно для LowerTorso и UpperTorso (как в эталонном скрипте)
         local lower = char:FindFirstChild("LowerTorso")
         local upper = char:FindFirstChild("UpperTorso")
         if lower then lower.CanCollide = false end
@@ -233,6 +237,7 @@ local function ensureBoatMovement()
         bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
         bv.Parent = hrp
         bv.Velocity = Vector3.new(speedX, 0, 0)
+        log("Создан BodyVelocity, скорость " .. speedX)
     end
 end
 
