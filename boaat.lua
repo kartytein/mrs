@@ -1,11 +1,6 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С ПОЛНОЙ ДИАГНОСТИКОЙ =====
--- Вы садитесь в лодку вручную, скрипт её находит, отключает коллизии,
--- поддерживает движение и возвращает вас на сиденье, если вы вылезли.
--- Все вызовы обёрнуты в pcall и проверки на nil.
-
+-- ===== ФИНАЛЬНЫЙ СКРИПТ: ПОСТОЯННЫЙ ВОЗВРАТ НА СИДЕНЬЕ =====
 local player = game.Players.LocalPlayer
 
--- НАСТРОЙКИ (измените под свои координаты)
 local BOAT_X_MIN = -77389.3
 local BOAT_X_MAX = -47968.4
 local BOAT_SPEED = 250
@@ -17,24 +12,13 @@ local seat = nil
 local rootPart = nil
 local currentDirection = -1
 
--- Функция безопасного вызова с диагностикой
-local function safeCall(func, name)
-    local ok, err = pcall(func)
-    if not ok then
-        print("[DIAG] Ошибка в " .. name .. ": " .. tostring(err))
-    end
-    return ok
-end
-
--- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
+-- Постоянное отключение коллизий
 task.spawn(function()
     while true do
         local char = player.Character
         if char then
             for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") then
-                    part.CanCollide = false
-                end
+                if part:IsA("BasePart") then part.CanCollide = false end
             end
             local lower = char:FindFirstChild("LowerTorso")
             local upper = char:FindFirstChild("UpperTorso")
@@ -43,16 +27,14 @@ task.spawn(function()
         end
         if myBoat then
             for _, part in ipairs(myBoat:GetDescendants()) do
-                if part:IsA("BasePart") then
-                    part.CanCollide = false
-                end
+                if part:IsA("BasePart") then part.CanCollide = false end
             end
         end
         task.wait(0.2)
     end
 end)
 
--- ========== 2. ПОИСК ЛОДКИ ПО СИДЕНЬЮ ==========
+-- Поиск лодки по сиденью
 local function updateBoatFromSeat()
     local char = player.Character
     if not char then return end
@@ -72,7 +54,7 @@ local function updateBoatFromSeat()
     end
 end
 
--- ========== 3. ПОСАДКА НА СИДЕНЬЕ ==========
+-- Посадка (цикл BodyVelocity, пока не сядет)
 local function sitOnSeat()
     if not seat then return end
     local char = player.Character
@@ -80,18 +62,26 @@ local function sitOnSeat()
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local humanoid = char:FindFirstChild("Humanoid")
     if not hrp or not humanoid then return end
-    if humanoid.Sit and humanoid.SeatPart == seat then return end
-    print("[DIAG] Попытка сесть на сиденье...")
+    if humanoid.Sit and humanoid.SeatPart == seat then
+        return
+    end
+    print("[DIAG] Начинаем посадку...")
+    -- Удаляем старый BodyVelocity
     local old = hrp:FindFirstChildWhichIsA("BodyVelocity")
     if old then old:Destroy() end
     local targetCF = seat.CFrame + SEAT_OFFSET
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
-    while (hrp.Position - targetCF.Position).Magnitude > 1.5 do
+    -- Будем двигаться, пока не сядем (проверка в цикле)
+    while true do
+        local dist = (hrp.Position - targetCF.Position).Magnitude
+        if dist <= 1.5 then
+            break
+        end
         local dir = (targetCF.Position - hrp.Position).Unit
         bv.Velocity = dir * WALK_SPEED
-        task.wait()
+        task.wait(0.05)
     end
     bv:Destroy()
     hrp.CFrame = targetCF
@@ -100,7 +90,7 @@ local function sitOnSeat()
     print("[DIAG] Посадка завершена")
 end
 
--- ========== 4. ПОДДЕРЖАНИЕ ДВИЖЕНИЯ ==========
+-- Поддержание движения лодки (BodyVelocity на персонаже)
 task.spawn(function()
     while true do
         task.wait(0.1)
@@ -130,7 +120,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 5. ОБНОВЛЕНИЕ НАПРАВЛЕНИЯ ==========
+-- Обновление направления по X лодки
 task.spawn(function()
     while true do
         task.wait(0.2)
@@ -147,7 +137,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. МОНИТОРИНГ ПОСАДКИ ==========
+-- Мониторинг: если персонаж не сидит, вызываем посадку (которая будет пытаться, пока не сядет)
 task.spawn(function()
     while true do
         task.wait(0.5)
@@ -158,16 +148,16 @@ task.spawn(function()
             print("[DIAG] Персонаж появился")
             task.wait(1)
         end
-        safeCall(updateBoatFromSeat, "updateBoatFromSeat")
+        updateBoatFromSeat()
         if seat then
             local char = player.Character
             local humanoid = char and char:FindFirstChild("Humanoid")
             if humanoid and not (humanoid.Sit and humanoid.SeatPart == seat) then
-                print("[DIAG] Персонаж не сидит, выполняем посадку")
-                safeCall(sitOnSeat, "sitOnSeat")
+                print("[DIAG] Персонаж не сидит, запускаем посадку")
+                sitOnSeat()  -- эта функция будет работать, пока не сядет
             end
         end
     end
 end)
 
-print("[DIAG] Скрипт запущен. Сядьте в лодку вручную. Ошибок быть не должно.")
+print("[DIAG] Скрипт запущен. Сядьте в лодку. При вылезании будет автоматический возврат.")
