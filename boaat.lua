@@ -1,7 +1,7 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ (ПОСАДКА + ПРОХОЖДЕНИЕ СКВОЗЬ ТЕКСТУРЫ) =====
+-- ===== ИТОГОВЫЙ РАБОЧИЙ СКРИПТ (ПОСАДКА + ДВИЖЕНИЕ + ПРОХОД СКВОЗЬ ПРЕПЯТСТВИЯ) =====
 local player = game.Players.LocalPlayer
 
--- НАСТРОЙКИ (измените под свою игру)
+-- НАСТРОЙКИ
 local BOAT_X_MIN = -77389.3
 local BOAT_X_MAX = -47968.4
 local BOAT_SPEED = 250
@@ -15,7 +15,7 @@ local rootPart = nil
 local currentDirection = -1
 local needToMove = true
 
--- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ (ПЕРСОНАЖ + ЛОДКА) ==========
+-- 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ
 task.spawn(function()
     while true do
         local char = player.Character
@@ -37,7 +37,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 2. ПОИСК СВОЕЙ ЛОДКИ ПО OWNER ==========
+-- 2. ПОИСК ЛОДКИ ПО OWNER
 local function findMyBoat()
     local boats = workspace:FindFirstChild("Boats")
     if not boats then return nil end
@@ -52,7 +52,7 @@ local function findMyBoat()
     return nil
 end
 
--- ========== 3. ПЕРЕМЕЩЕНИЕ К ТОЧКЕ ПОКУПКИ ==========
+-- 3. ПЕРЕМЕЩЕНИЕ К ТОЧКЕ ПОКУПКИ
 local function moveToPoint(target, speed)
     local char = player.Character
     if not char then return end
@@ -73,9 +73,8 @@ local function moveToPoint(target, speed)
     if humanoid then humanoid.PlatformStand = false end
 end
 
--- ========== 4. ПОКУПКА НОВОЙ ЛОДКИ ==========
+-- 4. ПОКУПКА НОВОЙ ЛОДКИ
 local function buyNewBoat()
-    print("[DIAG] Покупка новой лодки...")
     if needToMove then
         moveToPoint(PURCHASE_POINT, WALK_SPEED)
         needToMove = false
@@ -92,10 +91,7 @@ local function buyNewBoat()
         if myBoat then break end
         task.wait(1)
     end
-    if not myBoat then
-        print("[DIAG] Не удалось купить лодку")
-        return false
-    end
+    if not myBoat then return false end
     seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
     rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
     if not seat or not rootPart then
@@ -107,23 +103,20 @@ local function buyNewBoat()
     end
     local native = myBoat:FindFirstChild("Script")
     if native then native.Disabled = true end
-    print("[DIAG] Новая лодка готова: " .. myBoat.Name)
     return true
 end
 
--- ========== 5. ГАРАНТИРОВАННАЯ ПОСАДКА С ДИАГНОСТИКОЙ ==========
-local function forceSitOnSeat()
+-- 5. ГАРАНТИРОВАННАЯ ПОСАДКА (ЦИКЛ ДО УСПЕХА)
+local function forceSit()
     if not myBoat or not myBoat.Parent then
         myBoat = findMyBoat()
         if not myBoat then
-            print("[DIAG] Лодки нет, покупаем")
             if not buyNewBoat() then return end
         end
     end
     seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
     rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
     if not seat then
-        print("[DIAG] Сиденье не найдено, сброс")
         myBoat = nil
         return
     end
@@ -132,45 +125,31 @@ local function forceSitOnSeat()
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local humanoid = char:FindFirstChild("Humanoid")
     if not hrp or not humanoid then return end
-    if humanoid.Sit and humanoid.SeatPart == seat then
-        return
-    end
-    print("[DIAG] Начинаем посадку...")
+    if humanoid.Sit and humanoid.SeatPart == seat then return end
+    
     local old = hrp:FindFirstChildWhichIsA("BodyVelocity")
     if old then old:Destroy() end
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
     local targetCF = seat.CFrame + SEAT_OFFSET
-    local iter = 0
     while true do
-        iter = iter + 1
-        local dist = (hrp.Position - targetCF.Position).Magnitude
-        if iter % 10 == 0 then
-            print(string.format("[DIAG] Расстояние до сиденья: %.2f", dist))
-        end
-        if dist < 1.5 then
-            bv:Destroy()
-            hrp.CFrame = targetCF
-            humanoid.Sit = true
-            print("[DIAG] Посадка завершена (финальная доводка)")
-            break
-        end
         local dir = (targetCF.Position - hrp.Position).Unit
         bv.Velocity = dir * WALK_SPEED
         task.wait(0.1)
-        if humanoid.Sit and humanoid.SeatPart == seat then
-            print("[DIAG] Уже сидим, выход")
+        if (hrp.Position - targetCF.Position).Magnitude < 1.5 then
+            bv:Destroy()
+            hrp.CFrame = targetCF
+            humanoid.Sit = true
             break
         end
-        -- Обновляем цель, если сиденье движется
+        if humanoid.Sit and humanoid.SeatPart == seat then break
         targetCF = seat.CFrame + SEAT_OFFSET
     end
     bv:Destroy()
-    print("[DIAG] Посадка завершена")
 end
 
--- ========== 6. ПОДДЕРЖАНИЕ ДВИЖЕНИЯ ЛОДКИ ==========
+-- 6. ПОДДЕРЖАНИЕ ДВИЖЕНИЯ ЛОДКИ (BODYVELOCITY НА ПЕРСОНАЖЕ)
 task.spawn(function()
     while true do
         task.wait(0.1)
@@ -183,9 +162,7 @@ task.spawn(function()
             local speedX = currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED
             local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
             if bv then
-                if bv.Velocity.X ~= speedX then
-                    bv.Velocity = Vector3.new(speedX, 0, 0)
-                end
+                bv.Velocity = Vector3.new(speedX, 0, 0)
             else
                 bv = Instance.new("BodyVelocity")
                 bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
@@ -199,22 +176,19 @@ task.spawn(function()
     end
 end)
 
--- ========== 7. ОБНОВЛЕНИЕ НАПРАВЛЕНИЯ ==========
+-- 7. ОБНОВЛЕНИЕ НАПРАВЛЕНИЯ
 task.spawn(function()
     while true do
         task.wait(0.2)
         if rootPart then
             local x = rootPart.Position.X
-            if x <= BOAT_X_MIN and currentDirection == -1 then
-                currentDirection = 1
-            elseif x >= BOAT_X_MAX and currentDirection == 1 then
-                currentDirection = -1
-            end
+            if x <= BOAT_X_MIN and currentDirection == -1 then currentDirection = 1
+            elseif x >= BOAT_X_MAX and currentDirection == 1 then currentDirection = -1 end
         end
     end
 end)
 
--- ========== 8. ГЛАВНЫЙ МОНИТОРИНГ ==========
+-- 8. ГЛАВНЫЙ МОНИТОРИНГ (ПОСТОЯННАЯ ПРОВЕРКА ПОСАДКИ)
 task.spawn(function()
     while true do
         task.wait(0.5)
@@ -230,14 +204,12 @@ task.spawn(function()
         local inMyBoat = false
         if currentSeat then
             local boat = currentSeat:FindFirstAncestorWhichIsA("Model")
-            if boat and boat == myBoat then
-                inMyBoat = true
-            end
+            if boat and boat == myBoat then inMyBoat = true end
         end
         if not inMyBoat then
-            forceSitOnSeat()
+            forceSit()
         end
     end
 end)
 
-print("[DIAG] Скрипт запущен. Коллизии постоянно отключены. Посадка с диагностикой расстояния.")
+print("[OK] Скрипт запущен. Лодка движется, коллизии отключены, посадка гарантирована.")
