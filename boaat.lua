@@ -1,4 +1,4 @@
--- ===== ИСПРАВЛЕННЫЙ СКРИПТ (ГАРАНТИРОВАННАЯ ПОСАДКА С ОБНОВЛЕНИЕМ ЦЕЛИ) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ИСПРАВЛЕНИЕМ ПОСАДКИ (ОБНОВЛЕНИЕ ЦЕЛИ) =====
 local player = game.Players.LocalPlayer
 
 -- НАСТРОЙКИ (измените под свою игру)
@@ -50,35 +50,52 @@ local function findMyBoat()
     return nil
 end
 
--- ========== 3. ГАРАНТИРОВАННАЯ ПОСАДКА (С ПОСТОЯННЫМ ОБНОВЛЕНИЕМ ЦЕЛИ) ==========
+-- ========== 3. ГАРАНТИРОВАННАЯ ПОСАДКА (С ОБНОВЛЕНИЕМ ЦЕЛИ) ==========
 local function forceSitOnSeat()
-    if not seat then
-        print("[DIAG] Посадка: нет сиденья")
+    -- Обновляем ссылки на лодку и сиденье перед посадкой
+    if not myBoat or not myBoat.Parent then
+        myBoat = findMyBoat()
+        if not myBoat then
+            print("[DIAG] Посадка: лодка не найдена")
+            return
+        end
+    end
+    -- Обновляем seat и rootPart из myBoat
+    local newSeat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
+    if not newSeat then
+        print("[DIAG] Посадка: в лодке нет сиденья")
         return
     end
+    seat = newSeat
+    rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+    print("[DIAG] Посадка: обновлено сиденье из myBoat")
+    
     local char = player.Character
     if not char then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local humanoid = char:FindFirstChild("Humanoid")
     if not hrp or not humanoid then return end
+    
     if humanoid.Sit and humanoid.SeatPart == seat then
+        print("[DIAG] Посадка: уже сидит")
         return
     end
+    
     print("[DIAG] Начинаем принудительную посадку...")
-    -- Удаляем старый BodyVelocity
     local old = hrp:FindFirstChildWhichIsA("BodyVelocity")
     if old then old:Destroy() end
+    
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
+    
     local iter = 0
     while true do
         iter = iter + 1
-        -- Обновляем цель (сиденье может двигаться)
         local targetCF = seat.CFrame + SEAT_OFFSET
         local dist = (hrp.Position - targetCF.Position).Magnitude
         if iter % 10 == 0 then
-            print(string.format("[DIAG] Посадка: расстояние %.1f, цель: %s", dist, tostring(targetCF.Position)))
+            print(string.format("[DIAG] Посадка: расстояние %.1f", dist))
         end
         if dist < 1.5 then
             bv:Destroy()
@@ -93,6 +110,16 @@ local function forceSitOnSeat()
         if humanoid.Sit and humanoid.SeatPart == seat then
             print("[DIAG] Посадка: уже сидим, выход")
             break
+        end
+        -- Если за 5 секунд не приблизились, обновляем сиденье
+        if iter > 50 then
+            print("[DIAG] Посадка: долго не можем сесть, обновляем сиденье")
+            local newSeat2 = myBoat and myBoat:FindFirstChildWhichIsA("VehicleSeat")
+            if newSeat2 then
+                seat = newSeat2
+                rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+            end
+            iter = 0
         end
     end
     bv:Destroy()
@@ -200,4 +227,4 @@ task.spawn(function()
     end
 end)
 
-print("[DIAG] Скрипт запущен. Посадка с обновлением цели, диагностика активна.")
+print("[DIAG] Скрипт запущен. Посадка с принудительным обновлением цели.")
