@@ -1,78 +1,55 @@
--- Трекер проблем (запустить отдельно)
+-- ===== ДИАГНОСТИКА ДВИЖЕНИЯ ЛОДКИ =====
+-- Добавьте этот код в конец вашего основного скрипта (перед последним print).
+-- Он будет каждые 0.5 секунды выводить состояние и фиксировать изменения.
+
 local player = game.Players.LocalPlayer
-local lastSit = nil
-local lastSeatPart = nil
-local lastBVPresent = nil
-local lastBVSpeed = nil
-local lastBoatPos = nil
-local lastCharPos = nil
+local lastState = {}
 
 task.spawn(function()
     while true do
         task.wait(0.5)
         local char = player.Character
         if not char then
-            print("[TRACKER] Персонаж отсутствует")
+            print("[DIAG] Персонаж отсутствует")
             continue
         end
-        local humanoid = char:FindFirstChild("Humanoid")
         local hrp = char:FindFirstChild("HumanoidRootPart")
-        if not humanoid or not hrp then
-            print("[TRACKER] Нет Humanoid или HRP")
-            continue
-        end
-
-        local sit = humanoid.Sit
-        local seatPart = humanoid.SeatPart
-        local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
-        local bvPresent = bv ~= nil
-        local bvSpeed = bv and bv.Velocity or Vector3.new(0,0,0)
-        local charPos = hrp.Position
-
-        -- Поиск лодки (если есть)
-        local boat = nil
-        if seatPart then
-            boat = seatPart:FindFirstAncestorWhichIsA("Model")
-        end
-        local boatPos = boat and (boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")) and boat:GetPivot().Position or nil
-
-        -- Проверка изменений
-        if sit ~= lastSit then
-            print("[TRACKER] Sit изменился на", sit)
-            lastSit = sit
-        end
-        if seatPart ~= lastSeatPart then
-            print("[TRACKER] SeatPart изменился на", seatPart and seatPart:GetFullName() or "nil")
-            lastSeatPart = seatPart
-        end
-        if bvPresent ~= lastBVPresent then
-            print("[TRACKER] BodyVelocity присутствует:", bvPresent)
-            lastBVPresent = bvPresent
-        end
-        if bvSpeed.X ~= lastBVSpeed then
-            print("[TRACKER] Скорость BodyVelocity изменилась:", bvSpeed.X)
-            lastBVSpeed = bvSpeed.X
-        end
-
-        -- Критические события
-        if sit and seatPart and bvPresent and bvSpeed.X == 0 then
-            print("[TRACKER] ВНИМАНИЕ: персонаж сидит, но скорость BodyVelocity = 0")
-        end
-        if sit and not bvPresent then
-            print("[TRACKER] ВНИМАНИЕ: персонаж сидит, но BodyVelocity отсутствует")
-        end
-        if sit and not seatPart then
-            print("[TRACKER] ВНИМАНИЕ: персонаж сидит, но SeatPart = nil")
-        end
-
-        -- Отслеживание движения лодки
-        if boatPos and lastBoatPos then
-            local delta = (boatPos - lastBoatPos).Magnitude
-            if delta < 0.1 and sit and bvPresent and bvSpeed.X ~= 0 then
-                print("[TRACKER] ВНИМАНИЕ: лодка не двигается, хотя скорость задана")
+        local humanoid = char:FindFirstChild("Humanoid")
+        local bv = hrp and hrp:FindFirstChildWhichIsA("BodyVelocity")
+        local seatPart = humanoid and humanoid.SeatPart
+        
+        -- Получаем глобальные переменные из основного скрипта (если они доступны)
+        local myBoat = _G.__myBoat or (rawget(_G, "myBoat") or "nil")
+        local currentDirection = _G.__currentDirection or (rawget(_G, "currentDirection") or "nil")
+        
+        local state = {
+            sit = humanoid and humanoid.Sit or false,
+            seatPart = seatPart and seatPart:GetFullName() or "nil",
+            bvExists = bv ~= nil,
+            bvSpeed = bv and bv.Velocity or Vector3.new(0,0,0),
+            hrpPos = hrp and hrp.Position or nil,
+            boatExists = myBoat and myBoat.Parent ~= nil,
+            direction = currentDirection,
+        }
+        
+        -- Вывод изменений
+        for k, v in pairs(state) do
+            if lastState[k] ~= v then
+                print(string.format("[DIAG] %s: %s -> %s", k, tostring(lastState[k]), tostring(v)))
             end
         end
-        lastBoatPos = boatPos
-        lastCharPos = charPos
+        
+        -- Критические ситуации
+        if state.sit and not state.bvExists then
+            print("[DIAG] КРИТИЧЕСКАЯ ОШИБКА: сидим, но BodyVelocity отсутствует!")
+        end
+        if state.sit and state.bvExists and state.bvSpeed.X == 0 then
+            print("[DIAG] ВНИМАНИЕ: сидим, BodyVelocity есть, но скорость X = 0")
+        end
+        if state.sit and state.bvExists and state.bvSpeed.X ~= 0 and state.bvSpeed.X ~= (state.direction == -1 and -BOAT_SPEED or BOAT_SPEED) then
+            print(string.format("[DIAG] ВНИМАНИЕ: скорость BodyVelocity (%s) не соответствует направлению (%s)", state.bvSpeed.X, state.direction))
+        end
+        
+        lastState = state
     end
 end)
