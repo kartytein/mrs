@@ -1,7 +1,7 @@
--- ===== СКРИПТ: ГАРАНТИРОВАННАЯ ПОСАДКА + ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (ПОСАДКА + ПРОХОЖДЕНИЕ СКВОЗЬ ТЕКСТУРЫ) =====
 local player = game.Players.LocalPlayer
 
--- НАСТРОЙКИ
+-- НАСТРОЙКИ (измените под свою игру)
 local BOAT_X_MIN = -77389.3
 local BOAT_X_MAX = -47968.4
 local BOAT_SPEED = 250
@@ -37,7 +37,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 2. ПОИСК СВОЕЙ ЛОДКИ ==========
+-- ========== 2. ПОИСК СВОЕЙ ЛОДКИ ПО OWNER ==========
 local function findMyBoat()
     local boats = workspace:FindFirstChild("Boats")
     if not boats then return nil end
@@ -111,7 +111,7 @@ local function buyNewBoat()
     return true
 end
 
--- ========== 5. ГАРАНТИРОВАННАЯ ПОСАДКА (ЦИКЛ ДО УСПЕХА) ==========
+-- ========== 5. ГАРАНТИРОВАННАЯ ПОСАДКА С ДИАГНОСТИКОЙ ==========
 local function forceSitOnSeat()
     if not myBoat or not myBoat.Parent then
         myBoat = findMyBoat()
@@ -120,10 +120,8 @@ local function forceSitOnSeat()
             if not buyNewBoat() then return end
         end
     end
-    if not seat or not seat.Parent then
-        seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
-        rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
-    end
+    seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
+    rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
     if not seat then
         print("[DIAG] Сиденье не найдено, сброс")
         myBoat = nil
@@ -138,45 +136,35 @@ local function forceSitOnSeat()
         return
     end
     print("[DIAG] Начинаем посадку...")
-    -- Удаляем старый BodyVelocity
     local old = hrp:FindFirstChildWhichIsA("BodyVelocity")
     if old then old:Destroy() end
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
     local targetCF = seat.CFrame + SEAT_OFFSET
-    local lastDist = math.huge
-    local stuckCount = 0
+    local iter = 0
     while true do
+        iter = iter + 1
         local dist = (hrp.Position - targetCF.Position).Magnitude
+        if iter % 10 == 0 then
+            print(string.format("[DIAG] Расстояние до сиденья: %.2f", dist))
+        end
         if dist < 1.5 then
             bv:Destroy()
             hrp.CFrame = targetCF
             humanoid.Sit = true
+            print("[DIAG] Посадка завершена (финальная доводка)")
             break
         end
         local dir = (targetCF.Position - hrp.Position).Unit
         bv.Velocity = dir * WALK_SPEED
-        -- Проверка на застревание
-        if math.abs(dist - lastDist) < 0.05 then
-            stuckCount = stuckCount + 1
-            if stuckCount > 30 then
-                print("[DIAG] Застревание, телепортируем")
-                bv:Destroy()
-                hrp.CFrame = targetCF
-                humanoid.Sit = true
-                break
-            end
-        else
-            stuckCount = 0
-        end
-        lastDist = dist
         task.wait(0.1)
-        -- Обновляем цель (сиденье может двигаться)
-        targetCF = seat.CFrame + SEAT_OFFSET
         if humanoid.Sit and humanoid.SeatPart == seat then
+            print("[DIAG] Уже сидим, выход")
             break
         end
+        -- Обновляем цель, если сиденье движется
+        targetCF = seat.CFrame + SEAT_OFFSET
     end
     bv:Destroy()
     print("[DIAG] Посадка завершена")
@@ -252,4 +240,4 @@ task.spawn(function()
     end
 end)
 
-print("[DIAG] Скрипт запущен. Коллизии отключены, посадка гарантирована.")
+print("[DIAG] Скрипт запущен. Коллизии постоянно отключены. Посадка с диагностикой расстояния.")
