@@ -1,4 +1,4 @@
--- ===== ИТОГОВЫЙ РАБОЧИЙ СКРИПТ (ПОСАДКА + ДВИЖЕНИЕ + ПРОХОД СКВОЗЬ ПРЕПЯТСТВИЯ) =====
+-- ===== ИСПРАВЛЕННЫЙ СКРИПТ С ПРОВЕРКАМИ НА NIL =====
 local player = game.Players.LocalPlayer
 
 -- НАСТРОЙКИ
@@ -46,7 +46,9 @@ local function findMyBoat()
             local owner = boat:GetAttribute("Owner")
             if owner == player.Name then return boat end
             local ownerObj = boat:FindFirstChild("Owner")
-            if ownerObj and tostring(ownerObj.Value) == player.Name then return boat end
+            if ownerObj and (ownerObj:IsA("StringValue") or ownerObj:IsA("ObjectValue")) then
+                if tostring(ownerObj.Value) == player.Name then return boat end
+            end
         end
     end
     return nil
@@ -73,7 +75,7 @@ local function moveToPoint(target, speed)
     if humanoid then humanoid.PlatformStand = false end
 end
 
--- 4. ПОКУПКА НОВОЙ ЛОДКИ
+-- 4. ПОКУПКА НОВОЙ ЛОДКИ (БЕЗОПАСНО)
 local function buyNewBoat()
     if needToMove then
         moveToPoint(PURCHASE_POINT, WALK_SPEED)
@@ -83,7 +85,13 @@ local function buyNewBoat()
     local remotes = rs and rs:FindFirstChild("Remotes")
     if remotes then
         local commF = remotes:FindFirstChild("CommF_")
-        if commF then pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end) end
+        if commF then
+            pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end)
+        else
+            print("[ERROR] CommF_ not found")
+        end
+    else
+        print("[ERROR] Remotes not found")
     end
     task.wait(3)
     for i = 1, 10 do
@@ -106,7 +114,7 @@ local function buyNewBoat()
     return true
 end
 
--- 5. ГАРАНТИРОВАННАЯ ПОСАДКА (ЦИКЛ ДО УСПЕХА)
+-- 5. ГАРАНТИРОВАННАЯ ПОСАДКА
 local function forceSit()
     if not myBoat or not myBoat.Parent then
         myBoat = findMyBoat()
@@ -149,7 +157,7 @@ local function forceSit()
     bv:Destroy()
 end
 
--- 6. ПОДДЕРЖАНИЕ ДВИЖЕНИЯ ЛОДКИ (BODYVELOCITY НА ПЕРСОНАЖЕ)
+-- 6. ПОДДЕРЖАНИЕ ДВИЖЕНИЯ ЛОДКИ
 task.spawn(function()
     while true do
         task.wait(0.1)
@@ -212,4 +220,4 @@ task.spawn(function()
     end
 end)
 
-print("[OK] Скрипт запущен. Лодка движется, коллизии отключены, посадка гарантирована.")
+print("[OK] Скрипт запущен. Проверки nil добавлены.")
