@@ -1,7 +1,4 @@
--- ===== ВАШ РАБОЧИЙ СКРИПТ С ДОБАВЛЕННОЙ ДИАГНОСТИКОЙ (ЛОДКА ДОЛЖНА ДВИГАТЬСЯ) =====
--- Я добавил подробные выводы в консоль, чтобы выяснить, почему лодка не двигается.
--- Основная логика не изменена.
-
+-- ===== ИСПРАВЛЕННЫЙ СКРИПТ (ГАРАНТИРОВАННАЯ ПОСАДКА С ОБНОВЛЕНИЕМ ЦЕЛИ) =====
 local player = game.Players.LocalPlayer
 
 -- НАСТРОЙКИ (измените под свою игру)
@@ -53,7 +50,7 @@ local function findMyBoat()
     return nil
 end
 
--- ========== 3. ЦИКЛ ГАРАНТИРОВАННОЙ ПОСАДКИ ==========
+-- ========== 3. ГАРАНТИРОВАННАЯ ПОСАДКА (С ПОСТОЯННЫМ ОБНОВЛЕНИЕМ ЦЕЛИ) ==========
 local function forceSitOnSeat()
     if not seat then
         print("[DIAG] Посадка: нет сиденья")
@@ -68,31 +65,41 @@ local function forceSitOnSeat()
         return
     end
     print("[DIAG] Начинаем принудительную посадку...")
+    -- Удаляем старый BodyVelocity
     local old = hrp:FindFirstChildWhichIsA("BodyVelocity")
     if old then old:Destroy() end
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
+    local iter = 0
     while true do
+        iter = iter + 1
+        -- Обновляем цель (сиденье может двигаться)
         local targetCF = seat.CFrame + SEAT_OFFSET
+        local dist = (hrp.Position - targetCF.Position).Magnitude
+        if iter % 10 == 0 then
+            print(string.format("[DIAG] Посадка: расстояние %.1f, цель: %s", dist, tostring(targetCF.Position)))
+        end
+        if dist < 1.5 then
+            bv:Destroy()
+            hrp.CFrame = targetCF
+            humanoid.Sit = true
+            print("[DIAG] Посадка: финальная доводка, Sit=" .. tostring(humanoid.Sit))
+            break
+        end
         local dir = (targetCF.Position - hrp.Position).Unit
         bv.Velocity = dir * WALK_SPEED
         task.wait(0.1)
         if humanoid.Sit and humanoid.SeatPart == seat then
-            break
-        end
-        if (hrp.Position - targetCF.Position).Magnitude < 1.5 then
-            bv:Destroy()
-            hrp.CFrame = targetCF
-            humanoid.Sit = true
+            print("[DIAG] Посадка: уже сидим, выход")
             break
         end
     end
     bv:Destroy()
-    print("[DIAG] Посадка завершена")
+    print("[DIAG] Посадка завершена, итоговый Sit=" .. tostring(humanoid.Sit))
 end
 
--- ========== 4. ПОДДЕРЖАНИЕ ДВИЖЕНИЯ ЛОДКИ (С ДИАГНОСТИКОЙ) ==========
+-- ========== 4. ПОДДЕРЖАНИЕ ДВИЖЕНИЯ ЛОДКИ ==========
 task.spawn(function()
     while true do
         task.wait(0.1)
@@ -101,41 +108,27 @@ task.spawn(function()
         local hrp = char:FindFirstChild("HumanoidRootPart")
         local humanoid = char:FindFirstChild("Humanoid")
         if not hrp or not humanoid then continue end
-        
-        -- Диагностика: выводим состояние каждые 2 секунды (но не слишком часто)
-        if tick() % 2 < 0.1 then
-            print(string.format("[DIAG] Сидит: %s, SeatPart: %s, seat: %s", 
-                tostring(humanoid.Sit), 
-                tostring(humanoid.SeatPart), 
-                tostring(seat)))
-        end
-        
         if seat and humanoid.Sit and humanoid.SeatPart == seat then
             local speedX = currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED
             local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
             if bv then
                 if bv.Velocity.X ~= speedX then
                     bv.Velocity = Vector3.new(speedX, 0, 0)
-                    print("[DIAG] Обновлена скорость BodyVelocity: " .. speedX)
                 end
             else
                 bv = Instance.new("BodyVelocity")
                 bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
                 bv.Parent = hrp
                 bv.Velocity = Vector3.new(speedX, 0, 0)
-                print("[DIAG] Создан BodyVelocity, скорость " .. speedX)
             end
         else
             local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
-            if bv then 
-                bv:Destroy()
-                print("[DIAG] BodyVelocity удалён (не сидим)")
-            end
+            if bv then bv:Destroy() end
         end
     end
 end)
 
--- ========== 5. ОБНОВЛЕНИЕ НАПРАВЛЕНИЯ (С ДИАГНОСТИКОЙ) ==========
+-- ========== 5. ОБНОВЛЕНИЕ НАПРАВЛЕНИЯ ==========
 task.spawn(function()
     while true do
         task.wait(0.2)
@@ -143,30 +136,20 @@ task.spawn(function()
             local x = rootPart.Position.X
             if x <= BOAT_X_MIN and currentDirection == -1 then
                 currentDirection = 1
-                print("[DIAG] Смена направления → вправо (X=" .. x .. ")")
             elseif x >= BOAT_X_MAX and currentDirection == 1 then
                 currentDirection = -1
-                print("[DIAG] Смена направления → влево (X=" .. x .. ")")
-            end
-        else
-            -- Диагностика: если rootPart нет, выводим предупреждение
-            if tick() % 2 < 0.1 then
-                print("[DIAG] rootPart = nil, направление не обновляется")
             end
         end
     end
 end)
 
--- ========== 6. ГЛАВНЫЙ МОНИТОРИНГ (С ДИАГНОСТИКОЙ) ==========
+-- ========== 6. ГЛАВНЫЙ МОНИТОРИНГ ==========
 task.spawn(function()
     while true do
         task.wait(0.5)
-        -- Ожидание появления персонажа после смерти
         if not player.Character then
             myBoat = nil; seat = nil; rootPart = nil
-            print("[DIAG] Персонаж отсутствует, сброс лодки")
             player.CharacterAdded:Wait()
-            print("[DIAG] Персонаж появился")
             task.wait(1)
         end
 
@@ -175,7 +158,6 @@ task.spawn(function()
         local currentSeat = humanoid and humanoid.SeatPart
 
         if currentSeat then
-            -- Сидит на каком-то сиденье: обновляем лодку
             local boat = currentSeat:FindFirstAncestorWhichIsA("Model")
             if boat then
                 if myBoat ~= boat then
@@ -188,9 +170,7 @@ task.spawn(function()
                 end
             end
         else
-            -- Не сидит: пытаемся сесть в известную лодку или найти новую
             if myBoat and myBoat.Parent then
-                -- Проверяем, актуальны ли seat и rootPart
                 if not seat or not seat.Parent then
                     seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
                     rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
@@ -199,11 +179,9 @@ task.spawn(function()
                     print("[DIAG] Персонаж не сидит, запуск посадки")
                     forceSitOnSeat()
                 else
-                    print("[DIAG] Лодка есть, но сиденье не найдено, сброс")
                     myBoat = nil; seat = nil; rootPart = nil
                 end
             else
-                -- Лодки нет, ищем
                 myBoat = findMyBoat()
                 if myBoat then
                     seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
@@ -222,4 +200,4 @@ task.spawn(function()
     end
 end)
 
-print("[DIAG] Скрипт запущен. Постоянный поиск лодки и гарантированная посадка. Диагностика активна.")
+print("[DIAG] Скрипт запущен. Посадка с обновлением цели, диагностика активна.")
