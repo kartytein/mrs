@@ -1,17 +1,19 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С ИСПРАВЛЕНИЕМ ПОСАДКИ (ОБНОВЛЕНИЕ ЦЕЛИ) =====
+-- ===== ИСПРАВЛЕННЫЙ СКРИПТ: ТОЛЬКО СВОЯ ЛОДКА, ГАРАНТИРОВАННАЯ ПОСАДКА =====
 local player = game.Players.LocalPlayer
 
--- НАСТРОЙКИ (измените под свою игру)
+-- НАСТРОЙКИ
 local BOAT_X_MIN = -77389.3
 local BOAT_X_MAX = -47968.4
 local BOAT_SPEED = 250
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
 local WALK_SPEED = 150
+local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)   -- точка покупки
 
 local myBoat = nil
 local seat = nil
 local rootPart = nil
 local currentDirection = -1
+local needToMove = true
 
 -- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
 task.spawn(function()
@@ -50,83 +52,118 @@ local function findMyBoat()
     return nil
 end
 
--- ========== 3. ГАРАНТИРОВАННАЯ ПОСАДКА (С ОБНОВЛЕНИЕМ ЦЕЛИ) ==========
+-- ========== 3. ПЕРЕМЕЩЕНИЕ К ТОЧКЕ ПОКУПКИ ==========
+local function moveToPoint(target, speed)
+    local char = player.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local humanoid = char:FindFirstChild("Humanoid")
+    if humanoid then humanoid.PlatformStand = true end
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bv.Parent = hrp
+    while (hrp.Position - target).Magnitude > 2 do
+        local dir = (target - hrp.Position).Unit
+        bv.Velocity = dir * speed
+        task.wait()
+    end
+    bv:Destroy()
+    hrp.CFrame = CFrame.new(target)
+    if humanoid then humanoid.PlatformStand = false end
+end
+
+-- ========== 4. ПОКУПКА НОВОЙ ЛОДКИ ==========
+local function buyNewBoat()
+    print("[DIAG] Покупка новой лодки...")
+    if needToMove then
+        moveToPoint(PURCHASE_POINT, WALK_SPEED)
+        needToMove = false
+    end
+    local rs = game:GetService("ReplicatedStorage")
+    local remotes = rs and rs:FindFirstChild("Remotes")
+    if remotes then
+        local commF = remotes:FindFirstChild("CommF_")
+        if commF then pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end) end
+    end
+    task.wait(3)
+    for i = 1, 10 do
+        myBoat = findMyBoat()
+        if myBoat then break end
+        task.wait(1)
+    end
+    if not myBoat then
+        print("[DIAG] Не удалось купить лодку")
+        return false
+    end
+    seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
+    rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+    if not seat or not rootPart then
+        myBoat = nil
+        return false
+    end
+    for _, part in ipairs(myBoat:GetDescendants()) do
+        if part:IsA("BasePart") then part.CanCollide = false end
+    end
+    local native = myBoat:FindFirstChild("Script")
+    if native then native.Disabled = true end
+    print("[DIAG] Новая лодка готова: " .. myBoat.Name)
+    return true
+end
+
+-- ========== 5. ГАРАНТИРОВАННАЯ ПОСАДКА (ТОЛЬКО В СВОЮ ЛОДКУ) ==========
 local function forceSitOnSeat()
-    -- Обновляем ссылки на лодку и сиденье перед посадкой
-    if not myBoat or not myBoat.Parent then
+    if not seat then
+        print("[DIAG] Посадка: нет сиденья, пытаемся найти лодку")
         myBoat = findMyBoat()
         if not myBoat then
-            print("[DIAG] Посадка: лодка не найдена")
+            print("[DIAG] Лодки нет, покупаем")
+            if not buyNewBoat() then return end
+        end
+        seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
+        rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+        if not seat then
+            print("[DIAG] Сиденье не найдено, сброс")
+            myBoat = nil
             return
         end
     end
-    -- Обновляем seat и rootPart из myBoat
-    local newSeat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
-    if not newSeat then
-        print("[DIAG] Посадка: в лодке нет сиденья")
-        return
-    end
-    seat = newSeat
-    rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
-    print("[DIAG] Посадка: обновлено сиденье из myBoat")
-    
     local char = player.Character
     if not char then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local humanoid = char:FindFirstChild("Humanoid")
     if not hrp or not humanoid then return end
-    
     if humanoid.Sit and humanoid.SeatPart == seat then
-        print("[DIAG] Посадка: уже сидит")
+        print("[DIAG] Уже сидим, посадка не нужна")
         return
     end
-    
     print("[DIAG] Начинаем принудительную посадку...")
     local old = hrp:FindFirstChildWhichIsA("BodyVelocity")
     if old then old:Destroy() end
-    
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
-    
-    local iter = 0
     while true do
-        iter = iter + 1
         local targetCF = seat.CFrame + SEAT_OFFSET
         local dist = (hrp.Position - targetCF.Position).Magnitude
-        if iter % 10 == 0 then
-            print(string.format("[DIAG] Посадка: расстояние %.1f", dist))
-        end
         if dist < 1.5 then
             bv:Destroy()
             hrp.CFrame = targetCF
             humanoid.Sit = true
-            print("[DIAG] Посадка: финальная доводка, Sit=" .. tostring(humanoid.Sit))
             break
         end
         local dir = (targetCF.Position - hrp.Position).Unit
         bv.Velocity = dir * WALK_SPEED
         task.wait(0.1)
         if humanoid.Sit and humanoid.SeatPart == seat then
-            print("[DIAG] Посадка: уже сидим, выход")
             break
-        end
-        -- Если за 5 секунд не приблизились, обновляем сиденье
-        if iter > 50 then
-            print("[DIAG] Посадка: долго не можем сесть, обновляем сиденье")
-            local newSeat2 = myBoat and myBoat:FindFirstChildWhichIsA("VehicleSeat")
-            if newSeat2 then
-                seat = newSeat2
-                rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
-            end
-            iter = 0
         end
     end
     bv:Destroy()
-    print("[DIAG] Посадка завершена, итоговый Sit=" .. tostring(humanoid.Sit))
+    print("[DIAG] Посадка завершена")
 end
 
--- ========== 4. ПОДДЕРЖАНИЕ ДВИЖЕНИЯ ЛОДКИ ==========
+-- ========== 6. ПОДДЕРЖАНИЕ ДВИЖЕНИЯ ЛОДКИ ==========
 task.spawn(function()
     while true do
         task.wait(0.1)
@@ -155,7 +192,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 5. ОБНОВЛЕНИЕ НАПРАВЛЕНИЯ ==========
+-- ========== 7. ОБНОВЛЕНИЕ НАПРАВЛЕНИЯ ==========
 task.spawn(function()
     while true do
         task.wait(0.2)
@@ -170,61 +207,38 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ГЛАВНЫЙ МОНИТОРИНГ ==========
+-- ========== 8. ГЛАВНЫЙ ЦИКЛ: ПОСТОЯННЫЙ МОНИТОРИНГ И ПОСАДКА ==========
 task.spawn(function()
     while true do
         task.wait(0.5)
         if not player.Character then
             myBoat = nil; seat = nil; rootPart = nil
+            needToMove = true
             player.CharacterAdded:Wait()
             task.wait(1)
         end
-
+        -- Проверяем, сидит ли персонаж в своей лодке
         local char = player.Character
         local humanoid = char and char:FindFirstChild("Humanoid")
         local currentSeat = humanoid and humanoid.SeatPart
-
+        local isInMyBoat = false
         if currentSeat then
             local boat = currentSeat:FindFirstAncestorWhichIsA("Model")
-            if boat then
-                if myBoat ~= boat then
-                    myBoat = boat
-                    seat = currentSeat
-                    rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
-                    print("[DIAG] Лодка обновлена (сидим): " .. myBoat.Name)
-                    local native = myBoat:FindFirstChild("Script")
-                    if native then native.Disabled = true end
-                end
+            if boat and boat == myBoat then
+                isInMyBoat = true
             end
+        end
+        if not isInMyBoat then
+            print("[DIAG] Не в своей лодке, запуск посадки")
+            forceSitOnSeat()
         else
-            if myBoat and myBoat.Parent then
-                if not seat or not seat.Parent then
-                    seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
-                    rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
-                end
-                if seat then
-                    print("[DIAG] Персонаж не сидит, запуск посадки")
-                    forceSitOnSeat()
-                else
-                    myBoat = nil; seat = nil; rootPart = nil
-                end
-            else
-                myBoat = findMyBoat()
-                if myBoat then
-                    seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
-                    rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
-                    if seat and rootPart then
-                        local native = myBoat:FindFirstChild("Script")
-                        if native then native.Disabled = true end
-                        print("[DIAG] Лодка найдена: " .. myBoat.Name)
-                        forceSitOnSeat()
-                    else
-                        myBoat = nil
-                    end
-                end
+            -- Если сидим в своей лодке, обновляем ссылки (на случай, если лодка пересоздалась)
+            if not seat or not seat.Parent then
+                seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
+                rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
             end
         end
     end
 end)
 
-print("[DIAG] Скрипт запущен. Посадка с принудительным обновлением цели.")
+print("[DIAG] Скрипт запущен. Игнорируем чужие лодки, работаем только со своей.")
