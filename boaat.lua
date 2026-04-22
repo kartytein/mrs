@@ -1,7 +1,7 @@
--- ===== ИСПРАВЛЕННЫЙ СКРИПТ С ГАРАНТИРОВАННОЙ ПОСАДКОЙ И ВОЗВРАТОМ =====
+-- ===== СКРИПТ: ГАРАНТИРОВАННАЯ ПОСАДКА + ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ =====
 local player = game.Players.LocalPlayer
 
--- НАСТРОЙКИ (измените под свою игру)
+-- НАСТРОЙКИ
 local BOAT_X_MIN = -77389.3
 local BOAT_X_MAX = -47968.4
 local BOAT_SPEED = 250
@@ -15,7 +15,7 @@ local rootPart = nil
 local currentDirection = -1
 local needToMove = true
 
--- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
+-- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ (ПЕРСОНАЖ + ЛОДКА) ==========
 task.spawn(function()
     while true do
         local char = player.Character
@@ -37,7 +37,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 2. ПОИСК СВОЕЙ ЛОДКИ ПО OWNER ==========
+-- ========== 2. ПОИСК СВОЕЙ ЛОДКИ ==========
 local function findMyBoat()
     local boats = workspace:FindFirstChild("Boats")
     if not boats then return nil end
@@ -111,9 +111,8 @@ local function buyNewBoat()
     return true
 end
 
--- ========== 5. ГАРАНТИРОВАННАЯ ПОСАДКА ==========
+-- ========== 5. ГАРАНТИРОВАННАЯ ПОСАДКА (ЦИКЛ ДО УСПЕХА) ==========
 local function forceSitOnSeat()
-    -- Если нет myBoat, пытаемся найти или купить
     if not myBoat or not myBoat.Parent then
         myBoat = findMyBoat()
         if not myBoat then
@@ -121,9 +120,10 @@ local function forceSitOnSeat()
             if not buyNewBoat() then return end
         end
     end
-    -- Получаем сиденье и rootPart из myBoat
-    seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
-    rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+    if not seat or not seat.Parent then
+        seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
+        rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+    end
     if not seat then
         print("[DIAG] Сиденье не найдено, сброс")
         myBoat = nil
@@ -145,14 +145,40 @@ local function forceSitOnSeat()
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
     local targetCF = seat.CFrame + SEAT_OFFSET
-    while (hrp.Position - targetCF.Position).Magnitude > 1.5 do
+    local lastDist = math.huge
+    local stuckCount = 0
+    while true do
+        local dist = (hrp.Position - targetCF.Position).Magnitude
+        if dist < 1.5 then
+            bv:Destroy()
+            hrp.CFrame = targetCF
+            humanoid.Sit = true
+            break
+        end
         local dir = (targetCF.Position - hrp.Position).Unit
         bv.Velocity = dir * WALK_SPEED
+        -- Проверка на застревание
+        if math.abs(dist - lastDist) < 0.05 then
+            stuckCount = stuckCount + 1
+            if stuckCount > 30 then
+                print("[DIAG] Застревание, телепортируем")
+                bv:Destroy()
+                hrp.CFrame = targetCF
+                humanoid.Sit = true
+                break
+            end
+        else
+            stuckCount = 0
+        end
+        lastDist = dist
         task.wait(0.1)
+        -- Обновляем цель (сиденье может двигаться)
+        targetCF = seat.CFrame + SEAT_OFFSET
+        if humanoid.Sit and humanoid.SeatPart == seat then
+            break
+        end
     end
     bv:Destroy()
-    hrp.CFrame = targetCF
-    humanoid.Sit = true
     print("[DIAG] Посадка завершена")
 end
 
@@ -200,7 +226,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 8. ГЛАВНЫЙ МОНИТОРИНГ (ДОБАВЛЯЕМ ВОЗВРАТ) ==========
+-- ========== 8. ГЛАВНЫЙ МОНИТОРИНГ ==========
 task.spawn(function()
     while true do
         task.wait(0.5)
@@ -210,7 +236,6 @@ task.spawn(function()
             player.CharacterAdded:Wait()
             task.wait(1)
         end
-        -- Проверяем, сидит ли персонаж в своей лодке
         local char = player.Character
         local humanoid = char and char:FindFirstChild("Humanoid")
         local currentSeat = humanoid and humanoid.SeatPart
@@ -227,4 +252,4 @@ task.spawn(function()
     end
 end)
 
-print("[DIAG] Скрипт запущен. Простая посадка, возврат на сиденье, постоянное отключение коллизий.")
+print("[DIAG] Скрипт запущен. Коллизии отключены, посадка гарантирована.")
