@@ -1,4 +1,4 @@
--- ===== ОКОНЧАТЕЛЬНЫЙ РАБОЧИЙ СКРИПТ (ГАРАНТИРОВАННАЯ ПОСАДКА И ДВИЖЕНИЕ) =====
+-- ===== ИСПРАВЛЕННЫЙ СКРИПТ (ГАРАНТИРОВАННАЯ ПОСАДКА) =====
 local player = game.Players.LocalPlayer
 
 -- НАСТРОЙКИ (измените под свою игру)
@@ -75,6 +75,7 @@ end
 
 -- ========== 4. ПОКУПКА НОВОЙ ЛОДКИ ==========
 local function buyNewBoat()
+    print("[DIAG] Покупка новой лодки...")
     if needToMove then
         moveToPoint(PURCHASE_POINT, WALK_SPEED)
         needToMove = false
@@ -91,7 +92,10 @@ local function buyNewBoat()
         if myBoat then break end
         task.wait(1)
     end
-    if not myBoat then return false end
+    if not myBoat then
+        print("[DIAG] Не удалось купить лодку")
+        return false
+    end
     seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
     rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
     if not seat or not rootPart then
@@ -103,24 +107,27 @@ local function buyNewBoat()
     end
     local native = myBoat:FindFirstChild("Script")
     if native then native.Disabled = true end
+    print("[DIAG] Новая лодка готова: " .. myBoat.Name)
     return true
 end
 
--- ========== 5. ГАРАНТИРОВАННАЯ ПОСАДКА ==========
+-- ========== 5. ГАРАНТИРОВАННАЯ ПОСАДКА (ПРОСТАЯ ВЕРСИЯ) ==========
 local function forceSitOnSeat()
-    -- Сначала убедимся, что у нас есть актуальная лодка
+    -- Если нет myBoat, пытаемся найти
     if not myBoat or not myBoat.Parent then
         myBoat = findMyBoat()
         if not myBoat then
-            print("Лодка не найдена, покупка...")
+            print("[DIAG] Лодки нет, покупаем")
             if not buyNewBoat() then return end
         end
-        seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
-        rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
-        if not seat then
-            myBoat = nil
-            return
-        end
+    end
+    -- Получаем сиденье и rootPart из myBoat
+    seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
+    rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+    if not seat then
+        print("[DIAG] Сиденье не найдено, сброс")
+        myBoat = nil
+        return
     end
     local char = player.Character
     if not char then return end
@@ -128,36 +135,25 @@ local function forceSitOnSeat()
     local humanoid = char:FindFirstChild("Humanoid")
     if not hrp or not humanoid then return end
     if humanoid.Sit and humanoid.SeatPart == seat then
-        return -- уже сидим
+        return
     end
-    print("Посадка...")
+    print("[DIAG] Начинаем посадку...")
+    -- Удаляем старый BodyVelocity
     local old = hrp:FindFirstChildWhichIsA("BodyVelocity")
     if old then old:Destroy() end
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
-    while true do
-        local targetCF = seat.CFrame + SEAT_OFFSET
-        local dist = (hrp.Position - targetCF.Position).Magnitude
-        if dist < 1.5 then
-            bv:Destroy()
-            hrp.CFrame = targetCF
-            humanoid.Sit = true
-            break
-        end
+    local targetCF = seat.CFrame + SEAT_OFFSET
+    while (hrp.Position - targetCF.Position).Magnitude > 1.5 do
         local dir = (targetCF.Position - hrp.Position).Unit
         bv.Velocity = dir * WALK_SPEED
         task.wait(0.1)
-        if humanoid.Sit and humanoid.SeatPart == seat then
-            break
-        end
-        -- Если лодка исчезла, выходим
-        if not myBoat or not myBoat.Parent then
-            break
-        end
     end
-    if bv then bv:Destroy() end
-    print("Посадка завершена")
+    bv:Destroy()
+    hrp.CFrame = targetCF
+    humanoid.Sit = true
+    print("[DIAG] Посадка завершена")
 end
 
 -- ========== 6. ПОДДЕРЖАНИЕ ДВИЖЕНИЯ ЛОДКИ ==========
@@ -204,7 +200,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 8. ГЛАВНЫЙ ЦИКЛ: ПОСТОЯННЫЙ МОНИТОРИНГ ПОСАДКИ ==========
+-- ========== 8. ГЛАВНЫЙ МОНИТОРИНГ ==========
 task.spawn(function()
     while true do
         task.wait(0.5)
@@ -217,20 +213,18 @@ task.spawn(function()
         -- Проверяем, сидит ли персонаж в своей лодке
         local char = player.Character
         local humanoid = char and char:FindFirstChild("Humanoid")
-        local isSittingInMyBoat = false
-        if humanoid and humanoid.Sit then
-            local currentSeat = humanoid.SeatPart
-            if currentSeat then
-                local boat = currentSeat:FindFirstAncestorWhichIsA("Model")
-                if boat and boat == myBoat then
-                    isSittingInMyBoat = true
-                end
+        local currentSeat = humanoid and humanoid.SeatPart
+        local inMyBoat = false
+        if currentSeat then
+            local boat = currentSeat:FindFirstAncestorWhichIsA("Model")
+            if boat and boat == myBoat then
+                inMyBoat = true
             end
         end
-        if not isSittingInMyBoat then
+        if not inMyBoat then
             forceSitOnSeat()
         end
     end
 end)
 
-print("Скрипт запущен. Коллизии отключены, посадка гарантирована.")
+print("[DIAG] Скрипт запущен. Простая посадка с поиском сиденья из myBoat.")
