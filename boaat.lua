@@ -1,55 +1,33 @@
--- ===== ПОЛНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ С ДИАГНОСТИКОЙ BODYVELOCITY =====
--- Автоматический выбор команды Marines, покупка лодки (при необходимости),
--- посадка, постоянное движение (с частым пересозданием BodyVelocity),
--- возврат на сиденье при вылезании/смерти, смена направления по границам X.
-
+-- ===== ПОЛНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ С ДИАГНОСТИКОЙ (БЕЗ ПЕРЕХВАТА) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 
 -- НАСТРОЙКИ (измените под свою игру)
-local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)      -- точка покупки лодки
-local BOAT_X_MIN = -77389.3                               -- левая граница
-local BOAT_X_MAX = -47968.4                               -- правая граница
-local BOAT_SPEED = 250                                    -- скорость лодки (по X)
-local WALK_SPEED = 150                                    -- скорость при посадке
-local SEAT_OFFSET = Vector3.new(0, 2.5, 0)                -- высота над сиденьем
-local COLLISION_INTERVAL = 0.2                            -- частота отключения коллизий
-local BV_REFRESH_INTERVAL = 0.05                          -- частота пересоздания BodyVelocity
+local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
+local BOAT_X_MIN = -77389.3
+local BOAT_X_MAX = -47968.4
+local BOAT_SPEED = 250
+local WALK_SPEED = 150
+local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
+local COLLISION_INTERVAL = 0.2
+local BV_REFRESH_INTERVAL = 0.05
 
 local myBoat = nil
 local seat = nil
 local rootPart = nil
-local currentDirection = -1          -- -1 = влево, 1 = вправо
-local needToMove = true               -- флаг для перемещения к точке покупки
+local currentDirection = -1
+local needToMove = true
 local isSitting = false
 
--- ========== 1. ДИАГНОСТИКА BODYVELOCITY (ЛОГГЕР) ==========
+-- ========== 1. ДИАГНОСТИКА BODYVELOCITY (ТОЛЬКО СКАНИРОВАНИЕ) ==========
 local function log(...) print("[BV]", ...) end
--- Перехват создания BodyVelocity (без ошибок)
-local oldNew = Instance.new
-Instance.new = function(className, parent)
-    local instance = oldNew(className, parent)
-    if className == "BodyVelocity" then
-        log("СОЗДАН BodyVelocity, Parent =", parent and parent:GetFullName() or "nil")
-        instance:GetPropertyChangedSignal("Velocity"):Connect(function()
-            log("Скорость изменена у", instance.Parent and instance.Parent:GetFullName() or "nil", "->", instance.Velocity)
-        end)
-        instance.AncestryChanged:Connect(function()
-            if not instance.Parent then
-                log("BodyVelocity УДАЛЁН (Parent = nil)")
-            end
-        end)
-    end
-    return instance
-end
--- Периодический поиск уже существующих BodyVelocity
 task.spawn(function()
     while true do
         task.wait(1)
         for _, bv in ipairs(workspace:GetDescendants()) do
             if bv:IsA("BodyVelocity") and not bv._tracked then
                 bv._tracked = true
-                log("Обнаружен существующий BodyVelocity, Parent =", bv.Parent and bv.Parent:GetFullName() or "nil", "Velocity =", bv.Velocity)
+                log("Обнаружен BodyVelocity, Parent =", bv.Parent and bv.Parent:GetFullName() or "nil", "Velocity =", bv.Velocity)
                 bv:GetPropertyChangedSignal("Velocity"):Connect(function()
                     log("Скорость изменена у", bv.Parent and bv.Parent:GetFullName() or "nil", "->", bv.Velocity)
                 end)
@@ -189,7 +167,6 @@ local function forceSit()
     if not hrp or not humanoid then return end
     if humanoid.Sit and humanoid.SeatPart == seat then return end
     
-    -- Удаляем старый BodyVelocity
     local old = hrp:FindFirstChildWhichIsA("BodyVelocity")
     if old then old:Destroy() end
     
@@ -252,7 +229,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 7. МОНИТОРИНГ ПОСАДКИ И ВОССТАНОВЛЕНИЯ ==========
+-- ========== 7. МОНИТОРИНГ ПОСАДКИ ==========
 task.spawn(function()
     while true do
         task.wait(0.5)
@@ -280,4 +257,4 @@ end)
 
 -- ========== 8. ЗАПУСК ==========
 selectMarines()
-print("[MAIN] Скрипт управления лодкой запущен. Диагностика BodyVelocity активна.")
+print("[MAIN] Скрипт управления лодкой запущен. Диагностика BodyVelocity активна (без перехвата).")
