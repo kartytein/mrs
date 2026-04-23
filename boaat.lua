@@ -174,32 +174,4 @@ task.spawn(function()
 end)
 
 print("[OK] Скрипт запущен. Сядьте в лодку вручную. Лодка будет двигаться между X=" .. BOAT_X_MIN .. " и X=" .. BOAT_X_MAX)
--- ===== ПРИНУДИТЕЛЬНОЕ ПЕРЕСОЗДАНИЕ BODYVELOCITY (ОТДЕЛЬНЫЙ ПОТОК) =====
-task.spawn(function()
-    while true do
-        task.wait(0.1)
-        local char = player.Character
-        if not char then continue end
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        local humanoid = char:FindFirstChild("Humanoid")
-        if not hrp or not humanoid then continue end
-        
-        -- Проверяем, сидит ли персонаж на нужном сиденье
-        if seat and humanoid.Sit and humanoid.SeatPart == seat then
-            local speedX = currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED
-            local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
-            if bv then
-                if bv.Velocity.X ~= speedX then
-                    bv.Velocity = Vector3.new(speedX, 0, 0)
-                end
-            else
-                -- BodyVelocity отсутствует, создаём новый
-                bv = Instance.new("BodyVelocity")
-                bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-                bv.Parent = hrp
-                bv.Velocity = Vector3.new(speedX, 0, 0)
-                print("[FIX] BodyVelocity пересоздан, скорость " .. speedX)
-            end
-        end
-    end
-end)
+
