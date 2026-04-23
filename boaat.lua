@@ -1,16 +1,16 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ (TWEEN + ПОСАДКА) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (ГАРАНТИРОВАННАЯ ПОСАДКА + TWEEN ДВИЖЕНИЕ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local tweenService = game:GetService("TweenService")
 
--- НАСТРОЙКИ (измените под свою игру)
-local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)      -- точка покупки
-local BOAT_POINT_A = Vector3.new(-77389.3, 22.8, 32606.2) -- точка 1
-local BOAT_POINT_B = Vector3.new(-47968.4, 22.8, 6048.2)  -- точка 2
-local WALK_SPEED = 150                                    -- скорость при посадке
-local BOAT_SPEED = 420                                    -- скорость лодки (студий/сек)
-local SEAT_OFFSET = Vector3.new(0, 2.5, 0)                -- высота над сиденьем
-local COLLISION_INTERVAL = 0.2                            -- частота отключения коллизий
+-- НАСТРОЙКИ (измените под свои координаты)
+local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
+local BOAT_POINT_A = Vector3.new(-77389.3, 22.8, 32606.2)
+local BOAT_POINT_B = Vector3.new(-47968.4, 22.8, 6048.2)
+local WALK_SPEED = 150
+local BOAT_SPEED = 420
+local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
+local COLLISION_INTERVAL = 0.2
 
 local myBoat = nil
 local seat = nil
@@ -101,32 +101,95 @@ local function buyBoat()
     end
 end
 
--- ========== 6. ПОСАДКА НА СИДЕНЬЕ (BODYVELOCITY) ==========
-local function sitOnSeat()
-    if not seat then return end
+-- ========== 6. ГАРАНТИРОВАННАЯ ПОСАДКА (ЦИКЛ ДО УСПЕХА) ==========
+local function forceSit()
+    print("[SIT] Начинаем посадку...")
+    -- Если нет myBoat, ищем или покупаем
+    if not myBoat or not myBoat.Parent then
+        myBoat = findMyBoat()
+        if not myBoat then
+            moveToPoint(PURCHASE_POINT, WALK_SPEED)
+            buyBoat()
+            task.wait(3)
+            for i = 1, 10 do
+                myBoat = findMyBoat()
+                if myBoat then break end
+                task.wait(1)
+            end
+            if not myBoat then
+                print("[SIT] Не удалось получить лодку")
+                return
+            end
+        end
+        seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
+        rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+        if not seat or not rootPart then
+            print("[SIT] Ошибка: нет сиденья или основной части")
+            myBoat = nil
+            return
+        end
+        -- Отключаем коллизии лодки и её скрипт
+        for _, part in ipairs(myBoat:GetDescendants()) do
+            if part:IsA("BasePart") then part.CanCollide = false end
+        end
+        local native = myBoat:FindFirstChild("Script")
+        if native then native.Disabled = true end
+    end
+
     local char = player.Character
     if not char then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local humanoid = char:FindFirstChild("Humanoid")
     if not hrp or not humanoid then return end
-    if humanoid.Sit and humanoid.SeatPart == seat then return end
+    if humanoid.Sit and humanoid.SeatPart == seat then
+        print("[SIT] Уже сидим")
+        return
+    end
 
-    local targetCF = seat.CFrame + SEAT_OFFSET
+    -- Удаляем старый BodyVelocity, чтобы не мешал
+    local old = hrp:FindFirstChildWhichIsA("BodyVelocity")
+    if old then old:Destroy() end
+
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
-    while (hrp.Position - targetCF.Position).Magnitude > 1.5 do
+
+    local lastDist = math.huge
+    local stuck = 0
+    while true do
+        -- Обновляем цель (сиденье может двигаться)
+        local targetCF = seat.CFrame + SEAT_OFFSET
+        local dist = (hrp.Position - targetCF.Position).Magnitude
+        if dist < 1.5 then
+            bv:Destroy()
+            hrp.CFrame = targetCF
+            humanoid.Sit = true
+            print("[SIT] Посадка успешна (финальная доводка)")
+            break
+        end
         local dir = (targetCF.Position - hrp.Position).Unit
         bv.Velocity = dir * WALK_SPEED
-        task.wait()
+
+        -- Проверка на застревание
+        if math.abs(dist - lastDist) < 0.05 then
+            stuck = stuck + 1
+            if stuck > 30 then
+                print("[SIT] Застревание, принудительная телепортация к сиденью")
+                bv:Destroy()
+                hrp.CFrame = targetCF
+                humanoid.Sit = true
+                break
+            end
+        else
+            stuck = 0
+        end
+        lastDist = dist
+        task.wait(0.1)
     end
     bv:Destroy()
-    hrp.CFrame = targetCF
-    humanoid.Sit = true
-    task.wait(0.3)
 end
 
--- ========== 7. УПРАВЛЕНИЕ ДВИЖЕНИЕМ ЛОДКИ (TWEEN) ==========
+-- ========== 7. ДВИЖЕНИЕ ЛОДКИ (TWEEN) ==========
 local function stopBoat()
     if currentTween then
         currentTween:Cancel()
@@ -162,7 +225,7 @@ local function startBoatMovement()
     moveToNext()
 end
 
--- ========== 8. МОНИТОР ПОСАДКИ ==========
+-- ========== 8. МОНИТОР ПОСАДКИ И ВОЗВРАТА ==========
 task.spawn(function()
     while not stopScript do
         task.wait(0.2)
@@ -199,10 +262,14 @@ task.spawn(function()
             needToSit = true
             stopBoat()
         end
+        -- Если нужно сесть, вызываем посадку
+        if needToSit then
+            forceSit()
+        end
     end
 end)
 
--- ========== 9. ГЛАВНЫЙ ЦИКЛ (ПОКУПКА И ПОСАДКА) ==========
+-- ========== 9. ГЛАВНЫЙ ЦИКЛ (ПОКУПКА ПЕРВОЙ ЛОДКИ) ==========
 task.spawn(function()
     selectMarines()
     task.wait(2)
@@ -215,36 +282,10 @@ task.spawn(function()
             task.wait(1)
         end
         if needToSit then
-            if not myBoat or not myBoat.Parent then
-                moveToPoint(PURCHASE_POINT, WALK_SPEED)
-                buyBoat()
-                task.wait(3)
-                for i = 1, 10 do
-                    myBoat = findMyBoat()
-                    if myBoat then break end
-                    task.wait(1)
-                end
-                if not myBoat then
-                    task.wait(5)
-                    continue
-                end
-                seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
-                rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
-                if not seat or not rootPart then
-                    myBoat = nil
-                    continue
-                end
-                for _, part in ipairs(myBoat:GetDescendants()) do
-                    if part:IsA("BasePart") then part.CanCollide = false end
-                end
-                local native = myBoat:FindFirstChild("Script")
-                if native then native.Disabled = true end
-            end
-            sitOnSeat()
-            needToSit = false
+            forceSit()
         end
-        task.wait(0.3)
+        task.wait(0.5)
     end
 end)
 
-print("Скрипт запущен. Лодка движется через Tween, посадка через BodyVelocity. Остановка при вылезании.")
+print("Скрипт запущен. Гарантированная посадка и движение лодки через Tween.")
