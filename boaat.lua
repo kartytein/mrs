@@ -1,12 +1,12 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ (ГАРАНТИРОВАННАЯ ПОСАДКА + TWEEN ДВИЖЕНИЕ) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (ГАРАНТИРОВАННАЯ ПОСАДКА + TWEEN + ПЕРЕПОКУПКА ЛОДКИ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local tweenService = game:GetService("TweenService")
 
 -- НАСТРОЙКИ (измените под свои координаты)
 local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
-local BOAT_POINT_A = Vector3.new(-77389.3, 22.8, 32606.2)
-local BOAT_POINT_B = Vector3.new(-47968.4, 22.8, 6048.2)
+local BOAT_POINT_A = Vector3.new(-77389.3, 26.8, 32606.2)  -- поднята Y
+local BOAT_POINT_B = Vector3.new(-47968.4, 26.8, 6048.2)   -- поднята Y
 local WALK_SPEED = 150
 local BOAT_SPEED = 420
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
@@ -101,25 +101,23 @@ local function buyBoat()
     end
 end
 
--- ========== 6. ГАРАНТИРОВАННАЯ ПОСАДКА (ЦИКЛ ДО УСПЕХА) ==========
+-- ========== 6. ГАРАНТИРОВАННАЯ ПОСАДКА (С ПЕРЕПОКУПКОЙ ПРИ ПОТЕРЕ ЛОДКИ) ==========
 local function forceSit()
     print("[SIT] Начинаем посадку...")
-    -- Если нет myBoat, ищем или покупаем
+    -- Если лодки нет, покупаем новую
     if not myBoat or not myBoat.Parent then
-        myBoat = findMyBoat()
+        print("[SIT] Лодка отсутствует, покупаем новую")
+        moveToPoint(PURCHASE_POINT, WALK_SPEED)
+        buyBoat()
+        task.wait(3)
+        for i = 1, 10 do
+            myBoat = findMyBoat()
+            if myBoat then break end
+            task.wait(1)
+        end
         if not myBoat then
-            moveToPoint(PURCHASE_POINT, WALK_SPEED)
-            buyBoat()
-            task.wait(3)
-            for i = 1, 10 do
-                myBoat = findMyBoat()
-                if myBoat then break end
-                task.wait(1)
-            end
-            if not myBoat then
-                print("[SIT] Не удалось получить лодку")
-                return
-            end
+            print("[SIT] Не удалось получить лодку, повтор через 5 сек")
+            return
         end
         seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
         rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
@@ -146,7 +144,7 @@ local function forceSit()
         return
     end
 
-    -- Удаляем старый BodyVelocity, чтобы не мешал
+    -- Удаляем старый BodyVelocity
     local old = hrp:FindFirstChildWhichIsA("BodyVelocity")
     if old then old:Destroy() end
 
@@ -157,24 +155,22 @@ local function forceSit()
     local lastDist = math.huge
     local stuck = 0
     while true do
-        -- Обновляем цель (сиденье может двигаться)
         local targetCF = seat.CFrame + SEAT_OFFSET
         local dist = (hrp.Position - targetCF.Position).Magnitude
-        if dist < 1.5 then
+        if dist < 1.0 then
             bv:Destroy()
             hrp.CFrame = targetCF
             humanoid.Sit = true
-            print("[SIT] Посадка успешна (финальная доводка)")
+            print("[SIT] Посадка успешна")
             break
         end
         local dir = (targetCF.Position - hrp.Position).Unit
         bv.Velocity = dir * WALK_SPEED
 
-        -- Проверка на застревание
         if math.abs(dist - lastDist) < 0.05 then
             stuck = stuck + 1
             if stuck > 30 then
-                print("[SIT] Застревание, принудительная телепортация к сиденью")
+                print("[SIT] Застревание, принудительная телепортация")
                 bv:Destroy()
                 hrp.CFrame = targetCF
                 humanoid.Sit = true
@@ -262,14 +258,13 @@ task.spawn(function()
             needToSit = true
             stopBoat()
         end
-        -- Если нужно сесть, вызываем посадку
         if needToSit then
             forceSit()
         end
     end
 end)
 
--- ========== 9. ГЛАВНЫЙ ЦИКЛ (ПОКУПКА ПЕРВОЙ ЛОДКИ) ==========
+-- ========== 9. ГЛАВНЫЙ ЦИКЛ (ПЕРВИЧНАЯ ПОКУПКА) ==========
 task.spawn(function()
     selectMarines()
     task.wait(2)
@@ -288,4 +283,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт запущен. Гарантированная посадка и движение лодки через Tween.")
+print("Скрипт запущен. Лодка движется на высоте Y=26.8. При потере лодки происходит перепокупка.")
