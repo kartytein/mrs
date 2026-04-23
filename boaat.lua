@@ -1,12 +1,12 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ (ГАРАНТИРОВАННАЯ ПОСАДКА + TWEEN + ПЕРЕПОКУПКА ЛОДКИ) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (ГАРАНТИРОВАННАЯ ПОСАДКА + TWEEN ДВИЖЕНИЕ + ПЕРЕПОКУПКА ПРИ ПОТЕРЕ ЛОДКИ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local tweenService = game:GetService("TweenService")
 
 -- НАСТРОЙКИ (измените под свои координаты)
 local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
-local BOAT_POINT_A = Vector3.new(-77389.3, 26.8, 32606.2)  -- поднята Y
-local BOAT_POINT_B = Vector3.new(-47968.4, 26.8, 6048.2)   -- поднята Y
+local BOAT_POINT_A = Vector3.new(-77389.3, 22.8, 32606.2)
+local BOAT_POINT_B = Vector3.new(-47968.4, 22.8, 6048.2)
 local WALK_SPEED = 150
 local BOAT_SPEED = 420
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
@@ -101,23 +101,28 @@ local function buyBoat()
     end
 end
 
--- ========== 6. ГАРАНТИРОВАННАЯ ПОСАДКА (С ПЕРЕПОКУПКОЙ ПРИ ПОТЕРЕ ЛОДКИ) ==========
+-- ========== 6. ГАРАНТИРОВАННАЯ ПОСАДКА + ПЕРЕПОКУПКА ПРИ ПОТЕРЕ ==========
 local function forceSit()
     print("[SIT] Начинаем посадку...")
-    -- Если лодки нет, покупаем новую
+    -- Если нет myBoat или лодка исчезла, ищем или покупаем
     if not myBoat or not myBoat.Parent then
-        print("[SIT] Лодка отсутствует, покупаем новую")
-        moveToPoint(PURCHASE_POINT, WALK_SPEED)
-        buyBoat()
-        task.wait(3)
-        for i = 1, 10 do
-            myBoat = findMyBoat()
-            if myBoat then break end
-            task.wait(1)
-        end
+        print("[SIT] Лодка отсутствует, пытаемся купить...")
+        myBoat = findMyBoat()
         if not myBoat then
-            print("[SIT] Не удалось получить лодку, повтор через 5 сек")
-            return
+            moveToPoint(PURCHASE_POINT, WALK_SPEED)
+            buyBoat()
+            print("[SIT] Ожидание появления лодки...")
+            task.wait(3)
+            for i = 1, 10 do
+                myBoat = findMyBoat()
+                if myBoat then break end
+                task.wait(1)
+            end
+            if not myBoat then
+                print("[SIT] Не удалось получить лодку, повтор через 5 сек")
+                task.wait(5)
+                return
+            end
         end
         seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
         rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
@@ -132,6 +137,7 @@ local function forceSit()
         end
         local native = myBoat:FindFirstChild("Script")
         if native then native.Disabled = true end
+        print("[SIT] Лодка получена: " .. myBoat.Name)
     end
 
     local char = player.Character
@@ -144,7 +150,7 @@ local function forceSit()
         return
     end
 
-    -- Удаляем старый BodyVelocity
+    -- Удаляем старый BodyVelocity, чтобы не мешал
     local old = hrp:FindFirstChildWhichIsA("BodyVelocity")
     if old then old:Destroy() end
 
@@ -157,7 +163,7 @@ local function forceSit()
     while true do
         local targetCF = seat.CFrame + SEAT_OFFSET
         local dist = (hrp.Position - targetCF.Position).Magnitude
-        if dist < 1.0 then
+        if dist < 1.5 then
             bv:Destroy()
             hrp.CFrame = targetCF
             humanoid.Sit = true
@@ -170,7 +176,7 @@ local function forceSit()
         if math.abs(dist - lastDist) < 0.05 then
             stuck = stuck + 1
             if stuck > 30 then
-                print("[SIT] Застревание, принудительная телепортация")
+                print("[SIT] Застревание, принудительная телепортация к сиденью")
                 bv:Destroy()
                 hrp.CFrame = targetCF
                 humanoid.Sit = true
@@ -221,7 +227,7 @@ local function startBoatMovement()
     moveToNext()
 end
 
--- ========== 8. МОНИТОР ПОСАДКИ И ВОЗВРАТА ==========
+-- ========== 8. МОНИТОР ПОСАДКИ И ВОЗВРАТА (С ОБРАБОТКОЙ ПОТЕРИ ЛОДКИ) ==========
 task.spawn(function()
     while not stopScript do
         task.wait(0.2)
@@ -253,18 +259,21 @@ task.spawn(function()
                 stopBoat()
             end
         end
+        -- Если лодка исчезла (myBoat есть, но Parent = nil), сбрасываем
         if myBoat and (not myBoat.Parent or not seat or not rootPart) then
+            print("[MON] Лодка потеряна, сброс ссылок")
             myBoat = nil; seat = nil; rootPart = nil
             needToSit = true
             stopBoat()
         end
+        -- Если нужно сесть, вызываем посадку (она сама купит лодку при необходимости)
         if needToSit then
             forceSit()
         end
     end
 end)
 
--- ========== 9. ГЛАВНЫЙ ЦИКЛ (ПЕРВИЧНАЯ ПОКУПКА) ==========
+-- ========== 9. ГЛАВНЫЙ ЦИКЛ (ПЕРВИЧНЫЙ ЗАПУСК) ==========
 task.spawn(function()
     selectMarines()
     task.wait(2)
@@ -283,4 +292,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт запущен. Лодка движется на высоте Y=26.8. При потере лодки происходит перепокупка.")
+print("Скрипт запущен. Гарантированная посадка, движение Tween, автоматическая перепокупка лодки при потере.")
