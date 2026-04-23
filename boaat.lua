@@ -1,4 +1,4 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ (ГАРАНТИРОВАННАЯ ПОСАДКА + TWEEN ДВИЖЕНИЕ + ПЕРЕПОКУПКА ПРИ ПОТЕРЕ ЛОДКИ) =====
+-- ===== ОПТИМИЗИРОВАННАЯ ВЕРСИЯ (СОХРАНЯЕТ СТАБИЛЬНОСТЬ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local tweenService = game:GetService("TweenService")
@@ -10,7 +10,10 @@ local BOAT_POINT_B = Vector3.new(-47968.4, 22.8, 6048.2)
 local WALK_SPEED = 150
 local BOAT_SPEED = 420
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
-local COLLISION_INTERVAL = 0.2
+local COLLISION_INTERVAL = 0.3          -- увеличено с 0.2
+local SIT_CHECK_INTERVAL = 0.3          -- новый параметр для монитора
+local STUCK_THRESHOLD = 30              -- количество итераций застревания
+local BOAT_SEARCH_TIMEOUT = 10
 
 local myBoat = nil
 local seat = nil
@@ -19,8 +22,9 @@ local currentTween = nil
 local isSitting = false
 local needToSit = true
 local stopScript = false
+local boatsFolder = workspace:FindFirstChild("Boats")  -- кэш папки
 
--- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
+-- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ (ОПТИМИЗИРОВАННО) ==========
 task.spawn(function()
     while not stopScript do
         local char = player.Character
@@ -76,11 +80,13 @@ local function moveToPoint(target, speed)
     if humanoid then humanoid.PlatformStand = false end
 end
 
--- ========== 4. ПОИСК ЛОДКИ ПО OWNER ==========
+-- ========== 4. ПОИСК ЛОДКИ ПО OWNER (С КЭШЕМ ПАПКИ) ==========
 local function findMyBoat()
-    local boats = workspace:FindFirstChild("Boats")
-    if not boats then return nil end
-    for _, boat in ipairs(boats:GetChildren()) do
+    if not boatsFolder then
+        boatsFolder = workspace:FindFirstChild("Boats") or workspace:FindFirstChild("Boats") -- повторная попытка при создании
+        if not boatsFolder then return nil end
+    end
+    for _, boat in ipairs(boatsFolder:GetChildren()) do
         if boat:IsA("Model") and boat:FindFirstChildWhichIsA("VehicleSeat") then
             local owner = boat:GetAttribute("Owner")
             if owner == playerName then return boat end
@@ -101,25 +107,20 @@ local function buyBoat()
     end
 end
 
--- ========== 6. ГАРАНТИРОВАННАЯ ПОСАДКА + ПЕРЕПОКУПКА ПРИ ПОТЕРЕ ==========
+-- ========== 6. ГАРАНТИРОВАННАЯ ПОСАДКА (ОПТИМИЗИРОВАННЫЙ ЦИКЛ) ==========
 local function forceSit()
-    print("[SIT] Начинаем посадку...")
-    -- Если нет myBoat или лодка исчезла, ищем или покупаем
     if not myBoat or not myBoat.Parent then
-        print("[SIT] Лодка отсутствует, пытаемся купить...")
         myBoat = findMyBoat()
         if not myBoat then
             moveToPoint(PURCHASE_POINT, WALK_SPEED)
             buyBoat()
-            print("[SIT] Ожидание появления лодки...")
             task.wait(3)
-            for i = 1, 10 do
+            for i = 1, BOAT_SEARCH_TIMEOUT do
                 myBoat = findMyBoat()
                 if myBoat then break end
                 task.wait(1)
             end
             if not myBoat then
-                print("[SIT] Не удалось получить лодку, повтор через 5 сек")
                 task.wait(5)
                 return
             end
@@ -127,17 +128,14 @@ local function forceSit()
         seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
         rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
         if not seat or not rootPart then
-            print("[SIT] Ошибка: нет сиденья или основной части")
             myBoat = nil
             return
         end
-        -- Отключаем коллизии лодки и её скрипт
         for _, part in ipairs(myBoat:GetDescendants()) do
             if part:IsA("BasePart") then part.CanCollide = false end
         end
         local native = myBoat:FindFirstChild("Script")
         if native then native.Disabled = true end
-        print("[SIT] Лодка получена: " .. myBoat.Name)
     end
 
     local char = player.Character
@@ -145,12 +143,8 @@ local function forceSit()
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local humanoid = char:FindFirstChild("Humanoid")
     if not hrp or not humanoid then return end
-    if humanoid.Sit and humanoid.SeatPart == seat then
-        print("[SIT] Уже сидим")
-        return
-    end
+    if humanoid.Sit and humanoid.SeatPart == seat then return end
 
-    -- Удаляем старый BodyVelocity, чтобы не мешал
     local old = hrp:FindFirstChildWhichIsA("BodyVelocity")
     if old then old:Destroy() end
 
@@ -167,7 +161,6 @@ local function forceSit()
             bv:Destroy()
             hrp.CFrame = targetCF
             humanoid.Sit = true
-            print("[SIT] Посадка успешна")
             break
         end
         local dir = (targetCF.Position - hrp.Position).Unit
@@ -175,8 +168,7 @@ local function forceSit()
 
         if math.abs(dist - lastDist) < 0.05 then
             stuck = stuck + 1
-            if stuck > 30 then
-                print("[SIT] Застревание, принудительная телепортация к сиденью")
+            if stuck > STUCK_THRESHOLD then
                 bv:Destroy()
                 hrp.CFrame = targetCF
                 humanoid.Sit = true
@@ -227,10 +219,10 @@ local function startBoatMovement()
     moveToNext()
 end
 
--- ========== 8. МОНИТОР ПОСАДКИ И ВОЗВРАТА (С ОБРАБОТКОЙ ПОТЕРИ ЛОДКИ) ==========
+-- ========== 8. МОНИТОР ПОСАДКИ И ВОЗВРАТА (ОПТИМИЗИРОВАННЫЙ ИНТЕРВАЛ) ==========
 task.spawn(function()
     while not stopScript do
-        task.wait(0.2)
+        task.wait(SIT_CHECK_INTERVAL)
         local char = player.Character
         if not char then
             if isSitting then
@@ -259,14 +251,11 @@ task.spawn(function()
                 stopBoat()
             end
         end
-        -- Если лодка исчезла (myBoat есть, но Parent = nil), сбрасываем
         if myBoat and (not myBoat.Parent or not seat or not rootPart) then
-            print("[MON] Лодка потеряна, сброс ссылок")
             myBoat = nil; seat = nil; rootPart = nil
             needToSit = true
             stopBoat()
         end
-        -- Если нужно сесть, вызываем посадку (она сама купит лодку при необходимости)
         if needToSit then
             forceSit()
         end
@@ -292,4 +281,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт запущен. Гарантированная посадка, движение Tween, автоматическая перепокупка лодки при потере.")
+print("Оптимизированная версия запущена. Стабильность сохранена.")
