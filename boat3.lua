@@ -1,13 +1,13 @@
--- ===== ДВИЖЕНИЕ ЛОДКИ НА ПОВЫШЕННОЙ ВЫСОТЕ (БЕЗ ОТКЛЮЧЕНИЯ КОЛЛИЗИЙ) =====
+-- ===== ДВИЖЕНИЕ ЛОДКИ С ПОДНЯТИЕМ ВЫШЕ (Y=50) =====
 local player = game.Players.LocalPlayer
 local tweenService = game:GetService("TweenService")
 
--- НАСТРОЙКИ (измените под свои координаты)
-local BOAT_POINT_A = Vector3.new(-77389.3, 26.8, 32606.2)   -- поднята с 22.8 на 26.8
-local BOAT_POINT_B = Vector3.new(-47968.4, 26.8, 6048.2)    -- поднята с 22.8 на 26.8
+-- НАСТРОЙКИ
+local BOAT_POINT_A = Vector3.new(-77389.3, 50, 32606.2)   -- поднята на 50
+local BOAT_POINT_B = Vector3.new(-47968.4, 50, 6048.2)    -- поднята на 50
 local BOAT_SPEED = 420
 
--- Ждём, пока персонаж сядет в лодку (упрощённо)
+-- Ждём, пока персонаж сядет в лодку
 local function waitForSeat()
     local char = player.Character
     if not char then return nil end
@@ -37,11 +37,27 @@ if not rootPart then
     return
 end
 
-print("Лодка найдена. Начинаем циклическое движение между точками с высотой Y = 26.8")
+-- Поднимаем лодку на нужную высоту сразу
+rootPart.CFrame = CFrame.new(rootPart.Position.X, 50, rootPart.Position.Z)
+
+print("Лодка находится на высоте Y=50, начинаем циклическое движение")
 
 local points = {BOAT_POINT_A, BOAT_POINT_B}
 local index = 1
 local currentTween = nil
+
+-- Функция для поддержания высоты (запускается в фоне)
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        if rootPart and rootPart.Parent then
+            local pos = rootPart.Position
+            if math.abs(pos.Y - 50) > 0.5 then
+                rootPart.CFrame = CFrame.new(pos.X, 50, pos.Z)
+            end
+        end
+    end
+end)
 
 local function moveToNext()
     local target = points[index]
