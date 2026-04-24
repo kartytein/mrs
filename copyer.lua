@@ -1,55 +1,89 @@
--- ===== ДИАГНОСТИКА ДВИЖЕНИЯ ЛОДКИ =====
--- Добавьте этот код в конец вашего основного скрипта (перед последним print).
--- Он будет каждые 0.5 секунды выводить состояние и фиксировать изменения.
-
+-- ===== ПЛАВНОЕ ПЕРЕМЕЩЕНИЕ К FOSSIL EXPERT НА ОСТРОВЕ =====
 local player = game.Players.LocalPlayer
-local lastState = {}
+local WALK_SPEED = 150
+local hasMoved = false
+
+local function findPrehistoricIsland()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then
+            return obj
+        end
+    end
+    return nil
+end
+
+local function getFossilTarget()
+    -- Сначала ищем NPC Fossil Expert
+    local npc = workspace:FindFirstChild("NPCs") and workspace.NPCs:FindFirstChild("Fossil Expert")
+    if npc and npc:IsA("Model") then
+        local primary = npc.PrimaryPart or npc:FindFirstChildWhichIsA("BasePart")
+        if primary then
+            return primary.Position + Vector3.new(0, 3, 0)
+        end
+    end
+    -- Если NPC не найден, ищем спавн
+    local map = workspace:FindFirstChild("Map")
+    if map then
+        local island = map:FindFirstChild("Prehistoricisland")
+        if island then
+            local core = island:FindFirstChild("Core")
+            if core then
+                local spawn = core:FindFirstChild("Fossil ExpertSpawn")
+                if spawn and spawn:IsA("Part") then
+                    return spawn.Position + Vector3.new(0, 2, 0)
+                end
+            end
+        end
+    end
+    -- Если ничего не нашли, возвращаем центр острова
+    local island = findPrehistoricIsland()
+    if island then
+        return island:GetPivot().Position + Vector3.new(0, 10, 0)
+    end
+    return nil
+end
+
+local function moveToPoint(target, speed)
+    local char = player.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local humanoid = char:FindFirstChild("Humanoid")
+    if humanoid then humanoid.PlatformStand = true end
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bv.Parent = hrp
+    while (hrp.Position - target).Magnitude > 2 do
+        local dir = (target - hrp.Position).Unit
+        bv.Velocity = dir * speed
+        task.wait()
+    end
+    bv:Destroy()
+    hrp.CFrame = CFrame.new(target)
+    if humanoid then humanoid.PlatformStand = false end
+end
+
+local function onIslandDetected()
+    if hasMoved then return end
+    local target = getFossilTarget()
+    if not target then
+        print("[MOVE] Не удалось найти цель (Fossil Expert)")
+        return
+    end
+    hasMoved = true
+    print("[MOVE] Перемещение к Fossil Expert, координаты: " .. tostring(target))
+    moveToPoint(target, WALK_SPEED)
+    print("[MOVE] Перемещение завершено")
+end
 
 task.spawn(function()
     while true do
-        task.wait(0.5)
-        local char = player.Character
-        if not char then
-            print("[DIAG] Персонаж отсутствует")
-            continue
+        local island = findPrehistoricIsland()
+        if island and not hasMoved then
+            onIslandDetected()
         end
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        local humanoid = char:FindFirstChild("Humanoid")
-        local bv = hrp and hrp:FindFirstChildWhichIsA("BodyVelocity")
-        local seatPart = humanoid and humanoid.SeatPart
-        
-        -- Получаем глобальные переменные из основного скрипта (если они доступны)
-        local myBoat = _G.__myBoat or (rawget(_G, "myBoat") or "nil")
-        local currentDirection = _G.__currentDirection or (rawget(_G, "currentDirection") or "nil")
-        
-        local state = {
-            sit = humanoid and humanoid.Sit or false,
-            seatPart = seatPart and seatPart:GetFullName() or "nil",
-            bvExists = bv ~= nil,
-            bvSpeed = bv and bv.Velocity or Vector3.new(0,0,0),
-            hrpPos = hrp and hrp.Position or nil,
-            boatExists = myBoat and myBoat.Parent ~= nil,
-            direction = currentDirection,
-        }
-        
-        -- Вывод изменений
-        for k, v in pairs(state) do
-            if lastState[k] ~= v then
-                print(string.format("[DIAG] %s: %s -> %s", k, tostring(lastState[k]), tostring(v)))
-            end
-        end
-        
-        -- Критические ситуации
-        if state.sit and not state.bvExists then
-            print("[DIAG] КРИТИЧЕСКАЯ ОШИБКА: сидим, но BodyVelocity отсутствует!")
-        end
-        if state.sit and state.bvExists and state.bvSpeed.X == 0 then
-            print("[DIAG] ВНИМАНИЕ: сидим, BodyVelocity есть, но скорость X = 0")
-        end
-        if state.sit and state.bvExists and state.bvSpeed.X ~= 0 and state.bvSpeed.X ~= (state.direction == -1 and -BOAT_SPEED or BOAT_SPEED) then
-            print(string.format("[DIAG] ВНИМАНИЕ: скорость BodyVelocity (%s) не соответствует направлению (%s)", state.bvSpeed.X, state.direction))
-        end
-        
-        lastState = state
+        task.wait(1)
     end
 end)
+
+print("Скрипт перемещения к Fossil Expert запущен. При появлении острова персонаж переместится к NPC.")
