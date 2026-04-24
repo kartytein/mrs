@@ -1,40 +1,15 @@
--- ===== ПЛАВНОЕ ПЕРЕМЕЩЕНИЕ К FOSSIL EXPERT (С ОЖИДАНИЕМ NPC) =====
+-- ===== ПЛАВНОЕ ПЕРЕМЕЩЕНИЕ К FOSSIL EXPERT (NPC УЖЕ СУЩЕСТВУЕТ) =====
 local player = game.Players.LocalPlayer
 local WALK_SPEED = 150
 local hasMoved = false
 
-local function findPrehistoricIsland()
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then
-            return obj
+local function getFossilPosition()
+    local npc = workspace:FindFirstChild("NPCs") and workspace.NPCs:FindFirstChild("Fossil Expert")
+    if npc and npc:IsA("Model") then
+        local primary = npc.PrimaryPart or npc:FindFirstChildWhichIsA("BasePart")
+        if primary then
+            return primary.Position + Vector3.new(0, 2, 0)
         end
-    end
-    return nil
-end
-
-local function waitForNpc()
-    -- Ждём появления модели Fossil Expert
-    for _ = 1, 30 do
-        local npc = workspace:FindFirstChild("NPCs") and workspace.NPCs:FindFirstChild("Fossil Expert")
-        if npc and npc:IsA("Model") then
-            local primary = npc.PrimaryPart or npc:FindFirstChildWhichIsA("BasePart")
-            if primary then
-                return primary.Position + Vector3.new(0, 2, 0)
-            end
-        end
-        task.wait(1)
-    end
-    -- Если NPC не появился, ищем спавн-часть
-    local island = findPrehistoricIsland()
-    if island then
-        local core = island:FindFirstChild("Core")
-        if core then
-            local spawn = core:FindFirstChild("Fossil ExpertSpawn")
-            if spawn and spawn:IsA("Part") then
-                return spawn.Position + Vector3.new(0, 2, 0)
-            end
-        end
-        return island:GetPivot().Position + Vector3.new(0, 10, 0)
     end
     return nil
 end
@@ -86,15 +61,13 @@ local function moveToPoint(targetPos)
 end
 
 task.spawn(function()
-    while true do
-        local island = findPrehistoricIsland()
-        if island and not hasMoved then
-            hasMoved = true
-            local target = waitForNpc()
-            if target then
-                moveToPoint(target)
-            end
-        end
-        task.wait(1)
+    local target = getFossilPosition()
+    if target then
+        moveToPoint(target)
+        print("[MOVE] Перемещение к NPC Fossil Expert выполнено")
+    else
+        print("[MOVE] NPC Fossil Expert не найден")
     end
 end)
+
+print("Скрипт перемещения к Fossil Expert запущен.")
