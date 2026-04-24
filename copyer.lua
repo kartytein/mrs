@@ -1,4 +1,4 @@
--- ===== ПЛАВНОЕ ПЕРЕМЕЩЕНИЕ К FOSSIL EXPERT С ФИКСАЦИЕЙ =====
+-- ===== ПЛАВНОЕ ПЕРЕМЕЩЕНИЕ К FOSSIL EXPERT (КАК ПОСАДКА В ЛОДКУ) =====
 local player = game.Players.LocalPlayer
 local WALK_SPEED = 150
 local hasMoved = false
@@ -40,48 +40,68 @@ local function getFossilTarget()
     return nil
 end
 
-local function moveToAndStay(target, speed)
+local function moveToIsland(targetPos)
     local char = player.Character
-    if not char then return end
+    if not char then return false end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local humanoid = char:FindFirstChild("Humanoid")
-    if not hrp or not humanoid then return end
-    -- Отключаем гравитацию и замораживаем анимации
+    if not hrp or not humanoid then return false end
+
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then part.CanCollide = false end
+    end
     humanoid.PlatformStand = true
+
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
-    while (hrp.Position - target).Magnitude > 2 do
-        local dir = (target - hrp.Position).Unit
-        bv.Velocity = dir * speed
-        task.wait()
+
+    local lastDist = math.huge
+    local stuck = 0
+    while true do
+        local dist = (hrp.Position - targetPos).Magnitude
+        if dist < 1.5 then
+            bv:Destroy()
+            hrp.CFrame = CFrame.new(targetPos)
+            break
+        end
+        local dir = (targetPos - hrp.Position).Unit
+        bv.Velocity = dir * WALK_SPEED
+
+        if math.abs(dist - lastDist) < 0.05 then
+            stuck = stuck + 1
+            if stuck > 30 then
+                bv:Destroy()
+                hrp.CFrame = CFrame.new(targetPos)
+                break
+            end
+        else
+            stuck = 0
+        end
+        lastDist = dist
+        task.wait(0.1)
     end
     bv:Destroy()
-    hrp.CFrame = CFrame.new(target)
-    -- Оставляем PlatformStand = true, чтобы персонаж не падал
-    print("[MOVE] Перемещение завершено, позиция зафиксирована")
-end
-
-local function onIslandDetected()
-    if hasMoved then return end
-    local target = getFossilTarget()
-    if not target then
-        print("[MOVE] Не удалось найти цель")
-        return
-    end
-    hasMoved = true
-    print("[MOVE] Перемещение к Fossil Expert, координаты: " .. tostring(target))
-    moveToAndStay(target, WALK_SPEED)
+    humanoid.PlatformStand = false
+    return true
 end
 
 task.spawn(function()
     while true do
         local island = findPrehistoricIsland()
         if island and not hasMoved then
-            onIslandDetected()
+            hasMoved = true
+            local target = getFossilTarget()
+            if target then
+                print("[MOVE] Перемещение к Fossil Expert, цель: " .. tostring(target))
+                moveToIsland(target)
+                print("[MOVE] Перемещение завершено")
+            else
+                print("[MOVE] Цель не найдена")
+            end
         end
         task.wait(1)
     end
 end)
 
-print("Скрипт запущен. При появлении острова персонаж переместится к Fossil Expert и зависнет в воздухе (PlatformStand).")
+print("Скрипт перемещения к Fossil Expert запущен (метод как при посадке в лодку).")
