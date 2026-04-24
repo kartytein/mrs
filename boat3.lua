@@ -1,13 +1,13 @@
--- ===== ДВИЖЕНИЕ ЛОДКИ С ПОДНЯТИЕМ ВЫШЕ (Y=50) =====
+-- ===== ДВИЖЕНИЕ ЛОДКИ НА ФИКСИРОВАННОЙ ВЫСОТЕ (Y = 50) =====
 local player = game.Players.LocalPlayer
 local tweenService = game:GetService("TweenService")
 
 -- НАСТРОЙКИ
-local BOAT_POINT_A = Vector3.new(-77389.3, 50, 32606.2)   -- поднята на 50
-local BOAT_POINT_B = Vector3.new(-47968.4, 50, 6048.2)    -- поднята на 50
+local BOAT_POINT_A = Vector3.new(-77389.3, 50, 32606.2)   -- Y = 50
+local BOAT_POINT_B = Vector3.new(-47968.4, 50, 6048.2)    -- Y = 50
 local BOAT_SPEED = 420
 
--- Ждём, пока персонаж сядет в лодку
+-- Ждём посадки
 local function waitForSeat()
     local char = player.Character
     if not char then return nil end
@@ -19,6 +19,7 @@ local function waitForSeat()
     return humanoid.SeatPart
 end
 
+print("Ожидание посадки в лодку...")
 local seat = waitForSeat()
 if not seat then
     warn("Не удалось обнаружить сиденье")
@@ -37,27 +38,29 @@ if not rootPart then
     return
 end
 
--- Поднимаем лодку на нужную высоту сразу
-rootPart.CFrame = CFrame.new(rootPart.Position.X, 50, rootPart.Position.Z)
+-- ПОДНЯТИЕ ЛОДКИ (ОДИН РАЗ) И БЛОКИРОВКА ВЫСОТЫ
+local function liftAndLockHeight()
+    local pos = rootPart.Position
+    rootPart.CFrame = CFrame.new(pos.X, 50, pos.Z)
+    print("Лодка поднята на высоту 50")
+    -- Фоновый поток для поддержания высоты (если игра сбивает)
+    task.spawn(function()
+        while boat and boat.Parent do
+            local p = rootPart.Position
+            if math.abs(p.Y - 50) > 0.5 then
+                rootPart.CFrame = CFrame.new(p.X, 50, p.Z)
+            end
+            task.wait(0.2)
+        end
+    end)
+end
 
-print("Лодка находится на высоте Y=50, начинаем циклическое движение")
+liftAndLockHeight()
 
+-- ЦИКЛИЧЕСКОЕ ДВИЖЕНИЕ МЕЖДУ ТОЧКАМИ
 local points = {BOAT_POINT_A, BOAT_POINT_B}
 local index = 1
 local currentTween = nil
-
--- Функция для поддержания высоты (запускается в фоне)
-task.spawn(function()
-    while true do
-        task.wait(0.1)
-        if rootPart and rootPart.Parent then
-            local pos = rootPart.Position
-            if math.abs(pos.Y - 50) > 0.5 then
-                rootPart.CFrame = CFrame.new(pos.X, 50, pos.Z)
-            end
-        end
-    end
-end)
 
 local function moveToNext()
     local target = points[index]
@@ -74,4 +77,5 @@ local function moveToNext()
     end
 end
 
+print("Начинаем движение на высоте 50")
 moveToNext()
