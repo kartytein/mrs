@@ -1,68 +1,69 @@
--- ===== НАДЁЖНОЕ ПЕРЕМЕЩЕНИЕ К NPC FOSSIL EXPERT (ПОСТОЯННОЕ ПЕРЕСОЗДАНИЕ BODYVELOCITY) =====
+-- ===== ПЕРЕМЕЩЕНИЕ К ОСТРОВУ PREHISTORICISLAND ЧЕРЕЗ TWEEN =====
 local player = game.Players.LocalPlayer
+local tweenService = game:GetService("TweenService")
 local WALK_SPEED = 150
+local hasMoved = false
 
--- Поиск NPC (расширенный)
-local function findNpc()
+local function findPrehistoricIsland()
     for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Model") and (obj.Name == "Fossil Expert" or obj.Name == "FossilExpert") then
-            local primary = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
-            if primary then
-                return primary.Position + Vector3.new(0, 2, 0)
-            end
+        if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then
+            return obj
         end
     end
     return nil
 end
 
-local target = findNpc()
-if not target then
-    warn("NPC не найден. Запустите скрипт позже или проверьте путь.")
-    return
+local function getIslandTargetPosition(island)
+    -- Пытаемся взять PrimaryPart
+    if island.PrimaryPart then
+        return island.PrimaryPart.Position + Vector3.new(0, 2, 0)
+    end
+    -- Иначе ищем любую BasePart
+    for _, part in ipairs(island:GetDescendants()) do
+        if part:IsA("BasePart") then
+            return part.Position + Vector3.new(0, 2, 0)
+        end
+    end
+    -- Если ничего нет, возвращаем центр модели
+    return island:GetPivot().Position + Vector3.new(0, 10, 0)
 end
 
-print("[MOVE] Цель: " .. tostring(target))
+local function moveToIsland(targetPos)
+    local char = player.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char:FindFirstChild("Humanoid")
+    if not hrp or not humanoid then return end
 
-local char = player.Character
-if not char then
-    warn("Персонаж не загружен")
-    return
+    -- Отключаем коллизии и замораживаем
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then part.CanCollide = false end
+    end
+    humanoid.PlatformStand = true
+
+    local distance = (hrp.Position - targetPos).Magnitude
+    local duration = distance / WALK_SPEED
+    if duration < 0.1 then duration = 0.1 end
+
+    local tween = tweenService:Create(hrp, TweenInfo.new(duration, Enum.EasingStyle.Linear), {Position = targetPos})
+    tween:Play()
+    tween.Completed:Wait()
+
+    humanoid.PlatformStand = false
+    print("[MOVE] Перемещение к острову завершено")
 end
 
-local hrp = char:FindFirstChild("HumanoidRootPart")
-local humanoid = char:FindFirstChild("Humanoid")
-if not hrp or not humanoid then
-    warn("Нет HumanoidRootPart или Humanoid")
-    return
-end
-
--- Отключаем коллизии и гравитацию (PlatformStand)
-for _, part in ipairs(char:GetDescendants()) do
-    if part:IsA("BasePart") then part.CanCollide = false end
-end
-humanoid.PlatformStand = true
-
--- Поток пересоздания BodyVelocity каждые 0.1 секунды
-local bv = nil
 task.spawn(function()
     while true do
-        if not hrp or not hrp.Parent then break end
-        if bv then bv:Destroy() end
-        bv = Instance.new("BodyVelocity")
-        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        bv.Parent = hrp
-        local dir = (target - hrp.Position).Unit
-        bv.Velocity = dir * WALK_SPEED
-        task.wait(0.1)
+        local island = findPrehistoricIsland()
+        if island and not hasMoved then
+            hasMoved = true
+            local target = getIslandTargetPosition(island)
+            print("[MOVE] Остров найден, перемещаемся к точке: " .. tostring(target))
+            moveToIsland(target)
+        end
+        task.wait(1)
     end
 end)
 
--- Основной цикл: ждём, пока расстояние не станет маленьким
-while (hrp.Position - target).Magnitude > 3 do
-    task.wait(0.1)
-end
-
--- Очистка
-if bv then bv:Destroy() end
-humanoid.PlatformStand = false
-print("[MOVE] Прибыли к NPC")
+print("Скрипт запущен. При появлении острова персонаж переместится к нему (Tween).")
