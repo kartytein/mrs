@@ -1,61 +1,29 @@
--- ===== ПЕРЕМЕЩЕНИЕ К ОСТРОВУ (НА ОСНОВЕ ВАШЕГО РАБОЧЕГО МЕТОДА) =====
 local player = game.Players.LocalPlayer
 local char = player.Character or player.CharacterAdded:Wait()
 local hrp = char:WaitForChild("HumanoidRootPart")
 local humanoid = char:WaitForChild("Humanoid")
 
--- Поиск острова
-local function findIsland()
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then
-            return obj
-        end
-    end
-    return nil
+local targetX = hrp.Position.X + 200
+local startY = hrp.Position.Y  -- запоминаем начальную высоту
+local speed = 150
+local step = 0.05
+
+-- Отключаем коллизии и замораживаем
+for _, part in ipairs(char:GetDescendants()) do
+    if part:IsA("BasePart") then part.CanCollide = false end
+end
+humanoid.PlatformStand = true
+
+while true do
+    local currentX = hrp.Position.X
+    if math.abs(currentX - targetX) < 0.5 then break end
+    local direction = (targetX - currentX) > 0 and 1 or -1
+    local move = math.min(speed * step, math.abs(targetX - currentX))
+    local newX = currentX + direction * move
+    hrp.CFrame = CFrame.new(newX, startY, hrp.Position.Z)  -- фиксируем Y
+    task.wait(step)
 end
 
-local island = findIsland()
-if not island then
-    warn("Остров не найден")
-    return
-end
-
--- Целевая точка: центр острова + смещение по Y (можно подобрать)
-local islandPos = island:GetPivot().Position
-local targetPos = islandPos + Vector3.new(0, 50, 0)  -- высоко, чтобы пролететь над препятствиями
-print("Цель: " .. tostring(targetPos))
-
-local speed = 150        -- скорость
-local step = 0.05        -- интервал
-local function moveSmooth()
-    while true do
-        local current = hrp.Position
-        local direction = (targetPos - current).Unit
-        local distance = (targetPos - current).Magnitude
-        if distance < 3 then break end
-        local move = math.min(speed * step, distance)
-        local newPos = current + direction * move
-        
-        -- Отключаем коллизии
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = false
-            end
-        end
-        
-        hrp.CFrame = CFrame.new(newPos)
-        
-        -- Включаем коллизии
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = true
-            end
-        end
-        
-        task.wait(step)
-    end
-    hrp.CFrame = CFrame.new(targetPos)
-    print("Перемещение завершено, позиция:", hrp.Position)
-end
-
-moveSmooth()
+hrp.CFrame = CFrame.new(targetX, startY, hrp.Position.Z)
+humanoid.PlatformStand = false
+print("Перемещение по X завершено")
