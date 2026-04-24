@@ -1,25 +1,12 @@
--- ===== ПЕРЕМЕЩЕНИЕ К ОСТРОВУ PREHISTORICISLAND С ПОСТОЯННЫМ ОТКЛЮЧЕНИЕМ COLLIDE =====
+-- ===== УЛЬТРА-ЧАСТОЕ ПЕРЕСОЗДАНИЕ BODYVELOCITY + BODYPOSITION (ПОПЫТКА ОБОЙТИ УДАЛЕНИЕ) =====
 local player = game.Players.LocalPlayer
 local char = player.Character or player.CharacterAdded:Wait()
 local hrp = char:WaitForChild("HumanoidRootPart")
 local humanoid = char:WaitForChild("Humanoid")
-local speed = 300
-local step = 0.1
+local WALK_SPEED = 300
+local TARGET_HEIGHT = 100  -- фиксированная высота
 
--- ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ (как в фул скрипте)
-task.spawn(function()
-    while true do
-        if char and char.Parent then
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") then
-                    part.CanCollide = false
-                end
-            end
-        end
-        task.wait(0.2)
-    end
-end)
-
+-- Поиск острова
 local function findIsland()
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then
@@ -35,31 +22,54 @@ if not island then
     return
 end
 
-local targetPos = island:GetPivot().Position + Vector3.new(0, 100, 0)  -- поднимаем на 100
+local targetPos = island:GetPivot().Position + Vector3.new(0, TARGET_HEIGHT, 0)
 print("Цель: " .. tostring(targetPos))
 
--- Замораживаем анимации и отключаем гравитацию
+-- Отключаем коллизии навсегда (фоновый поток)
+task.spawn(function()
+    while true do
+        if char and char.Parent then
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then part.CanCollide = false end
+            end
+        end
+        task.wait(0.2)
+    end
+end)
+
+-- Замораживаем гуманоид
 humanoid.PlatformStand = true
 
--- Фиксация высоты через BodyPosition (чтобы не падать)
+-- Создаём BodyPosition для фиксации высоты на TARGET_HEIGHT
 local bodyPos = Instance.new("BodyPosition")
 bodyPos.MaxForce = Vector3.new(0, math.huge, 0)
-bodyPos.Position = Vector3.new(hrp.Position.X, targetPos.Y, hrp.Position.Z)
+bodyPos.Position = Vector3.new(hrp.Position.X, TARGET_HEIGHT, hrp.Position.Z)
 bodyPos.Parent = hrp
 
--- Основной цикл перемещения
+-- Основной поток: каждые 0.02 секунды пересоздаём BodyVelocity к цели
+local bv = nil
+task.spawn(function()
+    while true do
+        if bv then bv:Destroy() end
+        bv = Instance.new("BodyVelocity")
+        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        bv.Parent = hrp
+        local dir = (targetPos - hrp.Position).Unit
+        bv.Velocity = dir * WALK_SPEED
+        task.wait(0.02)
+    end
+end)
+
+-- Мониторинг расстояния и остановка
 while true do
-    local current = hrp.Position
-    local distance = (targetPos - current).Magnitude
-    if distance < 3 then break end
-    local direction = (targetPos - current).Unit
-    local move = math.min(speed * step, distance)
-    local newPos = current + direction * move
-    hrp.CFrame = CFrame.new(newPos)
-    task.wait(step)
+    task.wait(0.2)
+    local dist = (hrp.Position - targetPos).Magnitude
+    print(string.format("Расстояние до цели: %.1f", dist))
+    if dist < 5 then break end
 end
 
 -- Очистка
+if bv then bv:Destroy() end
 bodyPos:Destroy()
 humanoid.PlatformStand = false
 hrp.CFrame = CFrame.new(targetPos)
