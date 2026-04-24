@@ -1,29 +1,55 @@
+-- ===== УСКОРЕННОЕ ПОШАГОВОЕ ПЕРЕМЕЩЕНИЕ К ОСТРОВУ С ФИКСАЦИЕЙ Y =====
 local player = game.Players.LocalPlayer
 local char = player.Character or player.CharacterAdded:Wait()
 local hrp = char:WaitForChild("HumanoidRootPart")
 local humanoid = char:WaitForChild("Humanoid")
+local speed = 300          -- выше скорость
+local step = 0.1           -- реже обновление
 
-local targetX = hrp.Position.X + 200
-local startY = hrp.Position.Y  -- запоминаем начальную высоту
-local speed = 150
-local step = 0.05
+local function findIsland()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then
+            return obj
+        end
+    end
+    return nil
+end
 
--- Отключаем коллизии и замораживаем
+local island = findIsland()
+if not island then
+    warn("Остров не найден")
+    return
+end
+
+local targetPos = island:GetPivot().Position + Vector3.new(0, 50, 0)
+print("Цель: " .. tostring(targetPos))
+
+-- Отключаем коллизии
 for _, part in ipairs(char:GetDescendants()) do
     if part:IsA("BasePart") then part.CanCollide = false end
 end
-humanoid.PlatformStand = true
+humanoid.PlatformStand = true  -- замораживаем, чтобы не падал
 
+-- Дополнительно фиксируем Y через BodyPosition (если нужно)
+local bodyPos = Instance.new("BodyPosition")
+bodyPos.MaxForce = Vector3.new(0, math.huge, 0)
+bodyPos.Position = Vector3.new(hrp.Position.X, targetPos.Y, hrp.Position.Z)
+bodyPos.Parent = hrp
+
+-- Движение (только по X и Z, Y фиксируется BodyPosition)
 while true do
-    local currentX = hrp.Position.X
-    if math.abs(currentX - targetX) < 0.5 then break end
-    local direction = (targetX - currentX) > 0 and 1 or -1
-    local move = math.min(speed * step, math.abs(targetX - currentX))
-    local newX = currentX + direction * move
-    hrp.CFrame = CFrame.new(newX, startY, hrp.Position.Z)  -- фиксируем Y
+    local current = hrp.Position
+    local dist = (targetPos - current).Magnitude
+    if dist < 3 then break end
+    local dir = (targetPos - current).Unit
+    local move = math.min(speed * step, dist)
+    local newPos = current + dir * move
+    hrp.CFrame = CFrame.new(newPos)
     task.wait(step)
 end
 
-hrp.CFrame = CFrame.new(targetX, startY, hrp.Position.Z)
+-- Очистка
+bodyPos:Destroy()
 humanoid.PlatformStand = false
-print("Перемещение по X завершено")
+hrp.CFrame = CFrame.new(targetPos)
+print("Прибыли на остров")
