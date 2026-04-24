@@ -1,4 +1,4 @@
--- ===== ПЕРЕМЕЩЕНИЕ К ОСТРОВУ С ЧАСТЫМ ПЕРЕСОЗДАНИЕМ BODYVELOCITY (БЕЗ CFrame) =====
+-- ===== ПЛАВНОЕ ПЕРЕМЕЩЕНИЕ К ОСТРОВУ PREHISTORICISLAND (ПОСТОЯННОЕ ПЕРЕСОЗДАНИЕ BODYVELOCITY) =====
 local player = game.Players.LocalPlayer
 local char = player.Character or player.CharacterAdded:Wait()
 local hrp = char:WaitForChild("HumanoidRootPart")
@@ -20,10 +20,11 @@ if not island then
     return
 end
 
-local targetPos = island:GetPivot().Position + Vector3.new(0, 50, 0)
+-- Целевая точка (центр острова + смещение по Y, чтобы не зарываться в землю)
+local targetPos = island:GetPivot().Position + Vector3.new(0, 30, 0)
 local speed = 300
 
--- Постоянное отключение коллизий
+-- ===== ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ (как в фул скрипте) =====
 task.spawn(function()
     while true do
         if char and char.Parent then
@@ -37,9 +38,10 @@ task.spawn(function()
     end
 end)
 
+-- Замораживаем гуманоид, чтобы не падал и не двигался сам
 humanoid.PlatformStand = true
 
--- Поток пересоздания BodyVelocity
+-- ===== ПОТОК ПЕРЕСОЗДАНИЯ BODYVELOCITY (каждые 0.05 секунды) =====
 local bv = nil
 local moving = true
 task.spawn(function()
@@ -54,12 +56,12 @@ task.spawn(function()
     end
 end)
 
--- Ждём достижения цели
-while (hrp.Position - targetPos).Magnitude > 5 do
+-- Ждём, пока персонаж приблизится к цели (без CFrame)
+while (hrp.Position - targetPos).Magnitude > 3 do
     task.wait(0.1)
 end
 
--- Остановка
+-- Останавливаем движение и снимаем заморозку
 moving = false
 if bv then bv:Destroy() end
 humanoid.PlatformStand = false
