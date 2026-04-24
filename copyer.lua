@@ -1,14 +1,28 @@
--- ===== ПЛАВНОЕ ПЕРЕМЕЩЕНИЕ К FOSSIL EXPERT (NPC УЖЕ СУЩЕСТВУЕТ) =====
+-- ===== ПЛАВНОЕ ПЕРЕМЕЩЕНИЕ К NPC FOSSIL EXPERT (С ПОИСКОМ ПО РАЗНЫМ ИМЕНАМ) =====
 local player = game.Players.LocalPlayer
 local WALK_SPEED = 150
 local hasMoved = false
 
 local function getFossilPosition()
-    local npc = workspace:FindFirstChild("NPCs") and workspace.NPCs:FindFirstChild("Fossil Expert")
-    if npc and npc:IsA("Model") then
-        local primary = npc.PrimaryPart or npc:FindFirstChildWhichIsA("BasePart")
-        if primary then
-            return primary.Position + Vector3.new(0, 2, 0)
+    -- Ищем в папке NPCs
+    local npcs = workspace:FindFirstChild("NPCs")
+    if npcs then
+        -- Пробуем оба варианта имени
+        local npc = npcs:FindFirstChild("Fossil Expert") or npcs:FindFirstChild("FossilExpert")
+        if npc and npc:IsA("Model") then
+            local primary = npc.PrimaryPart or npc:FindFirstChildWhichIsA("BasePart")
+            if primary then
+                return primary.Position + Vector3.new(0, 2, 0)
+            end
+        end
+    end
+    -- Если не нашли, ищем по всему workspace
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and (obj.Name == "Fossil Expert" or obj.Name == "FossilExpert") then
+            local primary = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+            if primary then
+                return primary.Position + Vector3.new(0, 2, 0)
+            end
         end
     end
     return nil
@@ -21,6 +35,7 @@ local function moveToPoint(targetPos)
     local humanoid = char:FindFirstChild("Humanoid")
     if not hrp or not humanoid then return false end
 
+    -- Отключаем коллизии
     for _, part in ipairs(char:GetDescendants()) do
         if part:IsA("BasePart") then part.CanCollide = false end
     end
@@ -60,14 +75,12 @@ local function moveToPoint(targetPos)
     return true
 end
 
-task.spawn(function()
-    local target = getFossilPosition()
-    if target then
-        moveToPoint(target)
-        print("[MOVE] Перемещение к NPC Fossil Expert выполнено")
-    else
-        print("[MOVE] NPC Fossil Expert не найден")
-    end
-end)
-
-print("Скрипт перемещения к Fossil Expert запущен.")
+-- Запуск (выполнится один раз)
+local target = getFossilPosition()
+if target then
+    print("[MOVE] NPC Fossil Expert найден, координаты: " .. tostring(target))
+    moveToPoint(target)
+    print("[MOVE] Перемещение выполнено")
+else
+    warn("[MOVE] NPC Fossil Expert не найден. Проверьте путь: workspace.NPCs.FossilExpert")
+end
