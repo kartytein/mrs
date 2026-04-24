@@ -1,7 +1,6 @@
--- ===== ОПТИМИЗИРОВАННЫЙ СКРИПТ С ПОДДЕРЖКОЙ ОСТРОВА PREHISTORICISLAND =====
--- При появлении острова скрипт останавливает посадку и движение лодки,
--- ждёт либо 10 минут, либо появления и исчезновения DragonEgg,
--- после чего возобновляет работу.
+-- ===== ФИНАЛЬНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ С ПОДДЕРЖКОЙ ОСТРОВА =====
+-- При появлении Prehistoricisland персонаж выходит из лодки, скрипт перестаёт управлять лодкой.
+-- Возврат к нормальной работе происходит через 10 минут или после исчезновения DragonEgg.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -18,7 +17,7 @@ local COLLISION_INTERVAL = 0.3
 local SIT_CHECK_INTERVAL = 0.3
 local STUCK_THRESHOLD = 30
 local BOAT_SEARCH_TIMEOUT = 10
-local ISLAND_TIMEOUT = 600  -- 10 минут в секундах
+local ISLAND_TIMEOUT = 600  -- 10 минут
 
 local myBoat = nil
 local seat = nil
@@ -28,9 +27,7 @@ local isSitting = false
 local needToSit = true
 local stopScript = false
 local boatsFolder = workspace:FindFirstChild("Boats")
-local islandActive = false          -- режим острова
-local islandWaitFinished = false    -- флаг, что ожидание завершилось
-local islandMonitorThread = nil
+local islandActive = false
 
 -- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
 task.spawn(function()
@@ -117,7 +114,10 @@ end
 
 -- ========== 6. ГАРАНТИРОВАННАЯ ПОСАДКА ==========
 local function forceSit()
-    if islandActive then return end  -- не садимся в режиме острова
+    if islandActive then
+        print("[SIT] Режим острова активен, посадка отключена")
+        return
+    end
     if not myBoat or not myBoat.Parent then
         myBoat = findMyBoat()
         if not myBoat then
@@ -201,7 +201,9 @@ local function stopBoat()
 end
 
 local function startBoatMovement()
-    if islandActive then return end
+    if islandActive then
+        return
+    end
     if not isSitting or not myBoat or not rootPart then return end
     stopBoat()
     local points = {BOAT_POINT_A, BOAT_POINT_B}
@@ -229,71 +231,79 @@ local function startBoatMovement()
     moveToNext()
 end
 
--- ========== 8. ОСТАНОВКА ЛОДКИ И ВЫХОД ИЗ НЕЁ ПРИ АКТИВАЦИИ ОСТРОВА ==========
-local function onIslandActivated()
-    if islandActive then return end
-    print("[ISLAND] Остров обнаружен, остановка лодки и посадки")
-    islandActive = true
-    stopBoat()
-    -- Если сидим, выходим из лодки
+-- ========== 8. ФУНКЦИИ ДЛЯ УПРАВЛЕНИЯ РЕЖИМОМ ОСТРОВА ==========
+local function exitBoat()
     local char = player.Character
     if char then
         local humanoid = char:FindFirstChild("Humanoid")
         if humanoid and humanoid.Sit then
             humanoid.Sit = false
+            print("[ISLAND] Персонаж вышел из лодки")
             task.wait(0.5)
         end
     end
-    needToSit = false  -- временно отключаем попытки сесть
+end
+
+local function onIslandActivated()
+    if islandActive then return end
+    print("[ISLAND] Остров Prehistoricisland обнаружен, режим острова включён")
+    islandActive = true
+    stopBoat()
+    exitBoat()
+    needToSit = false
 end
 
 local function onIslandDeactivated()
     if not islandActive then return end
-    print("[ISLAND] Островной режим завершён, возобновление работы")
+    print("[ISLAND] Режим острова завершён, возобновление работы")
     islandActive = false
+    -- Сбрасываем ссылки на лодку (она могла быть уничтожена)
+    myBoat = nil
+    seat = nil
+    rootPart = nil
     needToSit = true
-    -- Принудительно проверяем посадку
-    forceSit()
+    forceSit()  -- сразу начинаем посадку
 end
 
--- ========== 9. МОНИТОРИНГ ОСТРОВА И ЯЙЦА ==========
+-- ========== 9. МОНИТОР ОСТРОВА И ЯЙЦА ==========
 task.spawn(function()
     while not stopScript do
-        -- Проверяем наличие острова
         local island = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Prehistoricisland")
         if island and not islandActive then
             onIslandActivated()
 
-            -- Запускаем таймер на 10 минут и ожидание появления/исчезновения DragonEgg
             local startTime = os.clock()
-            local eggAppeared = false
-            local egg = nil
-            local waitForEgg = true
+            local eggSeen = false
+            local function eggExists()
+                local core = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Prehistoricisland") and workspace.Map.Prehistoricisland:FindFirstChild("Core")
+                if core then
+                    local eggs = core:FindFirstChild("SpawnedDragonEggs")
+                    if eggs then
+                        return eggs:FindFirstChild("DragonEgg") ~= nil
+                    end
+                end
+                return false
+            end
 
             while islandActive do
-                task.wait(0.5)
-                -- Проверка таймера
+                task.wait(0.2)
                 if os.clock() - startTime >= ISLAND_TIMEOUT then
-                    print("[ISLAND] Таймер 10 минут истёк, выходим из режима острова")
+                    print("[ISLAND] Таймер 10 минут истёк")
                     break
                 end
-                -- Поиск DragonEgg
-                local eggPath = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Prehistoricisland") and
-                                workspace.Map.Prehistoricisland:FindFirstChild("Core") and
-                                workspace.Map.Prehistoricisland.Core:FindFirstChild("SpawnedDragonEggs") and
-                                workspace.Map.Prehistoricisland.Core.SpawnedDragonEggs:FindFirstChild("DragonEgg")
-                if eggPath and not eggAppeared then
-                    eggAppeared = true
+                local hasEgg = eggExists()
+                if hasEgg and not eggSeen then
+                    eggSeen = true
                     print("[ISLAND] DragonEgg появился, ожидаем исчезновения")
                 end
-                if eggAppeared and not eggPath then
-                    print("[ISLAND] DragonEgg исчез, выходим из режима острова")
+                if eggSeen and not hasEgg then
+                    print("[ISLAND] DragonEgg исчез")
                     break
                 end
             end
             onIslandDeactivated()
         end
-        task.wait(2)  -- проверяем остров каждые 2 секунды
+        task.wait(0.5)
     end
 end)
 
@@ -302,7 +312,7 @@ task.spawn(function()
     while not stopScript do
         task.wait(SIT_CHECK_INTERVAL)
         if islandActive then
-            -- В режиме острова не выполняем никаких действий с лодкой
+            -- В режиме острова не делаем ничего с лодкой
             continue
         end
         local char = player.Character
@@ -344,7 +354,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 11. ГЛАВНЫЙ ЦИКЛ ==========
+-- ========== 11. ГЛАВНЫЙ ЦИКЛ (ПЕРВИЧНЫЙ ЗАПУСК) ==========
 task.spawn(function()
     selectMarines()
     task.wait(2)
@@ -367,4 +377,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт запущен. Поддержка острова Prehistoricisland активна: при появлении острова посадка и движение останавливаются, возобновление через 10 минут или после исчезновения DragonEgg.")
+print("Скрипт запущен. При появлении Prehistoricisland персонаж выйдет из лодки и не будет возвращаться до окончания островного режима.")
