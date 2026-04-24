@@ -1,10 +1,10 @@
--- ===== ДВИЖЕНИЕ ЛОДКИ НА ФИКСИРОВАННОЙ ВЫСОТЕ (Y = 50) =====
+-- ===== ДВИЖЕНИЕ ЛОДКИ НА ФИКСИРОВАННОЙ ВЫСОТЕ (Y = 50) БЕЗ КОЛЛИЗИЙ =====
 local player = game.Players.LocalPlayer
 local tweenService = game:GetService("TweenService")
 
 -- НАСТРОЙКИ
-local BOAT_POINT_A = Vector3.new(-77389.3, 50, 32606.2)   -- Y = 50
-local BOAT_POINT_B = Vector3.new(-47968.4, 50, 6048.2)    -- Y = 50
+local BOAT_POINT_A = Vector3.new(-77389.3, 50, 32606.2)
+local BOAT_POINT_B = Vector3.new(-47968.4, 50, 6048.2)
 local BOAT_SPEED = 420
 
 -- Ждём посадки
@@ -38,36 +38,35 @@ if not rootPart then
     return
 end
 
--- ПОДНЯТИЕ ЛОДКИ (ОДИН РАЗ) И БЛОКИРОВКА ВЫСОТЫ
-local function liftAndLockHeight()
-    local pos = rootPart.Position
-    rootPart.CFrame = CFrame.new(pos.X, 50, pos.Z)
-    print("Лодка поднята на высоту 50")
-    -- Фоновый поток для поддержания высоты (если игра сбивает)
-    task.spawn(function()
-        while boat and boat.Parent do
-            local p = rootPart.Position
-            if math.abs(p.Y - 50) > 0.5 then
-                rootPart.CFrame = CFrame.new(p.X, 50, p.Z)
-            end
-            task.wait(0.2)
-        end
-    end)
-end
+-- Отключаем гравитацию и поднимаем лодку один раз
+local bodyGyro = Instance.new("BodyGyro")
+bodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+bodyGyro.CFrame = rootPart.CFrame
+bodyGyro.Parent = rootPart
 
-liftAndLockHeight()
+local bodyPosition = Instance.new("BodyPosition")
+bodyPosition.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+bodyPosition.Parent = rootPart
+bodyPosition.Position = Vector3.new(rootPart.Position.X, 50, rootPart.Position.Z)
 
--- ЦИКЛИЧЕСКОЕ ДВИЖЕНИЕ МЕЖДУ ТОЧКАМИ
+-- Поднимаем
+rootPart.CFrame = CFrame.new(rootPart.Position.X, 50, rootPart.Position.Z)
+print("Лодка поднята на высоту 50 и удерживается")
+
+-- Циклическое движение через Tween (не затрагивает Y, так как Y фиксирован BodyPosition)
 local points = {BOAT_POINT_A, BOAT_POINT_B}
 local index = 1
 local currentTween = nil
 
 local function moveToNext()
     local target = points[index]
-    local dist = (rootPart.Position - target).Magnitude
+    -- Сохраняем текущую Y (она должна быть 50), но Tween будет менять X и Z
+    local currentPos = rootPart.Position
+    local targetCF = CFrame.new(target.X, currentPos.Y, target.Z)
+    local dist = (rootPart.Position - targetCF.Position).Magnitude
     local duration = dist / BOAT_SPEED
     if duration > 0 then
-        currentTween = tweenService:Create(rootPart, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = CFrame.new(target)})
+        currentTween = tweenService:Create(rootPart, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = targetCF})
         currentTween:Play()
         currentTween.Completed:Connect(function()
             currentTween = nil
@@ -77,5 +76,4 @@ local function moveToNext()
     end
 end
 
-print("Начинаем движение на высоте 50")
 moveToNext()
