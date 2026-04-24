@@ -1,4 +1,4 @@
--- ===== ПЛАВНОЕ ПЕРЕМЕЩЕНИЕ К FOSSIL EXPERT (КАК ПОСАДКА В ЛОДКУ) =====
+-- ===== ПЛАВНОЕ ПЕРЕМЕЩЕНИЕ К FOSSIL EXPERT (С ОЖИДАНИЕМ NPC) =====
 local player = game.Players.LocalPlayer
 local WALK_SPEED = 150
 local hasMoved = false
@@ -12,35 +12,34 @@ local function findPrehistoricIsland()
     return nil
 end
 
-local function getFossilTarget()
-    local npc = workspace:FindFirstChild("NPCs") and workspace.NPCs:FindFirstChild("Fossil Expert")
-    if npc and npc:IsA("Model") then
-        local primary = npc.PrimaryPart or npc:FindFirstChildWhichIsA("BasePart")
-        if primary then
-            return primary.Position + Vector3.new(0, 3, 0)
-        end
-    end
-    local map = workspace:FindFirstChild("Map")
-    if map then
-        local island = map:FindFirstChild("Prehistoricisland")
-        if island then
-            local core = island:FindFirstChild("Core")
-            if core then
-                local spawn = core:FindFirstChild("Fossil ExpertSpawn")
-                if spawn and spawn:IsA("Part") then
-                    return spawn.Position + Vector3.new(0, 2, 0)
-                end
+local function waitForNpc()
+    -- Ждём появления модели Fossil Expert
+    for _ = 1, 30 do
+        local npc = workspace:FindFirstChild("NPCs") and workspace.NPCs:FindFirstChild("Fossil Expert")
+        if npc and npc:IsA("Model") then
+            local primary = npc.PrimaryPart or npc:FindFirstChildWhichIsA("BasePart")
+            if primary then
+                return primary.Position + Vector3.new(0, 2, 0)
             end
         end
+        task.wait(1)
     end
+    -- Если NPC не появился, ищем спавн-часть
     local island = findPrehistoricIsland()
     if island then
+        local core = island:FindFirstChild("Core")
+        if core then
+            local spawn = core:FindFirstChild("Fossil ExpertSpawn")
+            if spawn and spawn:IsA("Part") then
+                return spawn.Position + Vector3.new(0, 2, 0)
+            end
+        end
         return island:GetPivot().Position + Vector3.new(0, 10, 0)
     end
     return nil
 end
 
-local function moveToIsland(targetPos)
+local function moveToPoint(targetPos)
     local char = player.Character
     if not char then return false end
     local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -60,7 +59,7 @@ local function moveToIsland(targetPos)
     local stuck = 0
     while true do
         local dist = (hrp.Position - targetPos).Magnitude
-        if dist < 1.5 then
+        if dist < 2 then
             bv:Destroy()
             hrp.CFrame = CFrame.new(targetPos)
             break
@@ -91,17 +90,11 @@ task.spawn(function()
         local island = findPrehistoricIsland()
         if island and not hasMoved then
             hasMoved = true
-            local target = getFossilTarget()
+            local target = waitForNpc()
             if target then
-                print("[MOVE] Перемещение к Fossil Expert, цель: " .. tostring(target))
-                moveToIsland(target)
-                print("[MOVE] Перемещение завершено")
-            else
-                print("[MOVE] Цель не найдена")
+                moveToPoint(target)
             end
         end
         task.wait(1)
     end
 end)
-
-print("Скрипт перемещения к Fossil Expert запущен (метод как при посадке в лодку).")
