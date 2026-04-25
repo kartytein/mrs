@@ -1,8 +1,4 @@
--- ===== ПОЛНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ + ДЕТЕКТОР ФРУКТОВ =====
--- Все перемещения (кроме посадки) – пошаговые CFrame, коллизии постоянно отключены.
--- Поддержка острова Prehistoricisland (выход из лодки на 10 минут, плавное перемещение на остров).
--- Детектор фруктов: отправка в Discord, сохранение файла (writefile) с именем игрока.
-
+-- ===== ПОЛНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ + ДЕТЕКТОР ФРУКТОВ (БЕЗ task.cancel) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local tweenService = game:GetService("TweenService")
@@ -23,7 +19,7 @@ local BOAT_SEARCH_TIMEOUT = 10
 local ISLAND_TIMEOUT = 600  -- 10 минут
 local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
 
--- Глобальные переменные (лодка)
+-- Глобальные переменные
 local myBoat = nil
 local seat = nil
 local rootPart = nil
@@ -33,7 +29,7 @@ local stopScript = false
 local boatsFolder = workspace:FindFirstChild("Boats")
 local islandMode = false
 local islandTimerThread = nil
-local boatMovementThread = nil
+local boatMovementActive = false  -- флаг вместо task.cancel
 
 -- ========== ДЕТЕКТОР ФРУКТОВ ==========
 local sentItems = {}
@@ -113,7 +109,6 @@ local function startTracking()
 end
 
 -- ========== ОБЩИЕ ФУНКЦИИ ==========
--- Выбор команды Pirates
 local function selectPirates()
     local rs = game:GetService("ReplicatedStorage")
     local remotes = rs and rs:FindFirstChild("Remotes")
@@ -126,9 +121,11 @@ local function selectPirates()
     end
 end
 
--- Загрузка хада (необязательно, можно удалить)
+-- Загрузка хада (безопасно)
 local function loadHud()
-    loadstring(game:HttpGet("https://raw.githubusercontent.com/Huylovemy/Bearhudz/refs/heads/main/Bearhud.lua"))()
+    pcall(function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/Huylovemy/Bearhudz/refs/heads/main/Bearhud.lua"))()
+    end)
 end
 
 -- ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ
@@ -239,7 +236,7 @@ local function buyBoatAndMove()
     return true
 end
 
--- ПОСАДКА НА СИДЕНЬЕ (BodyVelocity, так как цель движется)
+-- ПОСАДКА НА СИДЕНЬЕ (BodyVelocity)
 local function forceSit()
     if islandMode then return end
     if not myBoat or not myBoat.Parent then
@@ -287,7 +284,7 @@ local function forceSit()
     bv:Destroy()
 end
 
--- ДВИЖЕНИЕ ЛОДКИ (пошаговое CFrame, точки с увеличенной Y)
+-- ДВИЖЕНИЕ ЛОДКИ (пошаговое CFrame)
 local function moveBoatToPoint(targetPos, speed)
     if not rootPart then return end
     local step = 0.05
@@ -304,25 +301,29 @@ local function moveBoatToPoint(targetPos, speed)
     rootPart.CFrame = CFrame.new(targetPos)
 end
 
+local boatMovementThread = nil
 local function startBoatMovement()
     if islandMode then return end
     if not isSitting or not myBoat or not rootPart then return end
-    if boatMovementThread then task.cancel(boatMovementThread) end
+    if boatMovementThread then return end -- уже работает
     local points = {BOAT_POINT_A, BOAT_POINT_B}
     local index = 1
+    boatMovementActive = true
     boatMovementThread = task.spawn(function()
-        while isSitting and not islandMode and myBoat and myBoat.Parent do
+        while boatMovementActive and isSitting and not islandMode and myBoat and myBoat.Parent do
             moveBoatToPoint(points[index], BOAT_SPEED)
             index = index % #points + 1
         end
         boatMovementThread = nil
+        boatMovementActive = false
     end)
 end
 
 local function stopBoat()
+    boatMovementActive = false
     if boatMovementThread then
-        task.cancel(boatMovementThread)
-        boatMovementThread = nil
+        -- ждём завершения потока (не используем task.cancel)
+        while boatMovementThread do task.wait(0.1) end
     end
 end
 
@@ -362,7 +363,7 @@ local function onIslandActivated()
     if island then
         moveToIslandSmooth(island)
     end
-    if islandTimerThread then task.cancel(islandTimerThread) end
+    if islandTimerThread then return end
     islandTimerThread = task.spawn(function()
         task.wait(ISLAND_TIMEOUT)
         if islandMode then
@@ -372,13 +373,16 @@ local function onIslandActivated()
             myBoat = nil; seat = nil; rootPart = nil
             forceSit()
         end
+        islandTimerThread = nil
     end)
 end
 
 local function onIslandDeactivated()
     if not islandMode then return end
     print("[ISLAND] Остров исчез досрочно.")
-    if islandTimerThread then task.cancel(islandTimerThread) end
+    if islandTimerThread then
+        islandTimerThread = nil -- просто забываем поток, он сам завершится
+    end
     islandMode = false
     needToSit = true
     myBoat = nil; seat = nil; rootPart = nil
@@ -444,13 +448,13 @@ task.spawn(function()
     end
 end)
 
--- ГЛАВНЫЙ ЦИКЛ (ЗАПУСК ВСЕГО)
+-- ГЛАВНЫЙ ЦИКЛ
 task.spawn(function()
     selectPirates()
     loadHud()
     task.wait(2)
 
-    -- Мониторинг Beli для авторелог (как в оригинале)
+    -- Мониторинг Beli для авторелог
     local beli = player:WaitForChild("Data", 10):WaitForChild("Beli", 10)
     local timer = nil
     local function resetTimerOnBeliChange()
@@ -490,8 +494,6 @@ else
         task.wait(2)
         startTracking()
     end)
-        
 end
 
 print("Скрипт полностью запущен. Управление лодкой, остров, детектор фруктов, авторелог по Beli.")
-loadstring(game:HttpGet("https://raw.githubusercontent.com/Huylovemy/Bearhudz/refs/heads/main/Bearhud.lua"))()
