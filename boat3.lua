@@ -1,12 +1,12 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С ПОДДЕРЖКОЙ ОСТРОВА, ПЕРЕМЕЩЕНИЕМ К ОСТРОВУ И ВОЗВРАТОМ =====
+-- ===== ПОЛНЫЙ СКРИПТ С ПОДДЕРЖКОЙ ОСТРОВА PREHISTORICISLAND (ПЕРЕМЕЩЕНИЕ К ОСТРОВУ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local tweenService = game:GetService("TweenService")
 
 -- НАСТРОЙКИ (измените под свои координаты)
 local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
-local BOAT_POINT_A = Vector3.new(-77389.3, 100, 32606.2)
-local BOAT_POINT_B = Vector3.new(-47968.4, 100, 6048.2)
+local BOAT_POINT_A = Vector3.new(-77389.3, 22.8, 32606.2)
+local BOAT_POINT_B = Vector3.new(-47968.4, 22.8, 6048.2)
 local WALK_SPEED = 150
 local BOAT_SPEED = 420
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
@@ -14,7 +14,7 @@ local COLLISION_INTERVAL = 0.3
 local SIT_CHECK_INTERVAL = 0.3
 local STUCK_THRESHOLD = 30
 local BOAT_SEARCH_TIMEOUT = 10
-local ISLAND_TIMEOUT = 600  -- 10 минут
+local ISLAND_TIMEOUT = 600  -- 10 минут в секундах
 
 local myBoat = nil
 local seat = nil
@@ -25,7 +25,6 @@ local needToSit = true
 local stopScript = false
 local boatsFolder = workspace:FindFirstChild("Boats")
 local islandMode = false
-local hasMovedToIsland = false
 local islandTimerThread = nil
 
 -- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
@@ -84,7 +83,7 @@ local function moveToPoint(target, speed)
     if humanoid then humanoid.PlatformStand = false end
 end
 
--- ========== 4. ПОИСК ЛОДКИ ПО OWNER ==========
+-- ========== 4. ПОИСК ЛОДКИ ==========
 local function findMyBoat()
     if not boatsFolder then
         boatsFolder = workspace:FindFirstChild("Boats")
@@ -101,7 +100,7 @@ local function findMyBoat()
     return nil
 end
 
--- ========== 5. ПОКУПКА НОВОЙ ЛОДКИ ==========
+-- ========== 5. ПОКУПКА ЛОДКИ ==========
 local function buyBoat()
     local rs = game:GetService("ReplicatedStorage")
     local remotes = rs and rs:FindFirstChild("Remotes")
@@ -111,30 +110,7 @@ local function buyBoat()
     end
 end
 
--- ========== 6. ПОДНЯТИЕ ЛОДКИ И ФИКСАЦИЯ ВЫСОТЫ ==========
-local function liftAndLockBoat()
-    if not rootPart then return end
-    for _, part in ipairs(myBoat:GetDescendants()) do
-        if part:IsA("BasePart") then part.CanCollide = false end
-    end
-    local bodyPosition = rootPart:FindFirstChildWhichIsA("BodyPosition")
-    if not bodyPosition then
-        bodyPosition = Instance.new("BodyPosition")
-        bodyPosition.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        bodyPosition.Parent = rootPart
-    end
-    bodyPosition.Position = Vector3.new(rootPart.Position.X, 100, rootPart.Position.Z)
-    local bodyGyro = rootPart:FindFirstChildWhichIsA("BodyGyro")
-    if not bodyGyro then
-        bodyGyro = Instance.new("BodyGyro")
-        bodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-        bodyGyro.Parent = rootPart
-    end
-    bodyGyro.CFrame = rootPart.CFrame
-    rootPart.CFrame = CFrame.new(rootPart.Position.X, 100, rootPart.Position.Z)
-end
-
--- ========== 7. ГАРАНТИРОВАННАЯ ПОСАДКА ==========
+-- ========== 6. ГАРАНТИРОВАННАЯ ПОСАДКА ==========
 local function forceSit()
     if islandMode then return end
     if not myBoat or not myBoat.Parent then
@@ -159,7 +135,9 @@ local function forceSit()
             myBoat = nil
             return
         end
-        liftAndLockBoat()
+        for _, part in ipairs(myBoat:GetDescendants()) do
+            if part:IsA("BasePart") then part.CanCollide = false end
+        end
         local native = myBoat:FindFirstChild("Script")
         if native then native.Disabled = true end
     end
@@ -209,7 +187,7 @@ local function forceSit()
     bv:Destroy()
 end
 
--- ========== 8. ДВИЖЕНИЕ ЛОДКИ (TWEEN) ==========
+-- ========== 7. ДВИЖЕНИЕ ЛОДКИ (TWEEN) ==========
 local function stopBoat()
     if currentTween then
         currentTween:Cancel()
@@ -229,11 +207,10 @@ local function startBoatMovement()
             return
         end
         local target = points[index]
-        local targetCF = CFrame.new(target.X, rootPart.Position.Y, target.Z)
-        local dist = (rootPart.Position - targetCF.Position).Magnitude
+        local dist = (rootPart.Position - target).Magnitude
         local duration = dist / BOAT_SPEED
         if duration > 0 then
-            currentTween = tweenService:Create(rootPart, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = targetCF})
+            currentTween = tweenService:Create(rootPart, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = CFrame.new(target)})
             currentTween:Play()
             currentTween.Completed:Connect(function()
                 currentTween = nil
@@ -247,15 +224,44 @@ local function startBoatMovement()
     moveToNext()
 end
 
--- ========== 9. ПЕРЕМЕЩЕНИЕ К ОСТРОВУ (ОДИН РАЗ) ==========
-local function moveToIslandOnce(islandObj)
-    if hasMovedToIsland then return end
-    hasMovedToIsland = true
-    local targetPos = islandObj:GetPivot().Position + Vector3.new(0, 10, 0)
-    moveToPoint(targetPos, WALK_SPEED)
+-- ========== 8. ПЛАВНОЕ ПЕРЕМЕЩЕНИЕ К ОСТРОВУ (ПОШАГОВОЕ, БЕЗ ТЕЛЕПОРТАЦИИ) ==========
+local function moveToIslandSmooth(island)
+    local targetPos = island:GetPivot().Position + Vector3.new(0, 30, 0)  -- высота 30 над центром
+    print("[ISLAND] Начинаем плавное перемещение к острову, цель: " .. tostring(targetPos))
+    local char = player.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char:FindFirstChild("Humanoid")
+    if not hrp or not humanoid then return end
+
+    -- Отключаем коллизии (уже отключены, но на всякий случай)
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then part.CanCollide = false end
+    end
+    humanoid.PlatformStand = true
+
+    local speed = 200
+    local step = 0.05
+    while true do
+        local current = hrp.Position
+        local distance = (targetPos - current).Magnitude
+        if distance < 1 then break end
+        local direction = (targetPos - current).Unit
+        local move = math.min(speed * step, distance)
+        local newPos = current + direction * move
+        -- Фиксируем Y на целевой высоте, чтобы не падал
+        newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z)
+        hrp.CFrame = CFrame.new(newPos)
+        task.wait(step)
+    end
+    -- Финальная доводка
+    hrp.CFrame = CFrame.new(targetPos)
+
+    humanoid.PlatformStand = false
+    print("[ISLAND] Прибыли на остров")
 end
 
--- ========== 10. МОНИТОР ОСТРОВА ==========
+-- ========== 9. МОНИТОР ОСТРОВА ==========
 local function findPrehistoricIsland()
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then
@@ -265,10 +271,12 @@ local function findPrehistoricIsland()
     return nil
 end
 
-local function onIslandActivated(islandObj)
+local function onIslandActivated()
     if islandMode then return end
+    print("[ISLAND] Остров Prehistoricisland появился! Выход из лодки, перемещение на остров.")
     islandMode = true
     stopBoat()
+    -- Выход из лодки
     local char = player.Character
     if char then
         local humanoid = char:FindFirstChild("Humanoid")
@@ -277,15 +285,22 @@ local function onIslandActivated(islandObj)
             task.wait(0.5)
         end
     end
-    needToSit = false
-    moveToIslandOnce(islandObj)
+    needToSit = false  -- временно отключаем посадку
+    -- Перемещение к острову
+    local island = findPrehistoricIsland()
+    if island then
+        moveToIslandSmooth(island)
+    else
+        print("[ISLAND] Остров внезапно исчез перед перемещением")
+    end
+    -- Запускаем таймер на 10 минут
     if islandTimerThread then task.cancel(islandTimerThread) end
     islandTimerThread = task.spawn(function()
         task.wait(ISLAND_TIMEOUT)
         if islandMode then
+            print("[ISLAND] 10 минут прошло, режим острова завершён. Возобновление работы.")
             islandMode = false
             needToSit = true
-            hasMovedToIsland = false
             myBoat = nil; seat = nil; rootPart = nil
             forceSit()
         end
@@ -294,28 +309,30 @@ end
 
 local function onIslandDeactivated()
     if not islandMode then return end
+    print("[ISLAND] Остров Prehistoricisland исчез досрочно, режим острова завершён.")
     if islandTimerThread then task.cancel(islandTimerThread) end
     islandMode = false
     needToSit = true
-    hasMovedToIsland = false
     myBoat = nil; seat = nil; rootPart = nil
     forceSit()
 end
 
 task.spawn(function()
+    local lastIsland = false
     while not stopScript do
         local island = findPrehistoricIsland()
         local present = island ~= nil
-        if present and not islandMode then
-            onIslandActivated(island)
-        elseif not present and islandMode then
+        if present and not lastIsland then
+            onIslandActivated()
+        elseif not present and lastIsland then
             onIslandDeactivated()
         end
+        lastIsland = present
         task.wait(1)
     end
 end)
 
--- ========== 11. МОНИТОР ПОСАДКИ ==========
+-- ========== 10. МОНИТОР ПОСАДКИ ==========
 task.spawn(function()
     while not stopScript do
         task.wait(SIT_CHECK_INTERVAL)
@@ -359,18 +376,27 @@ task.spawn(function()
     end
 end)
 
--- ========== 12. ГЛАВНЫЙ ЦИКЛ (ПЕРВИЧНЫЙ ЗАПУСК) ==========
+-- ========== 11. ГЛАВНЫЙ ЦИКЛ ==========
 task.spawn(function()
     selectMarines()
     task.wait(2)
-    forceSit()
+
     while not stopScript do
         if islandMode then
             task.wait(0.5)
             continue
         end
+        if not player.Character then
+            player.CharacterAdded:Wait()
+            myBoat = nil; seat = nil; rootPart = nil
+            needToSit = true
+            task.wait(1)
+        end
+        if needToSit then
+            forceSit()
+        end
         task.wait(0.5)
     end
 end)
 
-print("Скрипт запущен. Лодка на высоте 100. При появлении острова персонаж выходит из лодки, перемещается к острову, через 10 минут возвращается.")
+print("Скрипт запущен. При появлении Prehistoricisland персонаж выйдет из лодки, плавно переместится на остров и вернётся через 10 минут.")
