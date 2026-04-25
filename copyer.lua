@@ -1,102 +1,67 @@
--- ===== ДИАГНОСТИЧЕСКИЙ СКРИПТ =====
--- Проверяет доступность всех функций и сервисов, используемых в основном скрипте.
--- Запустите его отдельно, он выведет отчёт в консоль.
+-- ========== ДЕТЕКТОР ФРУКТОВ (DISCORD) ==========
+local HttpService = game:GetService("HttpService")
+local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
+local sentItems = {}
 
-local function check(name, value)
-    local success, err = pcall(function() return type(value) end)
-    if success then
-        print("[OK] " .. name .. " : " .. tostring(type(value)))
-    else
-        print("[FAIL] " .. name .. " : " .. tostring(err))
+local function sendToDiscord(itemName)
+    local message = {
+        content = player.Name .. " получил '" .. itemName .. "'!",
+        username = "Инвентарь"
+    }
+    local json = HttpService:JSONEncode(message)
+    pcall(function()
+        HttpService:RequestAsync({
+            Url = DISCORD_WEBHOOK,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = json
+        })
+    end)
+    print("[DISCORD] Отправлено:", itemName)
+end
+
+local function checkItem(item)
+    if item:IsA("Tool") and item.Name:find("Fruit") then
+        if sentItems[item.Name] then return end
+        sentItems[item.Name] = true
+        sendToDiscord(item.Name)
     end
 end
 
-print("=== ДИАГНОСТИКА НАЧАЛА ===")
-
--- Проверка глобальных функций и сервисов
-check("print", print)
-check("task.wait", task.wait)
-check("task.spawn", task.spawn)
-check("task.cancel", task.cancel)
-check("Instance.new", Instance.new)
-check("game.GetService", game.GetService)
-check("pcall", pcall)
-check("Vector3.new", Vector3.new)
-check("CFrame.new", CFrame.new)
-check("math.huge", math.huge)
-check("table.insert", table.insert)
-check("table.find", table.find)
-check("string.find", string.find)
-check("string.lower", string.lower)
-
--- Проверка игровых сервисов
-local services = {"Players", "Workspace", "ReplicatedStorage", "RunService", "TweenService", "HttpService", "TeleportService"}
-for _, s in ipairs(services) do
-    local ok, svc = pcall(function() return game:GetService(s) end)
-    if ok then
-        print("[OK] game:GetService('"..s.."') : " .. tostring(svc))
-    else
-        print("[FAIL] game:GetService('"..s.."') : ошибка")
+local function startFruitTracker()
+    local backpack = player:WaitForChild("Backpack")
+    local character = player.Character or player.CharacterAdded:Wait()
+    backpack.ChildAdded:Connect(function(item)
+        task.wait(0.1)
+        checkItem(item)
+    end)
+    character.ChildAdded:Connect(function(item)
+        if item:IsA("Tool") then
+            task.wait(0.1)
+            checkItem(item)
+        end
+    end)
+    -- Уже существующие предметы
+    for _, item in ipairs(backpack:GetChildren()) do
+        if item:IsA("Tool") and item.Name:find("Fruit") then
+            sentItems[item.Name] = true
+        end
     end
-end
-
--- Проверка LocalPlayer
-local ok, plr = pcall(function() return game.Players.LocalPlayer end)
-if ok and plr then
-    print("[OK] game.Players.LocalPlayer : " .. plr.Name)
-else
-    print("[FAIL] game.Players.LocalPlayer : nil")
-end
-
--- Проверка Character
-local char = plr and plr.Character
-if char then
-    print("[OK] Character существует")
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    print("   HumanoidRootPart : " .. tostring(hrp))
-    local humanoid = char:FindFirstChild("Humanoid")
-    print("   Humanoid : " .. tostring(humanoid))
-else
-    print("[WARN] Character не загружен (может быть позже)")
-end
-
--- Проверка ReplicatedStorage и удалённых событий
-local rs = game:GetService("ReplicatedStorage")
-if rs then
-    local remotes = rs:FindFirstChild("Remotes")
-    if remotes then
-        local commF = remotes:FindFirstChild("CommF_")
-        print("[OK] ReplicatedStorage.Remotes.CommF_ : " .. tostring(commF))
-    else
-        print("[WARN] ReplicatedStorage.Remotes не найдены")
+    for _, item in ipairs(character:GetChildren()) do
+        if item:IsA("Tool") and item.Name:find("Fruit") then
+            sentItems[item.Name] = true
+        end
     end
-    local modules = rs:FindFirstChild("Modules")
-    if modules then
-        local event = modules:FindFirstChild("RE/OnEventServiceActivity")
-        print("[OK] ReplicatedStorage.Modules.RE/OnEventServiceActivity : " .. tostring(event))
-    else
-        print("[WARN] ReplicatedStorage.Modules не найдены")
-    end
-else
-    print("[FAIL] ReplicatedStorage не получен")
+    print("Детектор фруктов запущен.")
 end
 
--- Проверка Discord webhook (только наличие URL)
-local webhook = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
-print("[OK] DISCORD_WEBHOOK определён (длина " .. #webhook .. ")")
-
--- Проверка writefile (необязательно)
-local writefileType = type(writefile)
-print("[OK] writefile : " .. tostring(writefileType))
-
--- Проверка HttpService:RequestAsync
-local hs = game:GetService("HttpService")
-if hs then
-    local success, err = pcall(function() return hs.RequestAsync end)
-    print("[OK] HttpService.RequestAsync : " .. tostring(success))
+-- Запуск трекера (после того как персонаж загрузился)
+if player.Character then
+    task.wait(2)
+    startFruitTracker()
 else
-    print("[FAIL] HttpService не получен")
+    player.CharacterAdded:Connect(function()
+        task.wait(2)
+        startFruitTracker()
+    end)
 end
-
-print("=== ДИАГНОСТИКА ЗАВЕРШЕНА ===")
-print("Если есть сообщения [FAIL] или [WARN], исправьте их в основном скрипте.")
