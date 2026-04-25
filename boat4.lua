@@ -1,16 +1,18 @@
--- ===== ПОЛНЫЙ СКРИПТ С ПОШАГОВЫМ ПЕРЕМЕЩЕНИЕМ (НА ОСНОВЕ CFrame) =====
--- Все перемещения (к точке покупки, к острову, движение лодки) выполняются через CFrame маленькими шагами.
--- Посадка на сиденье осталась через BodyVelocity (для движущейся цели).
--- Коллизии отключаются постоянно, как в основном скрипте.
+-- ===== ПОЛНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ + ДЕТЕКТОР ФРУКТОВ =====
+-- Все перемещения (кроме посадки) – пошаговые CFrame, коллизии постоянно отключены.
+-- Поддержка острова Prehistoricisland (выход из лодки на 10 минут, плавное перемещение на остров).
+-- Детектор фруктов: отправка в Discord, сохранение файла (writefile) с именем игрока.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local tweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
 
--- НАСТРОЙКИ (измените под свои координаты)
+-- НАСТРОЙКИ
 local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
-local BOAT_POINT_A = Vector3.new(-77389.3, 26.8, 32606.2)   -- высота увеличена
-local BOAT_POINT_B = Vector3.new(-47968.4, 26.8, 6048.2)    -- высота увеличена
+local BOAT_POINT_A = Vector3.new(-77389.3, 26.8, 32606.2)
+local BOAT_POINT_B = Vector3.new(-47968.4, 26.8, 6048.2)
 local WALK_SPEED = 150
 local BOAT_SPEED = 420
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
@@ -19,7 +21,9 @@ local SIT_CHECK_INTERVAL = 0.3
 local STUCK_THRESHOLD = 30
 local BOAT_SEARCH_TIMEOUT = 10
 local ISLAND_TIMEOUT = 600  -- 10 минут
+local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
 
+-- Глобальные переменные (лодка)
 local myBoat = nil
 local seat = nil
 local rootPart = nil
@@ -29,9 +33,105 @@ local stopScript = false
 local boatsFolder = workspace:FindFirstChild("Boats")
 local islandMode = false
 local islandTimerThread = nil
-local currentMoveThread = nil  -- для отмены движения
+local boatMovementThread = nil
 
--- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
+-- ========== ДЕТЕКТОР ФРУКТОВ ==========
+local sentItems = {}
+
+local function saveToFile(username)
+    if type(writefile) == "function" then
+        local fileName = username .. ".txt"
+        local content = "Yummytool"
+        local success, err = pcall(function()
+            writefile(fileName, content)
+        end)
+        if success then
+            print("[✓] Файл сохранён:", fileName)
+        else
+            warn("[✗] Ошибка writefile:", err)
+        end
+    else
+        warn("[✗] writefile недоступна. Файл не создан.")
+    end
+end
+
+local function sendToDiscord(itemName)
+    local message = {
+        content = player.Name .. " получил '" .. itemName .. "'!",
+        username = "Инвентарь"
+    }
+    local json = HttpService:JSONEncode(message)
+    local success, err = pcall(function()
+        HttpService:RequestAsync({
+            Url = DISCORD_WEBHOOK,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = json
+        })
+    end)
+    if success then
+        print("[✓] Discord отправлено:", itemName)
+    else
+        warn("[✗] Ошибка Discord:", err)
+    end
+end
+
+local function checkItem(item)
+    if item:IsA("Tool") and item.Name:find("Fruit") then
+        if sentItems[item.Name] then return end
+        sentItems[item.Name] = true
+        print("Найден фрукт:", item.Name)
+        sendToDiscord(item.Name)
+        saveToFile(player.Name)
+    end
+end
+
+local function startTracking()
+    local backpack = player:WaitForChild("Backpack")
+    local character = player.Character or player.CharacterAdded:Wait()
+    backpack.ChildAdded:Connect(function(item)
+        task.wait(0.1)
+        checkItem(item)
+    end)
+    character.ChildAdded:Connect(function(item)
+        if item:IsA("Tool") then
+            task.wait(0.1)
+            checkItem(item)
+        end
+    end)
+    for _, item in ipairs(backpack:GetChildren()) do
+        if item:IsA("Tool") and item.Name:find("Fruit") then
+            sentItems[item.Name] = true
+        end
+    end
+    for _, item in ipairs(character:GetChildren()) do
+        if item:IsA("Tool") and item.Name:find("Fruit") then
+            sentItems[item.Name] = true
+        end
+    end
+    print("Детектор фруктов запущен для", player.Name)
+end
+
+-- ========== ОБЩИЕ ФУНКЦИИ ==========
+-- Выбор команды Pirates
+local function selectPirates()
+    local rs = game:GetService("ReplicatedStorage")
+    local remotes = rs and rs:FindFirstChild("Remotes")
+    if remotes then
+        local commF = remotes:FindFirstChild("CommF_")
+        if commF then pcall(function() commF:InvokeServer("SetTeam", "Pirates") end) end
+        local modules = rs:FindFirstChild("Modules")
+        local event = modules and modules:FindFirstChild("RE/OnEventServiceActivity")
+        if event then pcall(function() event:FireServer() end) end
+    end
+end
+
+-- Загрузка хада (необязательно, можно удалить)
+local function loadHud()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/Huylovemy/Bearhudz/refs/heads/main/Bearhud.lua"))()
+end
+
+-- ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ
 task.spawn(function()
     while not stopScript do
         local char = player.Character
@@ -53,22 +153,18 @@ task.spawn(function()
     end
 end)
 
--- ========== 2. УНИВЕРСАЛЬНОЕ ПОШАГОВОЕ ПЕРЕМЕЩЕНИЕ (CFrame) ==========
+-- УНИВЕРСАЛЬНОЕ ПОШАГОВОЕ ПЕРЕМЕЩЕНИЕ (CFrame)
 local function moveStepByStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local humanoid = char:FindFirstChild("Humanoid")
     if not hrp or not humanoid then return false end
-
-    -- Сохраняем исходные настройки
     local oldPlatform = humanoid.PlatformStand
     humanoid.PlatformStand = true
-
     local step = 0.05
     local lastDist = math.huge
     local stuck = 0
-
     while true do
         local current = hrp.Position
         local distance = (targetPos - current).Magnitude
@@ -81,14 +177,9 @@ local function moveStepByStep(targetPos, speed, keepY)
         end
         hrp.CFrame = CFrame.new(newPos)
         task.wait(step)
-
-        -- Проверка застревания
         if math.abs(distance - lastDist) < 0.01 then
             stuck = stuck + 1
-            if stuck > 50 then
-                print("[WARN] Застревание при перемещении, принудительное завершение")
-                break
-            end
+            if stuck > 50 then break
         else
             stuck = 0
         end
@@ -99,20 +190,24 @@ local function moveStepByStep(targetPos, speed, keepY)
     return true
 end
 
--- ========== 3. ВЫБОР КОМАНДЫ ==========
-local function selectMarines()
-    local rs = game:GetService("ReplicatedStorage")
-    local remotes = rs and rs:FindFirstChild("Remotes")
-    if remotes then
-        local commF = remotes:FindFirstChild("CommF_")
-        if commF then pcall(function() commF:InvokeServer("SetTeam", "Marines") end) end
-        local modules = rs:FindFirstChild("Modules")
-        local event = modules and modules:FindFirstChild("RE/OnEventServiceActivity")
-        if event then pcall(function() event:FireServer() end) end
+-- ПОИСК ЛОДКИ ПО OWNER
+local function findMyBoat()
+    if not boatsFolder then
+        boatsFolder = workspace:FindFirstChild("Boats")
+        if not boatsFolder then return nil end
     end
+    for _, boat in ipairs(boatsFolder:GetChildren()) do
+        if boat:IsA("Model") and boat:FindFirstChildWhichIsA("VehicleSeat") then
+            local owner = boat:GetAttribute("Owner")
+            if owner == playerName then return boat end
+            local ownerObj = boat:FindFirstChild("Owner")
+            if ownerObj and tostring(ownerObj.Value) == playerName then return boat end
+        end
+    end
+    return nil
 end
 
--- ========== 4. ПОКУПКА ЛОДКИ С ПЕРЕМЕЩЕНИЕМ (ПОШАГОВО) ==========
+-- ПОКУПКА ЛОДКИ (с перемещением к точке)
 local function buyBoatAndMove()
     print("[MAIN] Перемещение к точке покупки...")
     moveStepByStep(PURCHASE_POINT, WALK_SPEED, true)
@@ -144,24 +239,7 @@ local function buyBoatAndMove()
     return true
 end
 
--- ========== 5. ПОИСК ЛОДКИ ==========
-local function findMyBoat()
-    if not boatsFolder then
-        boatsFolder = workspace:FindFirstChild("Boats")
-        if not boatsFolder then return nil end
-    end
-    for _, boat in ipairs(boatsFolder:GetChildren()) do
-        if boat:IsA("Model") and boat:FindFirstChildWhichIsA("VehicleSeat") then
-            local owner = boat:GetAttribute("Owner")
-            if owner == playerName then return boat end
-            local ownerObj = boat:FindFirstChild("Owner")
-            if ownerObj and tostring(ownerObj.Value) == playerName then return boat end
-        end
-    end
-    return nil
-end
-
--- ========== 6. ПОСАДКА НА СИДЕНЬЕ (BODYVELOCITY, как раньше) ==========
+-- ПОСАДКА НА СИДЕНЬЕ (BodyVelocity, так как цель движется)
 local function forceSit()
     if islandMode then return end
     if not myBoat or not myBoat.Parent then
@@ -176,11 +254,9 @@ local function forceSit()
 
     local old = hrp:FindFirstChildWhichIsA("BodyVelocity")
     if old then old:Destroy() end
-
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
-
     local lastDist = math.huge
     local stuck = 0
     while true do
@@ -194,7 +270,6 @@ local function forceSit()
         end
         local dir = (targetCF.Position - hrp.Position).Unit
         bv.Velocity = dir * WALK_SPEED
-
         if math.abs(dist - lastDist) < 0.05 then
             stuck = stuck + 1
             if stuck > STUCK_THRESHOLD then
@@ -212,7 +287,7 @@ local function forceSit()
     bv:Destroy()
 end
 
--- ========== 7. ДВИЖЕНИЕ ЛОДКИ (ПОШАГОВОЕ, ВМЕСТО TWEEN) ==========
+-- ДВИЖЕНИЕ ЛОДКИ (пошаговое CFrame, точки с увеличенной Y)
 local function moveBoatToPoint(targetPos, speed)
     if not rootPart then return end
     local step = 0.05
@@ -229,7 +304,6 @@ local function moveBoatToPoint(targetPos, speed)
     rootPart.CFrame = CFrame.new(targetPos)
 end
 
-local boatMovementThread = nil
 local function startBoatMovement()
     if islandMode then return end
     if not isSitting or not myBoat or not rootPart then return end
@@ -238,8 +312,7 @@ local function startBoatMovement()
     local index = 1
     boatMovementThread = task.spawn(function()
         while isSitting and not islandMode and myBoat and myBoat.Parent do
-            local target = points[index]
-            moveBoatToPoint(target, BOAT_SPEED)
+            moveBoatToPoint(points[index], BOAT_SPEED)
             index = index % #points + 1
         end
         boatMovementThread = nil
@@ -253,7 +326,7 @@ local function stopBoat()
     end
 end
 
--- ========== 8. ПЕРЕМЕЩЕНИЕ К ОСТРОВУ (ПОШАГОВОЕ) ==========
+-- ПЕРЕМЕЩЕНИЕ К ОСТРОВУ (пошаговое)
 local function moveToIslandSmooth(island)
     local targetPos = island:GetPivot().Position + Vector3.new(0, 30, 0)
     print("[ISLAND] Перемещение на остров...")
@@ -261,7 +334,7 @@ local function moveToIslandSmooth(island)
     print("[ISLAND] Прибыли на остров")
 end
 
--- ========== 9. МОНИТОР ОСТРОВА ==========
+-- МОНИТОР ОСТРОВА
 local function findPrehistoricIsland()
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then
@@ -327,7 +400,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 10. МОНИТОР ПОСАДКИ ==========
+-- МОНИТОР ПОСАДКИ
 task.spawn(function()
     while not stopScript do
         task.wait(SIT_CHECK_INTERVAL)
@@ -371,10 +444,25 @@ task.spawn(function()
     end
 end)
 
--- ========== 11. ГЛАВНЫЙ ЦИКЛ ==========
+-- ГЛАВНЫЙ ЦИКЛ (ЗАПУСК ВСЕГО)
 task.spawn(function()
-    selectMarines()
+    selectPirates()
+    loadHud()
     task.wait(2)
+
+    -- Мониторинг Beli для авторелог (как в оригинале)
+    local beli = player:WaitForChild("Data", 10):WaitForChild("Beli", 10)
+    local timer = nil
+    local function resetTimerOnBeliChange()
+        if timer then task.cancel(timer) end
+        timer = task.spawn(function()
+            task.wait(30)
+            TeleportService:Teleport(game.PlaceId, player)
+        end)
+    end
+    beli:GetPropertyChangedSignal("Value"):Connect(resetTimerOnBeliChange)
+    resetTimerOnBeliChange()
+
     while not stopScript do
         if islandMode then
             task.wait(0.5)
@@ -393,4 +481,17 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт запущен. Все перемещения (кроме посадки) – пошаговые CFrame, коллизии постоянно отключены.")
+-- Запуск детектора фруктов
+if player.Character then
+    task.wait(2)
+    startTracking()
+else
+    player.CharacterAdded:Connect(function()
+        task.wait(2)
+        startTracking()
+    end)
+        
+end
+
+print("Скрипт полностью запущен. Управление лодкой, остров, детектор фруктов, авторелог по Beli.")
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Huylovemy/Bearhudz/refs/heads/main/Bearhud.lua"))()
