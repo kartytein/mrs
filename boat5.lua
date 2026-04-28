@@ -1,4 +1,7 @@
--- ===== ПОЛНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ (ДВИЖЕНИЕ СТУПЕНЧАТОЕ, ВЫСОТА 100) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ (СТАБИЛЬНЫЙ) =====
+-- Версия: 2.0
+-- Исправлено: отсутствие task.cancel, смерть/респавн, детектор фруктов, остров, автопокупка лодки.
+
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local tweenService = game:GetService("TweenService")
@@ -8,15 +11,15 @@ local HttpService = game:GetService("HttpService")
 local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
 local BOAT_X_MIN = -77389.3
 local BOAT_X_MAX = -47968.4
-local BOAT_Y_FIXED = 100               -- фиксированная высота лодки
+local BOAT_Y_FIXED = 100
 local WALK_SPEED = 150
-local BOAT_SPEED = 420                 -- скорость (студий/сек)
+local BOAT_SPEED = 420
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
 local COLLISION_INTERVAL = 0.3
 local SIT_CHECK_INTERVAL = 0.3
 local STUCK_THRESHOLD = 30
 local BOAT_SEARCH_TIMEOUT = 10
-local ISLAND_TIMEOUT = 600             -- 10 минут
+local ISLAND_TIMEOUT = 600
 local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
 
 -- Глобальные переменные
@@ -29,8 +32,8 @@ local stopScript = false
 local boatsFolder = workspace:FindFirstChild("Boats")
 local islandMode = false
 local islandTimerThread = nil
-local boatMoveThread = nil
-local currentDirection = -1  -- -1 = влево, 1 = вправо
+local boatMoving = false          -- флаг вместо task.cancel
+local currentDirection = -1      -- -1 = влево, 1 = вправо
 
 -- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
 task.spawn(function()
@@ -67,7 +70,7 @@ local function selectMarines()
     end
 end
 
--- ========== 3. ПОШАГОВОЕ ПЕРЕМЕЩЕНИЕ ПЕРСОНАЖА (CFrame) ==========
+-- ========== 3. УНИВЕРСАЛЬНОЕ ПОШАГОВОЕ ПЕРЕМЕЩЕНИЕ (CFrame) ==========
 local function moveStepByStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
@@ -104,7 +107,7 @@ local function moveStepByStep(targetPos, speed, keepY)
     return true
 end
 
--- ========== 4. ПОКУПКА ЛОДКИ (с перемещением) ==========
+-- ========== 4. ПОИСК ЛОДКИ ПО OWNER ==========
 local function findMyBoat()
     if not boatsFolder then
         boatsFolder = workspace:FindFirstChild("Boats")
@@ -121,6 +124,7 @@ local function findMyBoat()
     return nil
 end
 
+-- ========== 5. ПОКУПКА ЛОДКИ (с перемещением) ==========
 local function buyBoatAndMove()
     print("[MAIN] Перемещение к точке покупки...")
     moveStepByStep(PURCHASE_POINT, WALK_SPEED, true)
@@ -152,7 +156,7 @@ local function buyBoatAndMove()
     return true
 end
 
--- ========== 5. ПОСАДКА НА СИДЕНЬЕ (BodyVelocity) ==========
+-- ========== 6. ПОСАДКА НА СИДЕНЬЕ (BodyVelocity) ==========
 local function forceSit()
     if islandMode then return end
     if not myBoat or not myBoat.Parent then
@@ -200,15 +204,15 @@ local function forceSit()
     bv:Destroy()
 end
 
--- ========== 6. ДВИЖЕНИЕ ЛОДКИ (ступенчатое, высота 100, смена направления) ==========
+-- ========== 7. ДВИЖЕНИЕ ЛОДКИ (СТУПЕНЧАТОЕ, БЕЗ TWEEN, С ОСТАНОВКОЙ ПО ФЛАГУ) ==========
 local function startBoatMoving()
-    if boatMoveThread then return end
-    boatMoveThread = task.spawn(function()
-        while isSitting and not islandMode and myBoat and rootPart do
+    if boatMoving then return end
+    boatMoving = true
+    task.spawn(function()
+        while boatMoving and isSitting and not islandMode and myBoat and rootPart do
             local step = 0.05
-            local dir = currentDirection
-            local deltaX = dir * BOAT_SPEED * step
-            local newX = rootPart.Position.X + deltaX
+            local delta = currentDirection * BOAT_SPEED * step
+            local newX = rootPart.Position.X + delta
             if newX <= BOAT_X_MIN then
                 newX = BOAT_X_MIN
                 currentDirection = 1
@@ -219,24 +223,18 @@ local function startBoatMoving()
             rootPart.CFrame = CFrame.new(newX, BOAT_Y_FIXED, rootPart.Position.Z)
             task.wait(step)
         end
-        boatMoveThread = nil
+        boatMoving = false
     end)
 end
 
 local function stopBoatMoving()
-    if boatMoveThread then
-        task.cancel(boatMoveThread)
-        boatMoveThread = nil
-    end
+    boatMoving = false
 end
 
--- ========== 7. ДЕТЕКТОР ФРУКТОВ (DISCORD) ==========
+-- ========== 8. ДЕТЕКТОР ФРУКТОВ (DISCORD) ==========
 local sentItems = {}
 local function sendToDiscord(itemName)
-    local message = {
-        content = player.Name .. " получил '" .. itemName .. "'!",
-        username = "Инвентарь"
-    }
+    local message = { content = player.Name .. " получил '" .. itemName .. "'!", username = "Инвентарь" }
     local json = HttpService:JSONEncode(message)
     pcall(function()
         HttpService:RequestAsync({
@@ -271,19 +269,15 @@ local function startFruitTracker()
         end
     end)
     for _, item in ipairs(backpack:GetChildren()) do
-        if item:IsA("Tool") and item.Name:find("Fruit") then
-            sentItems[item.Name] = true
-        end
+        if item:IsA("Tool") and item.Name:find("Fruit") then sentItems[item.Name] = true end
     end
     for _, item in ipairs(character:GetChildren()) do
-        if item:IsA("Tool") and item.Name:find("Fruit") then
-            sentItems[item.Name] = true
-        end
+        if item:IsA("Tool") and item.Name:find("Fruit") then sentItems[item.Name] = true end
     end
     print("Детектор фруктов запущен.")
 end
 
--- ========== 8. МОНИТОР ОСТРОВА ==========
+-- ========== 9. МОНИТОР ОСТРОВА ==========
 local function findPrehistoricIsland()
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then
@@ -315,10 +309,11 @@ local function onIslandActivated()
     end
     needToSit = false
     local island = findPrehistoricIsland()
-    if island then
-        moveToIslandSmooth(island)
+    if island then moveToIslandSmooth(island) end
+    if islandTimerThread then
+        pcall(function() task.cancel(islandTimerThread) end)  -- безопасно
+        islandTimerThread = nil
     end
-    if islandTimerThread then task.cancel(islandTimerThread) end
     islandTimerThread = task.spawn(function()
         task.wait(ISLAND_TIMEOUT)
         if islandMode then
@@ -334,7 +329,7 @@ end
 local function onIslandDeactivated()
     if not islandMode then return end
     print("[ISLAND] Остров исчез досрочно.")
-    if islandTimerThread then task.cancel(islandTimerThread) end
+    if islandTimerThread then pcall(function() task.cancel(islandTimerThread) end) end
     islandMode = false
     needToSit = true
     myBoat = nil; seat = nil; rootPart = nil
@@ -354,7 +349,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 9. МОНИТОР ПОСАДКИ ==========
+-- ========== 10. МОНИТОР ПОСАДКИ ==========
 task.spawn(function()
     while not stopScript do
         task.wait(SIT_CHECK_INTERVAL)
@@ -374,9 +369,7 @@ task.spawn(function()
         end
         local humanoid = char:FindFirstChild("Humanoid")
         local sitting = false
-        if humanoid and seat then
-            sitting = (humanoid.Sit and humanoid.SeatPart == seat)
-        end
+        if humanoid and seat then sitting = (humanoid.Sit and humanoid.SeatPart == seat) end
         if sitting ~= isSitting then
             isSitting = sitting
             if isSitting then
@@ -388,17 +381,26 @@ task.spawn(function()
             end
         end
         if myBoat and (not myBoat.Parent or not seat or not rootPart) then
-            myBoat = nil; seat = nil; rootPart = nil
-            needToSit = true
-            stopBoatMoving()
+            myBoat = nil; seat = nil; rootPart = nil; needToSit = true; stopBoatMoving()
         end
-        if needToSit then
-            forceSit()
+        if needToSit then forceSit()
         end
     end
 end)
 
--- ========== 10. ГЛАВНЫЙ ПОТОК ==========
+-- ========== 11. АНТИ-IDLE (камера) ==========
+task.spawn(function()
+    local camera = workspace.CurrentCamera
+    local originalCF = camera.CFrame
+    while true do
+        task.wait(300)
+        camera.CFrame = camera.CFrame * CFrame.Angles(0, math.rad(1), 0)
+        task.wait(0.5)
+        camera.CFrame = originalCF
+    end
+end)
+
+-- ========== 12. ГЛАВНЫЙ ПОТОК ==========
 task.spawn(function()
     selectMarines()
     task.wait(2)
@@ -409,12 +411,10 @@ task.spawn(function()
         end
         if not player.Character then
             player.CharacterAdded:Wait()
-            myBoat = nil; seat = nil; rootPart = nil
-            needToSit = true
+            myBoat = nil; seat = nil; rootPart = nil; needToSit = true
             task.wait(1)
         end
-        if needToSit then
-            forceSit()
+        if needToSit then forceSit()
         end
         task.wait(0.5)
     end
@@ -427,4 +427,4 @@ task.spawn(function()
     startFruitTracker()
 end)
 
-print("Скрипт запущен. Лодка движется с фиксированной высотой 100, ступенчато, смена направления по краям.")
+print("Финальный скрипт запущен. Лодка движется ступенчато, высота 100, остров обрабатывается.")
