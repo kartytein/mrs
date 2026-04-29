@@ -1,7 +1,7 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С ДВИЖЕНИЕМ МАЛЕНЬКИМИ ШАГАМИ (КАК В ЭТАЛОНЕ) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ДВИЖЕНИЕМ ПО ДЕЛЬТАМ ИЗ ЛОГА =====
 local player = game.Players.LocalPlayer
 local HttpService = game:GetService("HttpService")
-local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"  -- замените на свой
+local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
 
 -- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
 task.spawn(function()
@@ -132,14 +132,14 @@ task.spawn(function()
     local camera = workspace.CurrentCamera
     local originalCF = camera.CFrame
     while true do
-        task.wait(300)                     -- каждые 5 минут
+        task.wait(300)
         camera.CFrame = camera.CFrame * CFrame.Angles(0, math.rad(1), 0)
         task.wait(0.5)
         camera.CFrame = originalCF
     end
 end)
 
--- ========== 6. ЛОДКА: ДВИЖЕНИЕ МАЛЕНЬКИМИ ШАГАМИ (КАК В ЭТАЛОНЕ) ==========
+-- ========== 6. ЛОДКА: ДВИЖЕНИЕ ПО ДЕЛЬТАМ ИЗ ЛОГА ==========
 local myBoat = nil
 local seat = nil
 local rootPart = nil
@@ -147,12 +147,20 @@ local humanoid = nil
 local hrp = nil
 local boatMoving = false
 local boatThread = nil
-local currentDirection = -1          -- начинаем влево
-local STEP_SIZE = 8.5                -- средний шаг по X (из лога)
+local currentDirection = -1          -- начинаем влево (как в логах)
 local STEP_INTERVAL = 0.2            -- интервал между шагами (сек)
 local X_MIN = -77389.3
 local X_MAX = -47968.4
 local Y_FIXED = 100
+
+-- Дельта из лога (первые 16 шагов, зацикливаем)
+local deltaHistory = {-11.5, -6.3, -7.3, -9.4, -7.3, -9.4, -9.4, -8.3, -9.4, -10.4, -9.4, -7.3, -6.3, -5.2, -9.4, -8.3}
+local deltaIndex = 1
+local function getNextDelta()
+    local d = deltaHistory[deltaIndex]
+    deltaIndex = deltaIndex % #deltaHistory + 1
+    return d
+end
 
 local function stopBoatMoving()
     boatMoving = false
@@ -163,7 +171,7 @@ local function startBoatMoving()
     boatMoving = true
     boatThread = task.spawn(function()
         while boatMoving do
-            local delta = currentDirection * STEP_SIZE
+            local delta = currentDirection * getNextDelta()
             local newX = rootPart.Position.X + delta
             if newX <= X_MIN then
                 newX = X_MIN
@@ -289,7 +297,7 @@ task.spawn(function()
     sitOnSeat(seat, hrp, humanoid)
     print("Посадка выполнена")
 
-    -- Запуск движения лодки (маленькими шагами)
+    -- Запуск движения лодки (по дельтам из лога)
     startBoatMoving()
 end)
 
@@ -300,4 +308,4 @@ task.spawn(function()
     startFruitTracker()
 end)
 
-print("Скрипт полностью запущен. Лодка движется маленькими шагами (как в эталоне), высота 100, детектор фруктов, остров, анти-idle активны.")
+print("Скрипт запущен. Лодка движется точно по дельтам из эталонного лога, высота 100, детектор фруктов, остров, анти-idle активны.")
