@@ -1,60 +1,74 @@
--- Диагностический трекер всех изменений позиции персонажа
+-- Движение лодки через BodyVelocity на персонаже (как в эталоне)
 local player = game.Players.LocalPlayer
 local char = player.Character or player.CharacterAdded:Wait()
 local hrp = char:WaitForChild("HumanoidRootPart")
 local humanoid = char:WaitForChild("Humanoid")
 
-local function log(msg)
-    print("[TRACKER] " .. msg)
-    game:GetService("StarterGui"):SetCore("ChatMakeSystemMessage", {Text = msg, Color = Color3.new(1,0,0)})
-end
+-- Параметры
+local X_MIN = -77389.3
+local X_MAX = -47968.4
+local BOAT_SPEED = 250
+local currentDirection = -1   -- -1 = влево, 1 = вправо
 
--- Отслеживаем изменения CFrame и Position
-local lastPos = hrp.Position
-hrp:GetPropertyChangedSignal("Position"):Connect(function()
-    local newPos = hrp.Position
-    log("Position изменилось: " .. tostring(lastPos) .. " -> " .. tostring(newPos))
-    lastPos = newPos
-end)
-hrp:GetPropertyChangedSignal("CFrame"):Connect(function()
-    log("CFrame изменилось: " .. tostring(hrp.CFrame))
-end)
-
--- Отслеживаем создание BodyVelocity у персонажа
-char.DescendantAdded:Connect(function(desc)
-    if desc:IsA("BodyVelocity") then
-        log("BodyVelocity создан на персонаже, скорость = " .. tostring(desc.Velocity))
-        desc:GetPropertyChangedSignal("Velocity"):Connect(function()
-            log("BodyVelocity скорость изменена на " .. tostring(desc.Velocity))
-        end)
-    elseif desc:IsA("BodyPosition") then
-        log("BodyPosition создан на персонаже, позиция = " .. tostring(desc.Position))
-    elseif desc:IsA("Tween") then
-        log("Tween создан на персонаже")
+-- Отключаем коллизии
+task.spawn(function()
+    while true do
+        if char then
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then part.CanCollide = false end
+            end
+        end
+        task.wait(0.3)
     end
 end)
 
--- Отслеживаем изменения PlatformStand
-humanoid:GetPropertyChangedSignal("PlatformStand"):Connect(function()
-    log("PlatformStand = " .. tostring(humanoid.PlatformStand))
-end)
+-- Функция обновления скорости (пересоздаёт BodyVelocity, если его нет)
+local function ensureVelocity()
+    local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
+    local speedX = currentDirection == -1 and -BOAT_SPEED or BOAT_SPEED
+    if bv then
+        bv.Velocity = Vector3.new(speedX, 0, 0)
+    else
+        bv = Instance.new("BodyVelocity")
+        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        bv.Parent = hrp
+        bv.Velocity = Vector3.new(speedX, 0, 0)
+    end
+end
 
--- Отслеживаем изменения Sit
-humanoid:GetPropertyChangedSignal("Sit"):Connect(function()
-    log("Sit = " .. tostring(humanoid.Sit) .. ", SeatPart = " .. tostring(humanoid.SeatPart))
-end)
-
--- Периодическая проверка наличия BodyVelocity (на случай удаления)
+-- Отдельный поток для проверки границ и смены направления (по позиции лодки)
 task.spawn(function()
     while true do
-        task.wait(1)
-        local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
-        if bv then
-            log("BodyVelocity существует, скорость = " .. tostring(bv.Velocity))
-        else
-            log("BodyVelocity отсутствует")
+        task.wait(0.2)
+        -- Находим лодку по сиденью
+        local seat = humanoid.SeatPart
+        if seat then
+            local boat = seat:FindFirstAncestorWhichIsA("Model")
+            if boat then
+                local rootPart = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
+                if rootPart then
+                    local x = rootPart.Position.X
+                    if x <= X_MIN and currentDirection == -1 then
+                        currentDirection = 1
+                        ensureVelocity()
+                    elseif x >= X_MAX and currentDirection == 1 then
+                        currentDirection = -1
+                        ensureVelocity()
+                    end
+                end
+            end
         end
     end
 end)
 
-log("Трекер запущен. Теперь активируйте эталонный скрипт перемещения к острову. Результаты будут в консоли и в чате.")
+-- Главный цикл: каждую секунду проверяем, сидит ли персонаж, и создаём/обновляем BodyVelocity
+while true do
+    task.wait(1)
+    if humanoid.Sit and humanoid.SeatPart then
+        ensureVelocity()
+    else
+        -- Если не сидит, удаляем BodyVelocity
+        local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
+        if bv then bv:Destroy() end
+    end
+end
