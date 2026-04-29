@@ -1,107 +1,73 @@
--- ===== ДИАГНОСТИКА ПРОБЛЕМЫ С BODYVELOCITY =====
+-- ===== ИМИТАЦИЯ ЭТАЛОННОГО СКРИПТА: ПЕРИОДИЧЕСКОЕ ПЕРЕСОЗДАНИЕ BODYVELOCITY =====
 local player = game.Players.LocalPlayer
-local char = player.Character
-if not char then
-    warn("Персонаж не загружен")
-    return
-end
-local hrp = char:FindFirstChild("HumanoidRootPart")
-if not hrp then
-    warn("Нет HumanoidRootPart")
-    return
-end
-local humanoid = char:FindFirstChild("Humanoid")
-if not humanoid then
-    warn("Нет Humanoid")
-    return
-end
-local seat = humanoid.SeatPart
-if not seat then
-    warn("Вы не сидите на сиденье")
-    return
-end
-local boat = seat:FindFirstAncestorWhichIsA("Model")
-if not boat then
-    warn("Сиденье не принадлежит лодке")
-    return
-end
-local rootPart = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
-if not rootPart then
-    warn("У лодки нет основной части")
-    return
+local HRP = nil
+local seat = nil
+local boat = nil
+local rootPart = nil
+
+-- Ждём посадки и получаем HRP
+local function waitForSeat()
+    while true do
+        local char = player.Character
+        if char then
+            local humanoid = char:FindFirstChild("Humanoid")
+            if humanoid and humanoid.Sit and humanoid.SeatPart then
+                seat = humanoid.SeatPart
+                boat = seat:FindFirstAncestorWhichIsA("Model")
+                rootPart = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
+                HRP = char:FindFirstChild("HumanoidRootPart")
+                return
+            end
+        end
+        task.wait(0.5)
+    end
 end
 
-print("========== ДИАГНОСТИКА ==========")
-print("1. Персонаж сидит на сиденье:", humanoid.Sit, "SeatPart =", seat:GetFullName())
-print("2. Лодка:", boat.Name)
-print("3. HumanoidRootPart существует:", hrp ~= nil)
-print("4. Текущая позиция персонажа:", hrp.Position)
-print("5. Текущая позиция лодки (rootPart):", rootPart.Position)
+waitForSeat()
+print("Персонаж в лодке")
 
--- Проверка BodyVelocity на персонаже
-local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
-if bv then
-    print("6. BodyVelocity найден на персонаже, Velocity =", bv.Velocity)
-    print("   MaxForce =", bv.MaxForce)
-    print("   Parent =", bv.Parent:GetFullName())
-else
-    print("6. BodyVelocity на персонаже ОТСУТСТВУЕТ")
-end
+-- Настройки движения
+local X_MIN = -77389.3
+local X_MAX = -47968.4
+local currentDirection = -1
+local SPEED_X = -250  -- как в эталоне (отрицательное - влево)
 
--- Проверка, есть ли другие силы, мешающие движению (BodyVelocity на лодке, Anchored и т.д.)
-local boatBv = rootPart:FindFirstChildWhichIsA("BodyVelocity")
-if boatBv then
-    print("7. BodyVelocity найден на лодке, Velocity =", boatBv.Velocity)
-end
+-- Поток: пересоздаём BodyVelocity каждые 0.2 секунды (если персонаж сидит)
+task.spawn(function()
+    while true do
+        task.wait(0.2)
+        local char = player.Character
+        local humanoid = char and char:FindFirstChild("Humanoid")
+        if humanoid and humanoid.Sit and humanoid.SeatPart == seat then
+            -- Удаляем старый BodyVelocity, если есть
+            local old = HRP:FindFirstChildWhichIsA("BodyVelocity")
+            if old then old:Destroy() end
+            -- Создаём новый с нужной скоростью
+            local bv = Instance.new("BodyVelocity")
+            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+            bv.Parent = HRP
+            bv.Velocity = Vector3.new(currentDirection * math.abs(SPEED_X), 0, 0)
+            -- Добавляем небольшой случайный шум (как в эталоне)
+            bv.Velocity = bv.Velocity + Vector3.new(0, math.random(-3,3)*0.01, math.random(-3,3)*0.01)
+        end
+    end
+end)
 
-local boatBp = rootPart:FindFirstChildWhichIsA("BodyPosition")
-if boatBp then
-    print("8. BodyPosition найден на лодке, Position =", boatBp.Position)
-end
+-- Поток смены направления (по достижении границ)
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        if rootPart then
+            local x = rootPart.Position.X
+            if x <= X_MIN and currentDirection == -1 then
+                currentDirection = 1
+                print("Смена направления → вправо")
+            elseif x >= X_MAX and currentDirection == 1 then
+                currentDirection = -1
+                print("Смена направления → влево")
+            end
+        end
+    end
+end)
 
-print("9. Anchored лодки (rootPart):", rootPart.Anchored)
-print("10. CanCollide лодки (rootPart):", rootPart.CanCollide)
-
--- Проверка коллизий персонажа
-local lower = char:FindFirstChild("LowerTorso")
-local upper = char:FindFirstChild("UpperTorso")
-if lower then print("11. LowerTorso CanCollide =", lower.CanCollide) end
-if upper then print("12. UpperTorso CanCollide =", upper.CanCollide) end
-
--- Проверка, не заблокировано ли движение другими объектами (например, лодка стоит на месте)
-print("13. Свободное пространство вокруг лодки (примерно):")
-local rayOrigin = rootPart.Position + Vector3.new(0, 2, 0)
-local rayDirection = Vector3.new(1, 0, 0)  -- вправо
-local rayParams = RaycastParams.new()
-rayParams.FilterType = Enum.RaycastFilterType.Blacklist
-rayParams.FilterDescendantsInstances = {boat, char}
-local rayResult = workspace:Raycast(rayOrigin, rayDirection * 10, rayParams)
-if rayResult then
-    print("   Справа препятствие на расстоянии", rayResult.Distance)
-else
-    print("   Справа свободно")
-end
-
-rayDirection = Vector3.new(-1, 0, 0) -- влево
-rayResult = workspace:Raycast(rayOrigin, rayDirection * 10, rayParams)
-if rayResult then
-    print("   Слева препятствие на расстоянии", rayResult.Distance)
-else
-    print("   Слева свободно")
-end
-
--- Проверка, не отключена ли физика у персонажа
-print("14. Humanoid.PlatformStand =", humanoid.PlatformStand)
-print("15. Humanoid.Sit =", humanoid.Sit)
-
--- Проверка, не заблокирована ли скорость (например, из-за оглушения)
-print("16. Humanoid.WalkSpeed =", humanoid.WalkSpeed)
-print("17. Humanoid.JumpPower =", humanoid.JumpPower)
-
--- Проверка, не является ли лодка частью другого механизма (например, привязана к другому объекту)
-local weldConstraints = rootPart:FindFirstChildWhichIsA("WeldConstraint")
-if weldConstraints then
-    print("18. Есть WeldConstraint, привязывающий лодку к", weldConstraints.Part1 and weldConstraints.Part1.Name or "nil")
-end
-
-print("========== КОНЕЦ ДИАГНОСТИКИ ==========")
+print("Скрипт запущен. Лодка должна двигаться плавно, как в эталоне.")
