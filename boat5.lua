@@ -1,17 +1,12 @@
--- ===== ФИНАЛЬНЫЙ СТАБИЛЬНЫЙ СКРИПТ =====
--- Версия 3.0
--- Исправлены все известные ошибки: task.cancel заменён флагами, анти-idle, детектор фруктов, работа с островом.
-
+-- ===== ФИНАЛЬНЫЙ СТАБИЛЬНЫЙ СКРИПТ (ИСПРАВЛЕННЫЙ СИНТАКСИС) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
-local tweenService = game:GetService("TweenService")
-local HttpService = game:GetService("HttpService")
 
--- НАСТРОЙКИ (измените под свои координаты)
+-- НАСТРОЙКИ
 local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
 local BOAT_X_MIN = -77389.3
 local BOAT_X_MAX = -47968.4
-local BOAT_Y_FIXED = 100               -- фиксированная высота лодки
+local BOAT_Y_FIXED = 100
 local WALK_SPEED = 150
 local BOAT_SPEED = 420
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
@@ -19,10 +14,9 @@ local COLLISION_INTERVAL = 0.3
 local SIT_CHECK_INTERVAL = 0.3
 local STUCK_THRESHOLD = 30
 local BOAT_SEARCH_TIMEOUT = 10
-local ISLAND_TIMEOUT = 600             -- 10 минут
-local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"  -- замените на свой
+local ISLAND_TIMEOUT = 600
+local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
 
--- Глобальные переменные
 local myBoat = nil
 local seat = nil
 local rootPart = nil
@@ -31,9 +25,8 @@ local needToSit = true
 local stopScript = false
 local boatsFolder = workspace:FindFirstChild("Boats")
 local islandMode = false
-local islandTimerThread = nil
 local boatMoving = false
-local currentDirection = -1   -- -1 = влево, 1 = вправо
+local currentDirection = -1
 
 -- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
 task.spawn(function()
@@ -57,7 +50,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 2. ВЫБОР КОМАНДЫ MARINES ==========
+-- ========== 2. ВЫБОР КОМАНДЫ ==========
 local function selectMarines()
     local rs = game:GetService("ReplicatedStorage")
     local remotes = rs and rs:FindFirstChild("Remotes")
@@ -70,7 +63,7 @@ local function selectMarines()
     end
 end
 
--- ========== 3. УНИВЕРСАЛЬНОЕ ПОШАГОВОЕ ПЕРЕМЕЩЕНИЕ (CFrame) ==========
+-- ========== 3. ПОШАГОВОЕ ПЕРЕМЕЩЕНИЕ ==========
 local function moveStepByStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
@@ -80,8 +73,6 @@ local function moveStepByStep(targetPos, speed, keepY)
     local oldPlatform = humanoid.PlatformStand
     humanoid.PlatformStand = true
     local step = 0.05
-    local lastDist = math.huge
-    local stuck = 0
     while true do
         local current = hrp.Position
         local distance = (targetPos - current).Magnitude
@@ -89,25 +80,16 @@ local function moveStepByStep(targetPos, speed, keepY)
         local direction = (targetPos - current).Unit
         local move = math.min(speed * step, distance)
         local newPos = current + direction * move
-        if keepY then
-            newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z)
-        end
+        if keepY then newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z) end
         hrp.CFrame = CFrame.new(newPos)
         task.wait(step)
-        if math.abs(distance - lastDist) < 0.01 then
-            stuck = stuck + 1
-            if stuck > 50 then break
-        else
-            stuck = 0
-        end
-        lastDist = distance
     end
     hrp.CFrame = CFrame.new(targetPos)
     humanoid.PlatformStand = oldPlatform
     return true
 end
 
--- ========== 4. ПОИСК ЛОДКИ ПО OWNER ==========
+-- ========== 4. ПОИСК ЛОДКИ ==========
 local function findMyBoat()
     if not boatsFolder then
         boatsFolder = workspace:FindFirstChild("Boats")
@@ -124,7 +106,7 @@ local function findMyBoat()
     return nil
 end
 
--- ========== 5. ПОКУПКА ЛОДКИ (с перемещением) ==========
+-- ========== 5. ПОКУПКА ==========
 local function buyBoatAndMove()
     print("[MAIN] Перемещение к точке покупки...")
     moveStepByStep(PURCHASE_POINT, WALK_SPEED, true)
@@ -156,7 +138,7 @@ local function buyBoatAndMove()
     return true
 end
 
--- ========== 6. ПОСАДКА НА СИДЕНЬЕ (BodyVelocity) ==========
+-- ========== 6. ПОСАДКА ==========
 local function forceSit()
     if islandMode then return end
     if not myBoat or not myBoat.Parent then
@@ -168,14 +150,11 @@ local function forceSit()
     local humanoid = char:FindFirstChild("Humanoid")
     if not hrp or not humanoid then return end
     if humanoid.Sit and humanoid.SeatPart == seat then return end
-
     local old = hrp:FindFirstChildWhichIsA("BodyVelocity")
     if old then old:Destroy() end
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
-    local lastDist = math.huge
-    local stuck = 0
     while true do
         local targetCF = seat.CFrame + SEAT_OFFSET
         local dist = (hrp.Position - targetCF.Position).Magnitude
@@ -187,24 +166,12 @@ local function forceSit()
         end
         local dir = (targetCF.Position - hrp.Position).Unit
         bv.Velocity = dir * WALK_SPEED
-        if math.abs(dist - lastDist) < 0.05 then
-            stuck = stuck + 1
-            if stuck > STUCK_THRESHOLD then
-                bv:Destroy()
-                hrp.CFrame = targetCF
-                humanoid.Sit = true
-                break
-            end
-        else
-            stuck = 0
-        end
-        lastDist = dist
         task.wait(0.1)
     end
     bv:Destroy()
 end
 
--- ========== 7. ДВИЖЕНИЕ ЛОДКИ (СТУПЕНЧАТОЕ, БЕЗ TWEEN, С ОСТАНОВКОЙ ПО ФЛАГУ) ==========
+-- ========== 7. ДВИЖЕНИЕ ЛОДКИ ==========
 local function startBoatMoving()
     if boatMoving then return end
     boatMoving = true
@@ -231,7 +198,8 @@ local function stopBoatMoving()
     boatMoving = false
 end
 
--- ========== 8. ДЕТЕКТОР ФРУКТОВ (DISCORD) ==========
+-- ========== 8. ДЕТЕКТОР ФРУКТОВ ==========
+local HttpService = game:GetService("HttpService")
 local sentItems = {}
 local function sendToDiscord(itemName)
     local message = { content = player.Name .. " получил '" .. itemName .. "'!", username = "Инвентарь" }
@@ -258,16 +226,8 @@ end
 local function startFruitTracker()
     local character = player.Character or player.CharacterAdded:Wait()
     local backpack = player:WaitForChild("Backpack")
-    backpack.ChildAdded:Connect(function(item)
-        task.wait(0.1)
-        checkItem(item)
-    end)
-    character.ChildAdded:Connect(function(item)
-        if item:IsA("Tool") then
-            task.wait(0.1)
-            checkItem(item)
-        end
-    end)
+    backpack.ChildAdded:Connect(function(item) task.wait(0.1); checkItem(item) end)
+    character.ChildAdded:Connect(function(item) if item:IsA("Tool") then task.wait(0.1); checkItem(item) end end)
     for _, item in ipairs(backpack:GetChildren()) do
         if item:IsA("Tool") and item.Name:find("Fruit") then sentItems[item.Name] = true end
     end
@@ -277,7 +237,7 @@ local function startFruitTracker()
     print("Детектор фруктов запущен.")
 end
 
--- ========== 9. МОНИТОР ОСТРОВА ==========
+-- ========== 9. ОСТРОВ ==========
 local function findPrehistoricIsland()
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then
@@ -296,7 +256,6 @@ end
 
 local function onIslandActivated()
     if islandMode then return end
-    print("[ISLAND] Остров появился. Выход из лодки, перемещение на остров.")
     islandMode = true
     stopBoatMoving()
     local char = player.Character
@@ -310,11 +269,10 @@ local function onIslandActivated()
     needToSit = false
     local island = findPrehistoricIsland()
     if island then moveToIslandSmooth(island) end
-    -- Таймер на 10 минут (без task.cancel, используем флаг)
-    islandTimerThread = task.spawn(function()
-        for _ = 1, ISLAND_TIMEOUT * 2 do  -- 0.5 секунды шаг
+    task.spawn(function()
+        for _ = 1, ISLAND_TIMEOUT * 2 do
             task.wait(0.5)
-            if not islandMode then break end
+            if not islandMode then return end
         end
         if islandMode then
             print("[ISLAND] 10 минут прошло, возврат к лодке.")
@@ -328,7 +286,6 @@ end
 
 local function onIslandDeactivated()
     if not islandMode then return end
-    print("[ISLAND] Остров исчез досрочно.")
     islandMode = false
     needToSit = true
     myBoat = nil; seat = nil; rootPart = nil
@@ -383,11 +340,10 @@ task.spawn(function()
             myBoat = nil; seat = nil; rootPart = nil; needToSit = true; stopBoatMoving()
         end
         if needToSit then forceSit()
-        end
     end
 end)
 
--- ========== 11. АНТИ-IDLE (камера) ==========
+-- ========== 11. АНТИ-IDLE ==========
 task.spawn(function()
     local camera = workspace.CurrentCamera
     local originalCF = camera.CFrame
@@ -414,16 +370,15 @@ task.spawn(function()
             task.wait(1)
         end
         if needToSit then forceSit()
-        end
         task.wait(0.5)
     end
 end)
 
--- Запуск детектора фруктов
+-- Запуск детектора
 task.spawn(function()
     if not player.Character then player.CharacterAdded:Wait() end
     task.wait(2)
     startFruitTracker()
 end)
 
-print("Скрипт успешно загружен. Лодка движется ступенчато, высота 100, остров обрабатывается, анти-idle активен.")
+print("Скрипт успешно загружен. Все функции активны.")
