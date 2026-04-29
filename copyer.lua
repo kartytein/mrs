@@ -1,67 +1,60 @@
--- ========== ДЕТЕКТОР ФРУКТОВ (DISCORD) ==========
-local HttpService = game:GetService("HttpService")
-local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
-local sentItems = {}
+-- Диагностический трекер всех изменений позиции персонажа
+local player = game.Players.LocalPlayer
+local char = player.Character or player.CharacterAdded:Wait()
+local hrp = char:WaitForChild("HumanoidRootPart")
+local humanoid = char:WaitForChild("Humanoid")
 
-local function sendToDiscord(itemName)
-    local message = {
-        content = player.Name .. " получил '" .. itemName .. "'!",
-        username = "Инвентарь"
-    }
-    local json = HttpService:JSONEncode(message)
-    pcall(function()
-        HttpService:RequestAsync({
-            Url = DISCORD_WEBHOOK,
-            Method = "POST",
-            Headers = {["Content-Type"] = "application/json"},
-            Body = json
-        })
-    end)
-    print("[DISCORD] Отправлено:", itemName)
+local function log(msg)
+    print("[TRACKER] " .. msg)
+    game:GetService("StarterGui"):SetCore("ChatMakeSystemMessage", {Text = msg, Color = Color3.new(1,0,0)})
 end
 
-local function checkItem(item)
-    if item:IsA("Tool") and item.Name:find("Fruit") then
-        if sentItems[item.Name] then return end
-        sentItems[item.Name] = true
-        sendToDiscord(item.Name)
+-- Отслеживаем изменения CFrame и Position
+local lastPos = hrp.Position
+hrp:GetPropertyChangedSignal("Position"):Connect(function()
+    local newPos = hrp.Position
+    log("Position изменилось: " .. tostring(lastPos) .. " -> " .. tostring(newPos))
+    lastPos = newPos
+end)
+hrp:GetPropertyChangedSignal("CFrame"):Connect(function()
+    log("CFrame изменилось: " .. tostring(hrp.CFrame))
+end)
+
+-- Отслеживаем создание BodyVelocity у персонажа
+char.DescendantAdded:Connect(function(desc)
+    if desc:IsA("BodyVelocity") then
+        log("BodyVelocity создан на персонаже, скорость = " .. tostring(desc.Velocity))
+        desc:GetPropertyChangedSignal("Velocity"):Connect(function()
+            log("BodyVelocity скорость изменена на " .. tostring(desc.Velocity))
+        end)
+    elseif desc:IsA("BodyPosition") then
+        log("BodyPosition создан на персонаже, позиция = " .. tostring(desc.Position))
+    elseif desc:IsA("Tween") then
+        log("Tween создан на персонаже")
     end
-end
+end)
 
-local function startFruitTracker()
-    local backpack = player:WaitForChild("Backpack")
-    local character = player.Character or player.CharacterAdded:Wait()
-    backpack.ChildAdded:Connect(function(item)
-        task.wait(0.1)
-        checkItem(item)
-    end)
-    character.ChildAdded:Connect(function(item)
-        if item:IsA("Tool") then
-            task.wait(0.1)
-            checkItem(item)
-        end
-    end)
-    -- Уже существующие предметы
-    for _, item in ipairs(backpack:GetChildren()) do
-        if item:IsA("Tool") and item.Name:find("Fruit") then
-            sentItems[item.Name] = true
+-- Отслеживаем изменения PlatformStand
+humanoid:GetPropertyChangedSignal("PlatformStand"):Connect(function()
+    log("PlatformStand = " .. tostring(humanoid.PlatformStand))
+end)
+
+-- Отслеживаем изменения Sit
+humanoid:GetPropertyChangedSignal("Sit"):Connect(function()
+    log("Sit = " .. tostring(humanoid.Sit) .. ", SeatPart = " .. tostring(humanoid.SeatPart))
+end)
+
+-- Периодическая проверка наличия BodyVelocity (на случай удаления)
+task.spawn(function()
+    while true do
+        task.wait(1)
+        local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
+        if bv then
+            log("BodyVelocity существует, скорость = " .. tostring(bv.Velocity))
+        else
+            log("BodyVelocity отсутствует")
         end
     end
-    for _, item in ipairs(character:GetChildren()) do
-        if item:IsA("Tool") and item.Name:find("Fruit") then
-            sentItems[item.Name] = true
-        end
-    end
-    print("Детектор фруктов запущен.")
-end
+end)
 
--- Запуск трекера (после того как персонаж загрузился)
-if player.Character then
-    task.wait(2)
-    startFruitTracker()
-else
-    player.CharacterAdded:Connect(function()
-        task.wait(2)
-        startFruitTracker()
-    end)
-end
+log("Трекер запущен. Теперь активируйте эталонный скрипт перемещения к острову. Результаты будут в консоли и в чате.")
