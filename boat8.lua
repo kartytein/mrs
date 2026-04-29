@@ -1,7 +1,11 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С ДВИЖЕНИЕМ ПО ДЕЛЬТАМ ИЗ ЛОГА =====
+-- ===== ФИНАЛЬНЫЙ ПОЛНЫЙ СКРИПТ С ДИАГНОСТИКОЙ =====
+-- Лодка движется только когда персонаж сидит, шаги по дельтам из эталонного лога,
+-- высота 100, анти-idle, детектор фруктов, обработка острова.
+-- В консоль выводится позиция каждые 10 шагов и смена направления.
+
 local player = game.Players.LocalPlayer
 local HttpService = game:GetService("HttpService")
-local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
+local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"  -- замените на свой
 
 -- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
 task.spawn(function()
@@ -139,7 +143,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ЛОДКА: ДВИЖЕНИЕ ПО ДЕЛЬТАМ ИЗ ЛОГА ==========
+-- ========== 6. ЛОДКА: ДВИЖЕНИЕ ТОЛЬКО ПРИ СИДЕНИИ (С ВЫВОДОМ) ==========
 local myBoat = nil
 local seat = nil
 local rootPart = nil
@@ -147,19 +151,25 @@ local humanoid = nil
 local hrp = nil
 local boatMoving = false
 local boatThread = nil
-local currentDirection = -1          -- начинаем влево (как в логах)
-local STEP_INTERVAL = 0.2            -- интервал между шагами (сек)
+local currentDirection = -1          -- начинаем влево
+local STEP_INTERVAL = 0.2
 local X_MIN = -77389.3
 local X_MAX = -47968.4
 local Y_FIXED = 100
 
--- Дельта из лога (первые 16 шагов, зацикливаем)
 local deltaHistory = {-11.5, -6.3, -7.3, -9.4, -7.3, -9.4, -9.4, -8.3, -9.4, -10.4, -9.4, -7.3, -6.3, -5.2, -9.4, -8.3}
 local deltaIndex = 1
 local function getNextDelta()
     local d = deltaHistory[deltaIndex]
     deltaIndex = deltaIndex % #deltaHistory + 1
     return d
+end
+
+local stepCounter = 0
+local function logBoatState()
+    if not rootPart then return end
+    local pos = rootPart.Position
+    print(string.format("[ЛОДКА] Шаг %d | Позиция: (%.1f, %.1f, %.1f)", stepCounter, pos.X, pos.Y, pos.Z))
 end
 
 local function stopBoatMoving()
@@ -171,16 +181,32 @@ local function startBoatMoving()
     boatMoving = true
     boatThread = task.spawn(function()
         while boatMoving do
+            if not (humanoid and humanoid.Sit and humanoid.SeatPart == seat) then
+                stopBoatMoving()
+                print("[ДВИЖЕНИЕ] Остановлено: персонаж не сидит")
+                break
+            end
             local delta = currentDirection * getNextDelta()
-            local newX = rootPart.Position.X + delta
+            local oldX = rootPart.Position.X
+            local newX = oldX + delta
+            local changedDir = false
             if newX <= X_MIN then
                 newX = X_MIN
                 currentDirection = 1
+                changedDir = true
             elseif newX >= X_MAX then
                 newX = X_MAX
                 currentDirection = -1
+                changedDir = true
             end
             rootPart.CFrame = CFrame.new(newX, Y_FIXED, rootPart.Position.Z)
+            stepCounter = stepCounter + 1
+            if stepCounter % 10 == 0 or changedDir then
+                logBoatState()
+                if changedDir then
+                    print("[ДВИЖЕНИЕ] Смена направления на " .. (currentDirection == 1 and "вправо" or "влево"))
+                end
+            end
             task.wait(STEP_INTERVAL)
         end
         boatThread = nil
@@ -198,6 +224,9 @@ local function forceSit()
     if not h or not r then return end
     if h.Sit and h.SeatPart == seat then return end
     sitOnSeat(seat, r, h)
+    if not boatMoving then
+        startBoatMoving()
+    end
 end
 
 -- ========== 7. МОНИТОР ПОСАДКИ ==========
@@ -297,7 +326,7 @@ task.spawn(function()
     sitOnSeat(seat, hrp, humanoid)
     print("Посадка выполнена")
 
-    -- Запуск движения лодки (по дельтам из лога)
+    -- Запуск движения лодки
     startBoatMoving()
 end)
 
@@ -308,4 +337,4 @@ task.spawn(function()
     startFruitTracker()
 end)
 
-print("Скрипт запущен. Лодка движется точно по дельтам из эталонного лога, высота 100, детектор фруктов, остров, анти-idle активны.")
+print("Скрипт полностью запущен. Лодка движется только когда персонаж сидит. Диагностика выводится каждые 10 шагов.")
