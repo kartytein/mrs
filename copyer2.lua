@@ -1,73 +1,85 @@
--- ===== ИМИТАЦИЯ ЭТАЛОННОГО СКРИПТА: ПЕРИОДИЧЕСКОЕ ПЕРЕСОЗДАНИЕ BODYVELOCITY =====
+-- ===== ИМИТАЦИЯ ЭТАЛОННОГО ДВИЖЕНИЯ (BODYVELOCITY НА ПЕРСОНАЖЕ) =====
 local player = game.Players.LocalPlayer
-local HRP = nil
-local seat = nil
-local boat = nil
-local rootPart = nil
 
--- Ждём посадки и получаем HRP
+-- Ждём, пока персонаж сядет в лодку (вручную)
 local function waitForSeat()
     while true do
         local char = player.Character
         if char then
             local humanoid = char:FindFirstChild("Humanoid")
             if humanoid and humanoid.Sit and humanoid.SeatPart then
-                seat = humanoid.SeatPart
-                boat = seat:FindFirstAncestorWhichIsA("Model")
-                rootPart = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
-                HRP = char:FindFirstChild("HumanoidRootPart")
-                return
+                return humanoid.SeatPart
             end
         end
         task.wait(0.5)
     end
 end
 
-waitForSeat()
-print("Персонаж в лодке")
+print("Сядьте в лодку вручную...")
+local seat = waitForSeat()
+local boat = seat:FindFirstAncestorWhichIsA("Model")
+if not boat then error("Лодка не найдена") end
+
+-- Находим персонажа
+local char = player.Character
+local hrp = char:WaitForChild("HumanoidRootPart")
+local humanoid = char:WaitForChild("Humanoid")
 
 -- Настройки движения
 local X_MIN = -77389.3
 local X_MAX = -47968.4
-local currentDirection = -1
-local SPEED_X = -250  -- как в эталоне (отрицательное - влево)
+local currentDirection = -1   -- начинаем влево
+local VELOCITY_SPEED = 250    -- абсолютная скорость
+local VELOCITY_UPDATE_INTERVAL = 0.05  -- частота обновления
 
--- Поток: пересоздаём BodyVelocity каждые 0.2 секунды (если персонаж сидит)
+-- Функция для поддержания BodyVelocity
+local function maintainBodyVelocity()
+    local speedX = currentDirection * VELOCITY_SPEED
+    local bv = hrp:FindFirstChildWhichIsA("BodyVelocity")
+    if bv then
+        bv.Velocity = Vector3.new(speedX, 0, 0)
+    else
+        bv = Instance.new("BodyVelocity")
+        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        bv.Parent = hrp
+        bv.Velocity = Vector3.new(speedX, 0, 0)
+    end
+end
+
+-- Функция проверки границ (меняем направление, если лодка достигла края)
+local function checkBoundaries()
+    local rootPart = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
+    if not rootPart then return end
+    local x = rootPart.Position.X
+    if x <= X_MIN and currentDirection == -1 then
+        currentDirection = 1
+        print("-> Смена направления вправо")
+    elseif x >= X_MAX and currentDirection == 1 then
+        currentDirection = -1
+        print("-> Смена направления влево")
+    end
+end
+
+-- Отключаем коллизии у лодки и персонажа (как в основном скрипте)
+-- (это можно делать раз в 0.3 сек, но для простоты сделаем один раз)
+for _, part in ipairs(boat:GetDescendants()) do
+    if part:IsA("BasePart") then part.CanCollide = false end
+end
+for _, part in ipairs(char:GetDescendants()) do
+    if part:IsA("BasePart") then part.CanCollide = false end
+end
+
+-- Основной цикл: постоянно обновляем BodyVelocity и проверяем границы
 task.spawn(function()
     while true do
-        task.wait(0.2)
-        local char = player.Character
-        local humanoid = char and char:FindFirstChild("Humanoid")
-        if humanoid and humanoid.Sit and humanoid.SeatPart == seat then
-            -- Удаляем старый BodyVelocity, если есть
-            local old = HRP:FindFirstChildWhichIsA("BodyVelocity")
-            if old then old:Destroy() end
-            -- Создаём новый с нужной скоростью
-            local bv = Instance.new("BodyVelocity")
-            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-            bv.Parent = HRP
-            bv.Velocity = Vector3.new(currentDirection * math.abs(SPEED_X), 0, 0)
-            -- Добавляем небольшой случайный шум (как в эталоне)
-            bv.Velocity = bv.Velocity + Vector3.new(0, math.random(-3,3)*0.01, math.random(-3,3)*0.01)
+        if not (humanoid.Sit and humanoid.SeatPart == seat) then
+            print("Движение остановлено (персонаж не сидит)")
+            break
         end
+        maintainBodyVelocity()
+        checkBoundaries()
+        task.wait(VELOCITY_UPDATE_INTERVAL)
     end
 end)
 
--- Поток смены направления (по достижении границ)
-task.spawn(function()
-    while true do
-        task.wait(0.1)
-        if rootPart then
-            local x = rootPart.Position.X
-            if x <= X_MIN and currentDirection == -1 then
-                currentDirection = 1
-                print("Смена направления → вправо")
-            elseif x >= X_MAX and currentDirection == 1 then
-                currentDirection = -1
-                print("Смена направления → влево")
-            end
-        end
-    end
-end)
-
-print("Скрипт запущен. Лодка должна двигаться плавно, как в эталоне.")
+print("Движение активировано (BodyVelocity на персонаже). Лодка должна поехать.")
