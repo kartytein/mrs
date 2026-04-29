@@ -1,17 +1,17 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ (СТАБИЛЬНЫЙ) =====
--- Версия: 2.0
--- Исправлено: отсутствие task.cancel, смерть/респавн, детектор фруктов, остров, автопокупка лодки.
+-- ===== ФИНАЛЬНЫЙ СТАБИЛЬНЫЙ СКРИПТ =====
+-- Версия 3.0
+-- Исправлены все известные ошибки: task.cancel заменён флагами, анти-idle, детектор фруктов, работа с островом.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local tweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
 
--- НАСТРОЙКИ
+-- НАСТРОЙКИ (измените под свои координаты)
 local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
 local BOAT_X_MIN = -77389.3
 local BOAT_X_MAX = -47968.4
-local BOAT_Y_FIXED = 100
+local BOAT_Y_FIXED = 100               -- фиксированная высота лодки
 local WALK_SPEED = 150
 local BOAT_SPEED = 420
 local SEAT_OFFSET = Vector3.new(0, 2.5, 0)
@@ -19,8 +19,8 @@ local COLLISION_INTERVAL = 0.3
 local SIT_CHECK_INTERVAL = 0.3
 local STUCK_THRESHOLD = 30
 local BOAT_SEARCH_TIMEOUT = 10
-local ISLAND_TIMEOUT = 600
-local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
+local ISLAND_TIMEOUT = 600             -- 10 минут
+local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"  -- замените на свой
 
 -- Глобальные переменные
 local myBoat = nil
@@ -32,8 +32,8 @@ local stopScript = false
 local boatsFolder = workspace:FindFirstChild("Boats")
 local islandMode = false
 local islandTimerThread = nil
-local boatMoving = false          -- флаг вместо task.cancel
-local currentDirection = -1      -- -1 = влево, 1 = вправо
+local boatMoving = false
+local currentDirection = -1   -- -1 = влево, 1 = вправо
 
 -- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
 task.spawn(function()
@@ -310,12 +310,12 @@ local function onIslandActivated()
     needToSit = false
     local island = findPrehistoricIsland()
     if island then moveToIslandSmooth(island) end
-    if islandTimerThread then
-        pcall(function() task.cancel(islandTimerThread) end)  -- безопасно
-        islandTimerThread = nil
-    end
+    -- Таймер на 10 минут (без task.cancel, используем флаг)
     islandTimerThread = task.spawn(function()
-        task.wait(ISLAND_TIMEOUT)
+        for _ = 1, ISLAND_TIMEOUT * 2 do  -- 0.5 секунды шаг
+            task.wait(0.5)
+            if not islandMode then break end
+        end
         if islandMode then
             print("[ISLAND] 10 минут прошло, возврат к лодке.")
             islandMode = false
@@ -329,7 +329,6 @@ end
 local function onIslandDeactivated()
     if not islandMode then return end
     print("[ISLAND] Остров исчез досрочно.")
-    if islandTimerThread then pcall(function() task.cancel(islandTimerThread) end) end
     islandMode = false
     needToSit = true
     myBoat = nil; seat = nil; rootPart = nil
@@ -427,4 +426,4 @@ task.spawn(function()
     startFruitTracker()
 end)
 
-print("Финальный скрипт запущен. Лодка движется ступенчато, высота 100, остров обрабатывается.")
+print("Скрипт успешно загружен. Лодка движется ступенчато, высота 100, остров обрабатывается, анти-idle активен.")
