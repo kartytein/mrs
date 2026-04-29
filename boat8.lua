@@ -1,15 +1,7 @@
--- ===== ИТОГОВЫЙ СКРИПТ С ДВИЖЕНИЕМ КАК В ЭТАЛОНЕ (МАЛЕНЬКИЕ ШАГИ) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ДВИЖЕНИЕМ МАЛЕНЬКИМИ ШАГАМИ (КАК В ЭТАЛОНЕ) =====
 local player = game.Players.LocalPlayer
 local HttpService = game:GetService("HttpService")
-local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
-
--- НАСТРОЙКИ ДВИЖЕНИЯ ЛОДКИ (на основе лога)
-local X_MIN = -77389.3
-local X_MAX = -47968.4
-local Y_FIXED = 100
-local STEP_INTERVAL = 0.2          -- интервал между шагами (сек)
-local STEP_MIN = -11.5              -- минимальное смещение по X (отрицательное = влево)
-local STEP_MAX = -5.2               -- максимальное смещение
+local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"  -- замените на свой
 
 -- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
 task.spawn(function()
@@ -140,14 +132,14 @@ task.spawn(function()
     local camera = workspace.CurrentCamera
     local originalCF = camera.CFrame
     while true do
-        task.wait(300)
+        task.wait(300)                     -- каждые 5 минут
         camera.CFrame = camera.CFrame * CFrame.Angles(0, math.rad(1), 0)
         task.wait(0.5)
         camera.CFrame = originalCF
     end
 end)
 
--- ========== 6. ЛОДКА: ДВИЖЕНИЕ МАЛЕНЬКИМИ ШАГАМИ ==========
+-- ========== 6. ЛОДКА: ДВИЖЕНИЕ МАЛЕНЬКИМИ ШАГАМИ (КАК В ЭТАЛОНЕ) ==========
 local myBoat = nil
 local seat = nil
 local rootPart = nil
@@ -155,7 +147,12 @@ local humanoid = nil
 local hrp = nil
 local boatMoving = false
 local boatThread = nil
-local currentDirection = -1  -- начинаем движение влево (как в логах)
+local currentDirection = -1          -- начинаем влево
+local STEP_SIZE = 8.5                -- средний шаг по X (из лога)
+local STEP_INTERVAL = 0.2            -- интервал между шагами (сек)
+local X_MIN = -77389.3
+local X_MAX = -47968.4
+local Y_FIXED = 100
 
 local function stopBoatMoving()
     boatMoving = false
@@ -165,25 +162,18 @@ local function startBoatMoving()
     if boatThread then return end
     boatMoving = true
     boatThread = task.spawn(function()
-        local lastStepTime = tick()
         while boatMoving do
-            local now = tick()
-            if now - lastStepTime >= STEP_INTERVAL then
-                -- Генерируем случайный шаг в диапазоне от STEP_MIN до STEP_MAX (отрицательные)
-                local stepX = STEP_MIN + (STEP_MAX - STEP_MIN) * math.random()
-                stepX = stepX * currentDirection  -- учитываем направление (currentDirection = -1 влево, 1 вправо)
-                local newX = rootPart.Position.X + stepX
-                if newX <= X_MIN then
-                    newX = X_MIN
-                    currentDirection = 1
-                elseif newX >= X_MAX then
-                    newX = X_MAX
-                    currentDirection = -1
-                end
-                rootPart.CFrame = CFrame.new(newX, Y_FIXED, rootPart.Position.Z)
-                lastStepTime = now
+            local delta = currentDirection * STEP_SIZE
+            local newX = rootPart.Position.X + delta
+            if newX <= X_MIN then
+                newX = X_MIN
+                currentDirection = 1
+            elseif newX >= X_MAX then
+                newX = X_MAX
+                currentDirection = -1
             end
-            task.wait(0.05)
+            rootPart.CFrame = CFrame.new(newX, Y_FIXED, rootPart.Position.Z)
+            task.wait(STEP_INTERVAL)
         end
         boatThread = nil
     end)
@@ -202,49 +192,7 @@ local function forceSit()
     sitOnSeat(seat, r, h)
 end
 
--- ========== 7. ОСНОВНОЙ ПОТОК ==========
-task.spawn(function()
-    -- Выбор команды Marines
-    local rs = game:GetService("ReplicatedStorage")
-    local remotes = rs and rs:FindFirstChild("Remotes")
-    if remotes then
-        local commF = remotes:FindFirstChild("CommF_")
-        if commF then pcall(function() commF:InvokeServer("SetTeam", "Marines") end) end
-        local modules = rs:FindFirstChild("Modules")
-        local event = modules and modules:FindFirstChild("RE/OnEventServiceActivity")
-        if event then pcall(function() event:FireServer() end) end
-    end
-
-    -- Покупка лодки
-    buyBoat()
-    print("Ожидание появления лодки...")
-    task.wait(3)
-    for i = 1, 10 do
-        myBoat = findMyBoat()
-        if myBoat then break end
-        task.wait(1)
-    end
-    if not myBoat then error("Лодка не найдена") end
-    print("Лодка найдена:", myBoat.Name)
-    seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
-    rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
-    if not seat or not rootPart then error("Нет сиденья или основной части") end
-    for _, part in ipairs(myBoat:GetDescendants()) do if part:IsA("BasePart") then part.CanCollide = false end end
-    local native = myBoat:FindFirstChild("Script")
-    if native then native.Disabled = true end
-
-    -- Посадка
-    local char = player.Character or player.CharacterAdded:Wait()
-    hrp = char:WaitForChild("HumanoidRootPart")
-    humanoid = char:WaitForChild("Humanoid")
-    sitOnSeat(seat, hrp, humanoid)
-    print("Посадка выполнена")
-
-    -- Запуск движения лодки
-    startBoatMoving()
-end)
-
--- Мониторинг посадки (при вылезании)
+-- ========== 7. МОНИТОР ПОСАДКИ ==========
 task.spawn(function()
     while true do
         task.wait(0.5)
@@ -276,7 +224,7 @@ task.spawn(function()
     end
 end)
 
--- Мониторинг острова (при появлении выходим, при исчезновении возвращаемся)
+-- ========== 8. МОНИТОР ОСТРОВА ==========
 task.spawn(function()
     while true do
         local island = findPrehistoricIsland()
@@ -288,7 +236,6 @@ task.spawn(function()
             task.wait(0.5)
             local targetPos = island:GetPivot().Position + Vector3.new(0, 30, 0)
             moveStepByStep(targetPos, 200, true)
-            -- Ждём исчезновения острова
             while workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Prehistoricisland") do
                 task.wait(1)
             end
@@ -301,6 +248,51 @@ task.spawn(function()
     end
 end)
 
+-- ========== 9. ГЛАВНЫЙ ПОТОК (ПОКУПКА, ПОСАДКА, ЗАПУСК ДВИЖЕНИЯ) ==========
+task.spawn(function()
+    -- Выбор команды Marines
+    local rs = game:GetService("ReplicatedStorage")
+    local remotes = rs and rs:FindFirstChild("Remotes")
+    if remotes then
+        local commF = remotes:FindFirstChild("CommF_")
+        if commF then pcall(function() commF:InvokeServer("SetTeam", "Marines") end) end
+        local modules = rs:FindFirstChild("Modules")
+        local event = modules and modules:FindFirstChild("RE/OnEventServiceActivity")
+        if event then pcall(function() event:FireServer() end) end
+    end
+
+    -- Покупка лодки
+    buyBoat()
+    print("Ожидание появления лодки...")
+    task.wait(3)
+    for i = 1, 10 do
+        myBoat = findMyBoat()
+        if myBoat then break end
+        task.wait(1)
+    end
+    if not myBoat then error("Лодка не найдена") end
+    print("Лодка найдена:", myBoat.Name)
+
+    seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
+    rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+    if not seat or not rootPart then error("Нет сиденья или основной части") end
+    for _, part in ipairs(myBoat:GetDescendants()) do
+        if part:IsA("BasePart") then part.CanCollide = false end
+    end
+    local native = myBoat:FindFirstChild("Script")
+    if native then native.Disabled = true end
+
+    -- Посадка
+    local char = player.Character or player.CharacterAdded:Wait()
+    hrp = char:WaitForChild("HumanoidRootPart")
+    humanoid = char:WaitForChild("Humanoid")
+    sitOnSeat(seat, hrp, humanoid)
+    print("Посадка выполнена")
+
+    -- Запуск движения лодки (маленькими шагами)
+    startBoatMoving()
+end)
+
 -- Запуск детектора фруктов
 task.spawn(function()
     if not player.Character then player.CharacterAdded:Wait() end
@@ -308,4 +300,4 @@ task.spawn(function()
     startFruitTracker()
 end)
 
-print("Скрипт запущен. Лодка движется маленькими шагами, как в эталонном скрипте.")
+print("Скрипт полностью запущен. Лодка движется маленькими шагами (как в эталоне), высота 100, детектор фруктов, остров, анти-idle активны.")
