@@ -1,11 +1,7 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ ДВИЖЕНИЯ ЛОДКИ (ПО ЭТАЛОНУ) =====
--- Создаёт BodyVelocity на UpperTorso персонажа с постоянным обновлением скорости,
--- меняет направление при достижении границ X, не пересоздаёт BodyVelocity.
--- Лодка движется только когда персонаж сидит.
-
+-- ===== ТОЧНОЕ ПОВТОРЕНИЕ ЭТАЛОННОГО СКРИПТА (BODYVELOCITY НА UPPERTORSO) =====
 local player = game.Players.LocalPlayer
 
--- Ждём, пока персонаж сядет в лодку (вручную или автоматически)
+-- Ждём посадки
 local function waitForSeat()
     while true do
         local char = player.Character
@@ -26,59 +22,61 @@ if not boat then error("Лодка не найдена") end
 local rootPart = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
 if not rootPart then error("Нет основной части лодки") end
 
--- Получаем UpperTorso персонажа (важно! эталон создаёт BodyVelocity именно на нём)
 local char = player.Character
 local upperTorso = char:FindFirstChild("UpperTorso")
-if not upperTorso then
-    error("UpperTorso не найден (возможно, персонаж ещё не загружен полностью)")
-end
+if not upperTorso then error("UpperTorso не найден") end
 
--- Настройки движения
-local X_MIN = -77389.3
-local X_MAX = -47968.4
-local currentDirection = -1   -- начинаем влево
-local SPEED_X = 250            -- абсолютная скорость по X
-local SPEED_Y = -2.0           -- небольшое смещение вниз (как в эталоне)
-local SPEED_Z = -2.0           -- небольшое смещение по Z
-
--- Создаём BodyVelocity на UpperTorso (один раз)
+-- Создаём BodyVelocity с нулевой скоростью (как в эталоне)
 local bv = Instance.new("BodyVelocity")
 bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
 bv.Parent = upperTorso
-bv.Velocity = Vector3.new(currentDirection * SPEED_X, SPEED_Y, SPEED_Z)
-print("BodyVelocity создан на UpperTorso, начальная скорость: " .. tostring(bv.Velocity))
+bv.Velocity = Vector3.new(0, 2, 0)  -- как в логе: "скорость = 0, 2, 0"
+print("BodyVelocity создан с начальной скоростью 0,2,0")
 
--- Отключаем коллизии у лодки и персонажа (как в эталоне, но для надёжности)
-for _, part in ipairs(boat:GetDescendants()) do
-    if part:IsA("BasePart") then part.CanCollide = false end
-end
-for _, part in ipairs(char:GetDescendants()) do
-    if part:IsA("BasePart") then part.CanCollide = false end
-end
+-- Небольшая задержка перед установкой боевой скорости
+task.wait(0.1)
+bv.Velocity = Vector3.new(-250, -2, -2)
+print("Скорость установлена: -250, -2, -2")
 
--- Основной цикл: следим за позицией лодки и меняем направление при достижении границ
+-- Настройки границ
+local X_MIN = -77389.3
+local X_MAX = -47968.4
+local currentDirection = -1
+local baseSpeedX = 250
+local speedY = -2
+local speedZ = -2
+
+-- Поток для постоянного микро-обновления скорости (каждые 0.05 сек, как в эталоне)
 task.spawn(function()
     while true do
-        -- Если персонаж перестал сидеть, останавливаем движение (удаляем BodyVelocity)
         if not (humanoid and humanoid.Sit and humanoid.SeatPart == seat) then
+            print("Персонаж вышел, останавливаем движение")
             bv:Destroy()
-            print("Движение остановлено (персонаж вышел)")
             break
         end
-        local x = rootPart.Position.X
-        local newDir = currentDirection
-        if x <= X_MIN and currentDirection == -1 then
-            newDir = 1
-        elseif x >= X_MAX and currentDirection == 1 then
-            newDir = -1
-        end
-        if newDir ~= currentDirection then
-            currentDirection = newDir
-            bv.Velocity = Vector3.new(currentDirection * SPEED_X, SPEED_Y, SPEED_Z)
-            print("Смена направления, новая скорость: " .. tostring(bv.Velocity))
-        end
-        task.wait(0.2)  -- проверяем каждые 0.2 секунды (как в логах)
+        -- Обновляем скорость, добавляя микро-вариации (имитируем лог)
+        local microX = baseSpeedX * currentDirection + (math.random() - 0.5) * 0.001
+        bv.Velocity = Vector3.new(microX, speedY + (math.random() - 0.5) * 0.001, speedZ + (math.random() - 0.5) * 0.001)
+        task.wait(0.05)
     end
 end)
 
-print("Скрипт движения лодки запущен. Лодка будет двигаться, пока вы сидите.")
+-- Отслеживаем позицию лодки и меняем направление
+task.spawn(function()
+    while true do
+        if not (humanoid and humanoid.Sit and humanoid.SeatPart == seat) then
+            break
+        end
+        local x = rootPart.Position.X
+        if x <= X_MIN and currentDirection == -1 then
+            currentDirection = 1
+            print("Смена направления → вправо (X = " .. x .. ")")
+        elseif x >= X_MAX and currentDirection == 1 then
+            currentDirection = -1
+            print("Смена направления → влево (X = " .. x .. ")")
+        end
+        task.wait(0.2)
+    end
+end)
+
+print("Скрипт точно повторяет эталон. Лодка должна двигаться без сбросов.")
