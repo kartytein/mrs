@@ -1,10 +1,10 @@
--- ===== ФИНАЛЬНЫЙ ПОЛНЫЙ СКРИПТ (ИСПРАВЛЕН ВОЗВРАТ В ЛОДКУ ПОСЛЕ ОСТРОВА) =====
+-- ===== ФИНАЛЬНЫЙ ПОЛНЫЙ СКРИПТ (ВОССТАНОВЛЕНО ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ДЛЯ ЛОДКИ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
 local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"  -- замените на свой
 
--- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
+-- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ (ПЕРСОНАЖ + ЛОДКА) ==========
 task.spawn(function()
     while true do
         local char = player.Character
@@ -16,6 +16,12 @@ task.spawn(function()
             local upper = char:FindFirstChild("UpperTorso")
             if lower then lower.CanCollide = false end
             if upper then upper.CanCollide = false end
+        end
+        local boat = myBoat  -- глобальная переменная myBoat (может быть nil)
+        if boat then
+            for _, part in ipairs(boat:GetDescendants()) do
+                if part:IsA("BasePart") then part.CanCollide = false end
+            end
         end
         task.wait(0.3)
     end
@@ -251,7 +257,6 @@ local function forceSit()
                 end
                 local native = myBoat:FindFirstChild("Script")
                 if native then native.Disabled = true end
-                print("[FORCESIT] Лодка найдена заново: " .. myBoat.Name)
             else
                 myBoat = nil
                 seat = nil
@@ -259,7 +264,6 @@ local function forceSit()
                 return
             end
         else
-            print("[FORCESIT] Лодка не найдена, не могу сесть")
             return
         end
     end
@@ -272,11 +276,7 @@ local function forceSit()
     local h = char:FindFirstChild("Humanoid")
     local r = char:FindFirstChild("HumanoidRootPart")
     if not h or not r then return end
-    if h.Sit and h.SeatPart == seat then
-        print("[FORCESIT] Уже сидим")
-        return
-    end
-    print("[FORCESIT] Принудительная посадка...")
+    if h.Sit and h.SeatPart == seat then return end
     sitOnSeat(seat, r, h)
 end
 
@@ -353,7 +353,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 8. МОНИТОР ОСТРОВА (С КУЛДАУНОМ) ==========
+-- ========== 8. МОНИТОР ОСТРОВА ==========
 task.spawn(function()
     local islandCoolDown = false
     local cooldownTimer = 0
@@ -405,7 +405,6 @@ task.spawn(function()
             print("[ОСТРОВ] Режим острова завершён. Возврат к лодке.")
             islandCoolDown = true
             cooldownTimer = tick()
-            -- Принудительно обновляем ссылки на лодку перед посадкой
             myBoat = findMyBoat()
             if myBoat then
                 seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
@@ -416,16 +415,12 @@ task.spawn(function()
                     end
                     local native = myBoat:FindFirstChild("Script")
                     if native then native.Disabled = true end
-                    print("[ОСТРОВ] Лодка найдена заново: " .. myBoat.Name)
                 else
                     myBoat = nil
                 end
-            else
-                print("[ОСТРОВ] Лодка не найдена, покупка новой...")
             end
             forceSit()
             startBoatMovement()
-            task.wait(2)
             task.wait(10)
             islandCoolDown = false
         end
@@ -439,4 +434,4 @@ task.spawn(function()
     startFruitTracker()
 end)
 
-print("Скрипт полностью запущен. Лодка движется по эталону, после острова возврат гарантирован.")
+print("Скрипт полностью запущен. Коллизии постоянно отключены для персонажа и лодки.")
