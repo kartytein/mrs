@@ -1,8 +1,8 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ (С ПОДДЕРЖАНИЕМ ВЫСОТЫ И БЕЗ ОШИБОК ОТМЕНЫ ПОТОКА) =====
+-- ===== ФИНАЛЬНЫЙ ПОЛНЫЙ СКРИПТ (ИСПРАВЛЕН ВОЗВРАТ ПОСЛЕ ОСТРОВА) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
-local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
+local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"  -- замените на свой
 
 -- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
 task.spawn(function()
@@ -140,7 +140,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ДВИЖЕНИЕ ЛОДКИ (ПОДДЕРЖАНИЕ ВЫСОТЫ, БЕЗ ОШИБОК ОТМЕНЫ) ==========
+-- ========== 6. ДВИЖЕНИЕ ЛОДКИ (С ПОДДЕРЖАНИЕМ ВЫСОТЫ) ==========
 local myBoat = nil
 local seat = nil
 local rootPart = nil
@@ -193,7 +193,6 @@ local function startBoatMovement()
         local upperTorso = char:FindFirstChild("UpperTorso")
         if not upperTorso then return end
         
-        -- Нулевой BodyVelocity, затем рабочий
         if bv then bv:Destroy() end
         bv = Instance.new("BodyVelocity")
         bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
@@ -209,12 +208,10 @@ local function startBoatMovement()
                 break
             end
             if rootPart then
-                -- Корректировка высоты (удержание Y)
                 local pos = rootPart.Position
                 if math.abs(pos.Y - TARGET_Y) > 0.5 then
                     rootPart.CFrame = CFrame.new(pos.X, TARGET_Y, pos.Z)
                 end
-                -- Смена направления
                 if pos.X <= X_MIN and currentDirection == -1 then
                     currentDirection = 1
                     ensureBodyVelocity()
@@ -232,28 +229,35 @@ local function startBoatMovement()
     end)
 end
 
--- ========== 7. ПРИНУДИТЕЛЬНАЯ ПОСАДКА ==========
+-- ========== 7. УСИЛЕННАЯ ПОСАДКА (С ПОВТОРНЫМИ ПОПЫТКАМИ) ==========
 local function forceSit()
     if not myBoat or not myBoat.Parent then
         myBoat = findMyBoat()
-        if myBoat then
-            seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
-            rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
-            if seat and rootPart then
-                for _, part in ipairs(myBoat:GetDescendants()) do
-                    if part:IsA("BasePart") then part.CanCollide = false end
-                end
-                local native = myBoat:FindFirstChild("Script")
-                if native then native.Disabled = true end
-            else
-                myBoat = nil
-                seat = nil
-                rootPart = nil
-                return
+        if not myBoat then
+            print("[FORCESIT] Лодка не найдена, покупка новой...")
+            local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
+            moveStepByStep(PURCHASE_POINT, 150, true)
+            buyBoat()
+            task.wait(3)
+            for i = 1, 10 do
+                myBoat = findMyBoat()
+                if myBoat then break end
+                task.wait(1)
             end
-        else
+            if not myBoat then return end
+        end
+        seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
+        rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+        if not seat or not rootPart then
+            myBoat = nil
             return
         end
+        for _, part in ipairs(myBoat:GetDescendants()) do
+            if part:IsA("BasePart") then part.CanCollide = false end
+        end
+        local native = myBoat:FindFirstChild("Script")
+        if native then native.Disabled = true end
+        print("[FORCESIT] Лодка найдена: " .. myBoat.Name)
     end
     if not seat then
         seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
@@ -265,7 +269,21 @@ local function forceSit()
     local r = char:FindFirstChild("HumanoidRootPart")
     if not h or not r then return end
     if h.Sit and h.SeatPart == seat then return end
-    sitOnSeat(seat, r, h)
+    
+    for attempt = 1, 10 do
+        sitOnSeat(seat, r, h)
+        task.wait(1)
+        if h.Sit and h.SeatPart == seat then
+            print("[FORCESIT] Посадка успешна с " .. attempt .. " попытки")
+            break
+        end
+        print("[FORCESIT] Попытка " .. attempt .. " не удалась, повторяем...")
+    end
+    if not (h.Sit and h.SeatPart == seat) then
+        r.CFrame = seat.CFrame + Vector3.new(0, 2.5, 0)
+        h.Sit = true
+        print("[FORCESIT] Телепортация на сиденье")
+    end
     if not movementActive then
         startBoatMovement()
     end
@@ -304,7 +322,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 9. МОНИТОР ОСТРОВА (С КУЛДАУНОМ) ==========
+-- ========== 9. МОНИТОР ОСТРОВА (С ГАРАНТИРОВАННЫМ ВОЗВРАТОМ) ==========
 task.spawn(function()
     local islandCoolDown = false
     local cooldownTimer = 0
@@ -373,8 +391,13 @@ task.spawn(function()
                 print("[ОСТРОВ] Лодка не найдена, покупка новой...")
             end
             forceSit()
+            if rootPart and rootPart.Parent and humanoid and humanoid.Sit then
+                local pos = rootPart.Position
+                rootPart.CFrame = CFrame.new(pos.X, 100, pos.Z)
+                print("[ОСТРОВ] Лодка поднята на высоту 100")
+            end
             startBoatMovement()
-            task.wait(12)
+            task.wait(2)
             islandCoolDown = false
         end
     end
@@ -418,8 +441,6 @@ task.spawn(function()
     humanoid = char:WaitForChild("Humanoid")
     sitOnSeat(seat, hrp, humanoid)
     print("Посадка выполнена")
-    
-    -- Запуск движения (высота будет поддерживаться в цикле)
     startBoatMovement()
 end)
 
@@ -429,4 +450,4 @@ task.spawn(function()
     startFruitTracker()
 end)
 
-print("Скрипт запущен. Лодка удерживается на высоте 100, ошибок отмены потоков нет.")
+print("Скрипт запущен. Лодка удерживается на высоте 100, остров обрабатывается, возврат гарантирован.")
