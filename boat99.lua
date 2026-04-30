@@ -1,7 +1,4 @@
--- ===== ФИНАЛЬНЫЙ ПОЛНЫЙ СКРИПТ (ИСПРАВЛЕННЫЙ) =====
--- Исправлены: ошибка отмены потока, движение только по X, фиксация высоты лодки через BodyPosition.
--- Все остальные функции (остров, детектор фруктов, анти-idle) сохранены.
-
+-- ===== ИСПРАВЛЕННЫЙ ФИНАЛЬНЫЙ СКРИПТ (ПОСТОЯННАЯ ПРОВЕРКА ПОСАДКИ, БЕЗ ОСТАНОВОК) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
@@ -124,7 +121,6 @@ end
 
 -- ========== 4. ОСТРОВ ==========
 local islandMode = false
-local islandTimerThread = nil
 local function findPrehistoricIsland()
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then return obj end
@@ -193,7 +189,6 @@ end
 local function stopBoatMovement()
     movementActive = false
     if movementThread then
-        pcall(task.cancel, movementThread)
         movementThread = nil
     end
     if bv then bv:Destroy(); bv = nil end
@@ -242,6 +237,7 @@ local function startBoatMovement()
     end)
 end
 
+-- ПРИНУДИТЕЛЬНАЯ ПОСАДКА (БУДЕТ ВЫЗЫВАТЬСЯ ПОВТОРНО, ПОКА НЕ СЯДЕТ)
 local function forceSit()
     if not myBoat or not myBoat.Parent then return end
     if not seat then seat = myBoat:FindFirstChildWhichIsA("VehicleSeat") end
@@ -253,41 +249,98 @@ local function forceSit()
     if not h or not r then return end
     if h.Sit and h.SeatPart == seat then return end
     sitOnSeat(seat, r, h)
-    if not movementActive then
-        startBoatMovement()
-    end
+    -- Не запускаем движение здесь, оно запустится в мониторе после успешной посадки
 end
 
--- ========== 7. МОНИТОР ПОСАДКИ ==========
+-- ========== 7. ГЛАВНЫЙ БЕСКОНЕЧНЫЙ МОНИТОР ПОСАДКИ И ДВИЖЕНИЯ ==========
 task.spawn(function()
     while true do
-        task.wait(0.5)
-        if islandMode then continue end
-        local char = player.Character
-        if not char then
-            if movementActive then stopBoatMovement() end
-            player.CharacterAdded:Wait()
-            char = player.Character
-            myBoat = nil; seat = nil; rootPart = nil
-            continue
-        end
-        if not myBoat or not myBoat.Parent then
-            myBoat = findMyBoat()
-            if myBoat then
+        -- Если режим острова активен, пропускаем всё, кроме проверки персонажа
+        if not islandMode then
+            -- 1. Проверяем существование лодки
+            if not myBoat or not myBoat.Parent then
+                myBoat = findMyBoat()
+                if myBoat then
+                    seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
+                    rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
+                    if seat and rootPart then
+                        for _, part in ipairs(myBoat:GetDescendants()) do
+                            if part:IsA("BasePart") then part.CanCollide = false end
+                        end
+                        local native = myBoat:FindFirstChild("Script")
+                        if native then native.Disabled = true end
+                    else
+                        myBoat = nil
+                    end
+                end
+            end
+
+            -- 2. Если лодки нет, покупаем (предварительно переместившись)
+            if not myBoat or not myBoat.Parent then
+                local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
+                moveStepByStep(PURCHASE_POINT, 150, true)
+                buyBoat()
+                task.wait(3)
+                for i = 1, 10 do
+                    myBoat = findMyBoat()
+                    if myBoat then break end
+                    task.wait(1)
+                end
+                if not myBoat then
+                    task.wait(5)
+                    continue
+                end
                 seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
                 rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
-                if seat and rootPart then
-                    for _, part in ipairs(myBoat:GetDescendants()) do if part:IsA("BasePart") then part.CanCollide = false end end
-                    local native = myBoat:FindFirstChild("Script")
-                    if native then native.Disabled = true end
-                else
+                if not seat or not rootPart then
                     myBoat = nil
+                    continue
+                end
+                for _, part in ipairs(myBoat:GetDescendants()) do
+                    if part:IsA("BasePart") then part.CanCollide = false end
+                end
+                local native = myBoat:FindFirstChild("Script")
+                if native then native.Disabled = true end
+                -- Первая посадка после покупки
+                local char = player.Character or player.CharacterAdded:Wait()
+                hrp = char:WaitForChild("HumanoidRootPart")
+                humanoid = char:WaitForChild("Humanoid")
+                sitOnSeat(seat, hrp, humanoid)
+                startBoatMovement()
+            end
+
+            -- 3. Проверяем, сидит ли персонаж на сиденье
+            local char = player.Character
+            local h = char and char:FindFirstChild("Humanoid")
+            if h and seat then
+                if not (h.Sit and h.SeatPart == seat) then
+                    -- Не сидит: останавливаем движение и пытаемся сесть
+                    if movementActive then stopBoatMovement() end
+                    forceSit()
+                    -- Если после посадки движение остановлено, запускаем заново
+                    if not movementActive and h.Sit and h.SeatPart == seat then
+                        startBoatMovement()
+                    end
+                else
+                    -- Сидит: проверяем, работает ли движение
+                    if not movementActive then
+                        startBoatMovement()
+                    end
                 end
             end
         end
-        if humanoid and seat and not (humanoid.Sit and humanoid.SeatPart == seat) then
-            forceSit()
+
+        -- Даже в режиме острова нужно следить за персонажем (чтобы после острова он был в лодке)
+        if not player.Character then
+            player.CharacterAdded:Wait()
+            -- Сброс состояния лодки, чтобы перепокупать
+            myBoat = nil
+            seat = nil
+            rootPart = nil
+            if movementActive then stopBoatMovement() end
         end
+
+        task.wait(0.5)
     end
 end)
 
@@ -298,7 +351,7 @@ task.spawn(function()
         if island and not islandMode then
             print("[ОСТРОВ] Появился! Выход из лодки, перемещение на остров.")
             islandMode = true
-            stopBoatMovement()
+            if movementActive then stopBoatMovement() end
             if humanoid then humanoid.Sit = false end
             task.wait(0.5)
             local targetPos = island:GetPivot().Position + Vector3.new(0, 30, 0)
@@ -328,59 +381,17 @@ task.spawn(function()
             end
             print("[ОСТРОВ] Режим острова завершён. Возврат к лодке.")
             islandMode = false
-            forceSit()
-            startBoatMovement()
+            -- Принудительно вызовем посадку в следующем цикле
         end
         task.wait(1)
     end
 end)
 
--- ========== 9. ГЛАВНЫЙ ПОТОК (ПОКУПКА, ПОСАДКА) ==========
-task.spawn(function()
-    local rs = game:GetService("ReplicatedStorage")
-    local remotes = rs and rs:FindFirstChild("Remotes")
-    if remotes then
-        local commF = remotes:FindFirstChild("CommF_")
-        if commF then pcall(function() commF:InvokeServer("SetTeam", "Marines") end) end
-        local modules = rs:FindFirstChild("Modules")
-        local event = modules and modules:FindFirstChild("RE/OnEventServiceActivity")
-        if event then pcall(function() event:FireServer() end) end
-    end
-
-    local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
-    moveStepByStep(PURCHASE_POINT, 150, true)
-    buyBoat()
-    print("Ожидание появления лодки...")
-    task.wait(3)
-    for i = 1, 10 do
-        myBoat = findMyBoat()
-        if myBoat then break end
-        task.wait(1)
-    end
-    if not myBoat then error("Лодка не найдена") end
-    print("Лодка найдена:", myBoat.Name)
-    seat = myBoat:FindFirstChildWhichIsA("VehicleSeat")
-    rootPart = myBoat.PrimaryPart or myBoat:FindFirstChildWhichIsA("BasePart")
-    if not seat or not rootPart then error("Нет сиденья или основной части") end
-    for _, part in ipairs(myBoat:GetDescendants()) do
-        if part:IsA("BasePart") then part.CanCollide = false end
-    end
-    local native = myBoat:FindFirstChild("Script")
-    if native then native.Disabled = true end
-
-    local char = player.Character or player.CharacterAdded:Wait()
-    hrp = char:WaitForChild("HumanoidRootPart")
-    humanoid = char:WaitForChild("Humanoid")
-    sitOnSeat(seat, hrp, humanoid)
-    print("Посадка выполнена")
-
-    startBoatMovement()
-end)
-
+-- Запуск детектора фруктов
 task.spawn(function()
     if not player.Character then player.CharacterAdded:Wait() end
     task.wait(2)
     startFruitTracker()
 end)
 
-print("Финальный скрипт запущен. Лодка движется только по X, высота фиксирована 100, остров обрабатывается.")
+print("Финальный скрипт запущен. Постоянная проверка посадки, лодка будет возвращаться после смерти/вылезания.")
