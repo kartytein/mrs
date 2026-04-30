@@ -1,7 +1,4 @@
--- ===== ФИНАЛЬНЫЙ ПОЛНЫЙ СКРИПТ (С ЭТАЛОННЫМ ДВИЖЕНИЕМ) =====
--- Включает: выбор команды Marines, покупку лодки, посадку, движение как в эталонном скрипте,
--- детектор фруктов (Discord), обработку острова Prehistoricisland, анти-idle, постоянное отключение коллизий.
-
+-- ===== ФИНАЛЬНЫЙ ПОЛНЫЙ СКРИПТ (ИСПРАВЛЕНА ПОСЛЕДОВАТЕЛЬНОСТЬ: СНАЧАЛА ПОСАДКА, ПОТОМ ПОДЪЁМ ЛОДКИ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
@@ -25,7 +22,7 @@ task.spawn(function()
 end)
 
 -- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
-local function moveStepByStep(targetPos, speed, keepY)  -- для перемещения к острову
+local function moveStepByStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
     local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -143,14 +140,14 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ДВИЖЕНИЕ ЛОДКИ (ПО ЭТАЛОНУ: BODYVELOCITY НОЛЬ -> ПОДЪЁМ НА 100 -> СКОРОСТЬ) ==========
+-- ========== 6. ДВИЖЕНИЕ ЛОДКИ (ПОСАДКА -> ПОДЪЁМ -> СКОРОСТЬ) ==========
 local myBoat = nil
 local seat = nil
 local rootPart = nil
 local humanoid = nil
 local hrp = nil
 local bv = nil
-local currentDirection = -1   -- начинаем влево
+local currentDirection = -1
 local X_MIN = -77389.3
 local X_MAX = -47968.4
 local SPEED_X = 250
@@ -190,12 +187,18 @@ local function startBoatMovement()
     if movementActive then return end
     movementActive = true
     movementThread = task.spawn(function()
+        -- Проверяем, что персонаж уже сидит
+        if not (humanoid and humanoid.Sit and humanoid.SeatPart == seat) then
+            print("[ДВИЖЕНИЕ] Персонаж не сидит, движение не запускается")
+            movementActive = false
+            return
+        end
         local char = player.Character
         if not char then return end
         local upperTorso = char:FindFirstChild("UpperTorso")
         if not upperTorso then return end
         
-        -- ШАГ 1: Создаём BodyVelocity с нулевой скоростью (как в эталоне)
+        -- ШАГ 1: Нулевой BodyVelocity
         if bv then bv:Destroy() end
         bv = Instance.new("BodyVelocity")
         bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
@@ -203,14 +206,15 @@ local function startBoatMovement()
         bv.Velocity = Vector3.new(0, 0, 0)
         print("[ДВИЖЕНИЕ] BodyVelocity создан с нулевой скоростью")
         
-        -- ШАГ 2: Поднимаем лодку на высоту 100 через CFrame
+        -- ШАГ 2: Поднимаем лодку на высоту 100
         if rootPart then
             local pos = rootPart.Position
             rootPart.CFrame = CFrame.new(pos.X, 100, pos.Z)
             print("[ДВИЖЕНИЕ] Лодка поднята на высоту 100")
+            task.wait(0.1)
         end
         
-        -- ШАГ 3: Устанавливаем скорость движения через BodyVelocity
+        -- ШАГ 3: Задаём скорость движения
         local speedX = currentDirection * SPEED_X
         bv.Velocity = Vector3.new(speedX, SPEED_Y, SPEED_Z)
         print("[ДВИЖЕНИЕ] Скорость установлена: " .. tostring(bv.Velocity))
@@ -230,7 +234,6 @@ local function startBoatMovement()
                     ensureBodyVelocity()
                 end
             end
-            -- Имитация микро-изменений (как в эталоне)
             if bv and bv.Parent then
                 local v = bv.Velocity
                 bv.Velocity = Vector3.new(v.X, v.Y - 0.0001, v.Z - 0.0001)
@@ -381,7 +384,7 @@ task.spawn(function()
             end
             forceSit()
             startBoatMovement()
-            task.wait(12)  -- даём время сесть и стабилизироваться
+            task.wait(12)
             islandCoolDown = false
         end
     end
@@ -389,7 +392,6 @@ end)
 
 -- ========== 9. ГЛАВНЫЙ ПОТОК (ПОКУПКА, ПОСАДКА) ==========
 task.spawn(function()
-    -- Выбор команды Marines
     local rs = game:GetService("ReplicatedStorage")
     local remotes = rs and rs:FindFirstChild("Remotes")
     if remotes then
@@ -400,7 +402,6 @@ task.spawn(function()
         if event then pcall(function() event:FireServer() end) end
     end
 
-    -- Покупка лодки (с предварительным перемещением)
     local PURCHASE_POINT = Vector3.new(-16917, 9.1, 447)
     moveStepByStep(PURCHASE_POINT, 150, true)
     buyBoat()
@@ -422,22 +423,19 @@ task.spawn(function()
     local native = myBoat:FindFirstChild("Script")
     if native then native.Disabled = true end
 
-    -- Посадка
     local char = player.Character or player.CharacterAdded:Wait()
     hrp = char:WaitForChild("HumanoidRootPart")
     humanoid = char:WaitForChild("Humanoid")
     sitOnSeat(seat, hrp, humanoid)
     print("Посадка выполнена")
 
-    -- Запуск движения лодки
     startBoatMovement()
 end)
 
--- Запуск детектора фруктов
 task.spawn(function()
     if not player.Character then player.CharacterAdded:Wait() end
     task.wait(2)
     startFruitTracker()
 end)
 
-print("Финальный скрипт запущен. Лодка движется точно по эталону (сначала подъём на 100, потом скорость).")
+print("Финальный скрипт запущен. Лодка поднимается ПОСЛЕ посадки, движение по эталону, остров обрабатывается.")
