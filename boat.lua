@@ -1,8 +1,8 @@
--- ===== ФИНАЛЬНЫЙ ПОЛНЫЙ СКРИПТ (ИСПРАВЛЕН ВОЗВРАТ ПОСЛЕ ОСТРОВА) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (CFrame подход к сиденью, BodyVelocity после посадки) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
-local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"  -- замените на свой
+local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
 
 -- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
 task.spawn(function()
@@ -70,22 +70,28 @@ local function findMyBoat()
     return nil
 end
 
-local function sitOnSeat(boatSeat, hrp, humanoid)
-    local targetCF = boatSeat.CFrame + Vector3.new(0, 2.5, 0)
-    local bv = Instance.new("BodyVelocity")
-    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    bv.Parent = hrp
-    while (hrp.Position - targetCF.Position).Magnitude > 1.5 do
-        local dir = (targetCF.Position - hrp.Position).Unit
-        bv.Velocity = dir * 150
-        task.wait()
+-- НОВАЯ ФУНКЦИЯ: перемещение к сиденью через CFrame маленькими шагами
+local function moveToSeat(seat, hrp, humanoid)
+    if not seat then return false end
+    local targetCF = seat.CFrame + Vector3.new(0, 2.5, 0)
+    local step = 0.05
+    local speed = 150  -- студий/сек
+    while true do
+        local current = hrp.Position
+        local distance = (targetCF.Position - current).Magnitude
+        if distance < 0.5 then break end
+        local direction = (targetCF.Position - current).Unit
+        local move = math.min(speed * step, distance)
+        local newPos = current + direction * move
+        hrp.CFrame = CFrame.new(newPos)
+        task.wait(step)
     end
-    bv:Destroy()
     hrp.CFrame = targetCF
     humanoid.Sit = true
+    return true
 end
 
--- ========== 3. ДЕТЕКТОР ФРУКТОВ (DISCORD) ==========
+-- ========== 3. ДЕТЕКТОР ФРУКТОВ ==========
 local sentItems = {}
 local function sendToDiscord(itemName)
     local message = { content = player.Name .. " получил '" .. itemName .. "'!", username = "Инвентарь" }
@@ -140,11 +146,12 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ДВИЖЕНИЕ ЛОДКИ (С ПОДДЕРЖАНИЕМ ВЫСОТЫ) ==========
+-- ========== 6. ДВИЖЕНИЕ ЛОДКИ (BODYVELOCITY ПОСЛЕ ПОСАДКИ) ==========
 local myBoat = nil
 local seat = nil
 local rootPart = nil
 local humanoid = nil
+local hrp = nil
 local bv = nil
 local currentDirection = -1
 local X_MIN = -77389.3
@@ -152,7 +159,6 @@ local X_MAX = -47968.4
 local SPEED_X = 250
 local SPEED_Y = -2
 local SPEED_Z = -2
-local TARGET_Y = 100
 local movementActive = false
 local movementThread = nil
 
@@ -192,14 +198,19 @@ local function startBoatMovement()
         local upperTorso = char:FindFirstChild("UpperTorso")
         if not upperTorso then return end
         
+        -- ШАГ 1: BodyVelocity с нулевой скоростью (как в эталоне)
         if bv then bv:Destroy() end
         bv = Instance.new("BodyVelocity")
         bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
         bv.Parent = upperTorso
         bv.Velocity = Vector3.new(0, 0, 0)
+        print("[ДВИЖЕНИЕ] BodyVelocity создан с нулевой скоростью")
         task.wait(0.05)
+        
+        -- ШАГ 2: Задаём рабочую скорость
         local speedX = currentDirection * SPEED_X
         bv.Velocity = Vector3.new(speedX, SPEED_Y, SPEED_Z)
+        print("[ДВИЖЕНИЕ] Скорость установлена: " .. tostring(bv.Velocity))
         
         while movementActive do
             if not (humanoid and humanoid.Sit and humanoid.SeatPart == seat) then
@@ -207,16 +218,18 @@ local function startBoatMovement()
                 break
             end
             if rootPart then
-                local pos = rootPart.Position
-                if math.abs(pos.Y - TARGET_Y) > 0.5 then
-                    rootPart.CFrame = CFrame.new(pos.X, TARGET_Y, pos.Z)
-                end
-                if pos.X <= X_MIN and currentDirection == -1 then
+                local x = rootPart.Position.X
+                if x <= X_MIN and currentDirection == -1 then
                     currentDirection = 1
                     ensureBodyVelocity()
-                elseif pos.X >= X_MAX and currentDirection == 1 then
+                elseif x >= X_MAX and currentDirection == 1 then
                     currentDirection = -1
                     ensureBodyVelocity()
+                end
+                -- Удерживаем высоту через прямой CFrame (не BodyPosition)
+                local y = rootPart.Position.Y
+                if math.abs(y - 100) > 0.5 then
+                    rootPart.CFrame = CFrame.new(rootPart.Position.X, 100, rootPart.Position.Z)
                 end
             end
             if bv and bv.Parent then
@@ -228,7 +241,7 @@ local function startBoatMovement()
     end)
 end
 
--- ========== 7. УСИЛЕННАЯ ПОСАДКА (С ПОВТОРНЫМИ ПОПЫТКАМИ) ==========
+-- ========== 7. ПРИНУДИТЕЛЬНАЯ ПОСАДКА (CFRAME МАЛЕНЬКИМИ ШАГАМИ) ==========
 local function forceSit()
     if not myBoat or not myBoat.Parent then
         myBoat = findMyBoat()
@@ -272,31 +285,23 @@ local function forceSit()
     if not h or not r then return end
     if h.Sit and h.SeatPart == seat then return end
     
-    -- Цикл посадки до успеха
-    for attempt = 1, 20 do
-        sitOnSeat(seat, r, h)
-        task.wait(1)
-        if h.Sit and h.SeatPart == seat then
-            print("[FORCESIT] Посадка успешна с " .. attempt .. " попытки")
-            break
-        end
-        print("[FORCESIT] Попытка " .. attempt .. " не удалась, повторяем...")
-    end
+    -- Перемещение к сиденью через CFrame маленькими шагами
+    moveToSeat(seat, r, h)
+    
     if not (h.Sit and h.SeatPart == seat) then
         r.CFrame = seat.CFrame + Vector3.new(0, 2.5, 0)
         h.Sit = true
         print("[FORCESIT] Телепортация на сиденье")
     end
     if rootPart then
-        local pos = rootPart.Position
-        rootPart.CFrame = CFrame.new(pos.X, 100, pos.Z)
+        rootPart.CFrame = CFrame.new(rootPart.Position.X, 100, rootPart.Position.Z)
     end
     if not movementActive then
         startBoatMovement()
     end
 end
 
--- ========== 8. МОНИТОР ПОСАДКИ ПОСТОЯННЫЙ ==========
+-- ========== 8. МОНИТОР ПОСАДКИ ==========
 task.spawn(function()
     while true do
         if islandMode then
@@ -332,7 +337,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 9. МОНИТОР ОСТРОВА (С ГАРАНТИРОВАННЫМ ВОЗВРАТОМ) ==========
+-- ========== 9. МОНИТОР ОСТРОВА ==========
 task.spawn(function()
     local islandCoolDown = false
     local cooldownTimer = 0
@@ -465,9 +470,10 @@ task.spawn(function()
     end
 
     local char = player.Character or player.CharacterAdded:Wait()
-    local hrp = char:WaitForChild("HumanoidRootPart")
+    hrp = char:WaitForChild("HumanoidRootPart")
     humanoid = char:WaitForChild("Humanoid")
-    sitOnSeat(seat, hrp, humanoid)
+    -- Используем CFrame перемещение к сиденью
+    moveToSeat(seat, hrp, humanoid)
     print("Посадка выполнена")
     startBoatMovement()
 end)
@@ -478,4 +484,4 @@ task.spawn(function()
     startFruitTracker()
 end)
 
-print("Скрипт запущен. Лодка удерживается на высоте 100, после острова возврат гарантирован.")
+print("Скрипт запущен. Перемещение к сиденью через CFrame (микрошаги), BodyVelocity после посадки.")
