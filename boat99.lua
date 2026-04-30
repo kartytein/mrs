@@ -1,10 +1,12 @@
--- ===== ФИНАЛЬНЫЙ ПОЛНЫЙ СКРИПТ (ВОССТАНОВЛЕНО ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ДЛЯ ЛОДКИ) =====
+-- ===== ФИНАЛЬНЫЙ ПОЛНЫЙ СКРИПТ (С ПОСТОЯННЫМ ОТКЛЮЧЕНИЕМ КОЛЛИЗИЙ) =====
+-- Восстановлен постоянный цикл отключения коллизий, который был утерян.
+
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
-local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"  -- замените на свой
+local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
 
--- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ (ПЕРСОНАЖ + ЛОДКА) ==========
+-- ========== 0. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ КАК В ФУЛ СКРИПТЕ ==========
 task.spawn(function()
     while true do
         local char = player.Character
@@ -17,9 +19,8 @@ task.spawn(function()
             if lower then lower.CanCollide = false end
             if upper then upper.CanCollide = false end
         end
-        local boat = myBoat  -- глобальная переменная myBoat (может быть nil)
-        if boat then
-            for _, part in ipairs(boat:GetDescendants()) do
+        if myBoat then
+            for _, part in ipairs(myBoat:GetDescendants()) do
                 if part:IsA("BasePart") then part.CanCollide = false end
             end
         end
@@ -27,7 +28,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+-- ========== 1. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 local function moveStepByStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
@@ -91,7 +92,7 @@ local function sitOnSeat(boatSeat, hrp, humanoid)
     humanoid.Sit = true
 end
 
--- ========== 3. ДЕТЕКТОР ФРУКТОВ ==========
+-- ========== 2. ДЕТЕКТОР ФРУКТОВ ==========
 local sentItems = {}
 local function sendToDiscord(itemName)
     local message = { content = player.Name .. " получил '" .. itemName .. "'!", username = "Инвентарь" }
@@ -125,7 +126,7 @@ local function startFruitTracker()
     print("Детектор фруктов запущен.")
 end
 
--- ========== 4. ОСТРОВ ==========
+-- ========== 3. ОСТРОВ ==========
 local islandMode = false
 local function findPrehistoricIsland()
     for _, obj in ipairs(workspace:GetDescendants()) do
@@ -134,7 +135,7 @@ local function findPrehistoricIsland()
     return nil
 end
 
--- ========== 5. АНТИ-IDLE ==========
+-- ========== 4. АНТИ-IDLE ==========
 task.spawn(function()
     local camera = workspace.CurrentCamera
     local originalCF = camera.CFrame
@@ -146,7 +147,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ДВИЖЕНИЕ ЛОДКИ ==========
+-- ========== 5. ДВИЖЕНИЕ ЛОДКИ ==========
 local myBoat = nil
 local seat = nil
 local rootPart = nil
@@ -245,7 +246,6 @@ local function startBoatMovement()
 end
 
 local function forceSit()
-    -- Если myBoat nil или родитель пропал, пытаемся найти заново
     if not myBoat or not myBoat.Parent then
         myBoat = findMyBoat()
         if myBoat then
@@ -280,7 +280,7 @@ local function forceSit()
     sitOnSeat(seat, r, h)
 end
 
--- ========== 7. ГЛАВНЫЙ МОНИТОР ==========
+-- ========== 6. ГЛАВНЫЙ МОНИТОР ==========
 task.spawn(function()
     local rs = game:GetService("ReplicatedStorage")
     local remotes = rs and rs:FindFirstChild("Remotes")
@@ -353,7 +353,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 8. МОНИТОР ОСТРОВА ==========
+-- ========== 7. МОНИТОР ОСТРОВА (С КУЛДАУНОМ) ==========
 task.spawn(function()
     local islandCoolDown = false
     local cooldownTimer = 0
@@ -418,9 +418,12 @@ task.spawn(function()
                 else
                     myBoat = nil
                 end
+            else
+                print("[ОСТРОВ] Лодка не найдена, покупка новой...")
             end
             forceSit()
             startBoatMovement()
+            task.wait(2)
             task.wait(10)
             islandCoolDown = false
         end
@@ -434,4 +437,4 @@ task.spawn(function()
     startFruitTracker()
 end)
 
-print("Скрипт полностью запущен. Коллизии постоянно отключены для персонажа и лодки.")
+print("Скрипт полностью запущен. Постоянное отключение коллизий активно, лодка движется по эталону, после острова возврат гарантирован.")
