@@ -1,4 +1,4 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ (ПОДЪЁМ ЛОДКИ ПОСЛЕ ПОСАДКИ) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (С ПОДДЕРЖАНИЕМ ВЫСОТЫ И БЕЗ ОШИБОК ОТМЕНЫ ПОТОКА) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
@@ -62,9 +62,9 @@ local function findMyBoat()
     for _, boat in ipairs(boats:GetChildren()) do
         if boat:IsA("Model") and boat:FindFirstChildWhichIsA("VehicleSeat") then
             local owner = boat:GetAttribute("Owner")
-            if owner == player.Name then return boat end
+            if owner == playerName then return boat end
             local ownerObj = boat:FindFirstChild("Owner")
-            if ownerObj and tostring(ownerObj.Value) == player.Name then return boat end
+            if ownerObj and tostring(ownerObj.Value) == playerName then return boat end
         end
     end
     return nil
@@ -140,7 +140,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ДВИЖЕНИЕ ЛОДКИ (С ПОДЪЁМОМ ПОСЛЕ ПОСАДКИ) ==========
+-- ========== 6. ДВИЖЕНИЕ ЛОДКИ (ПОДДЕРЖАНИЕ ВЫСОТЫ, БЕЗ ОШИБОК ОТМЕНЫ) ==========
 local myBoat = nil
 local seat = nil
 local rootPart = nil
@@ -153,6 +153,7 @@ local X_MAX = -47968.4
 local SPEED_X = 250
 local SPEED_Y = -2
 local SPEED_Z = -2
+local TARGET_Y = 100
 local movementActive = false
 local movementThread = nil
 
@@ -176,7 +177,7 @@ end
 local function stopBoatMovement()
     movementActive = false
     if movementThread then
-        task.cancel(movementThread)
+        pcall(task.cancel, movementThread)
         movementThread = nil
     end
     if bv then bv:Destroy() end
@@ -192,7 +193,7 @@ local function startBoatMovement()
         local upperTorso = char:FindFirstChild("UpperTorso")
         if not upperTorso then return end
         
-        -- Создаём BodyVelocity с нулевой скоростью, затем сразу меняем на рабочую
+        -- Нулевой BodyVelocity, затем рабочий
         if bv then bv:Destroy() end
         bv = Instance.new("BodyVelocity")
         bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
@@ -208,11 +209,16 @@ local function startBoatMovement()
                 break
             end
             if rootPart then
-                local x = rootPart.Position.X
-                if x <= X_MIN and currentDirection == -1 then
+                -- Корректировка высоты (удержание Y)
+                local pos = rootPart.Position
+                if math.abs(pos.Y - TARGET_Y) > 0.5 then
+                    rootPart.CFrame = CFrame.new(pos.X, TARGET_Y, pos.Z)
+                end
+                -- Смена направления
+                if pos.X <= X_MIN and currentDirection == -1 then
                     currentDirection = 1
                     ensureBodyVelocity()
-                elseif x >= X_MAX and currentDirection == 1 then
+                elseif pos.X >= X_MAX and currentDirection == 1 then
                     currentDirection = -1
                     ensureBodyVelocity()
                 end
@@ -226,6 +232,7 @@ local function startBoatMovement()
     end)
 end
 
+-- ========== 7. ПРИНУДИТЕЛЬНАЯ ПОСАДКА ==========
 local function forceSit()
     if not myBoat or not myBoat.Parent then
         myBoat = findMyBoat()
@@ -259,20 +266,12 @@ local function forceSit()
     if not h or not r then return end
     if h.Sit and h.SeatPart == seat then return end
     sitOnSeat(seat, r, h)
-    
-    -- ПОДЪЁМ ЛОДКИ ПОСЛЕ УСПЕШНОЙ ПОСАДКИ
-    if rootPart then
-        local pos = rootPart.Position
-        rootPart.CFrame = CFrame.new(pos.X, 100, pos.Z)
-        print("[ПОДЪЁМ] Лодка поднята на высоту 100")
-    end
-    
     if not movementActive then
         startBoatMovement()
     end
 end
 
--- ========== 7. МОНИТОР ПОСАДКИ ==========
+-- ========== 8. МОНИТОР ПОСАДКИ ==========
 task.spawn(function()
     while true do
         task.wait(0.5)
@@ -305,7 +304,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 8. МОНИТОР ОСТРОВА (С КУЛДАУНОМ) ==========
+-- ========== 9. МОНИТОР ОСТРОВА (С КУЛДАУНОМ) ==========
 task.spawn(function()
     local islandCoolDown = false
     local cooldownTimer = 0
@@ -381,7 +380,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 9. ГЛАВНЫЙ ПОТОК (ПОКУПКА, ПОСАДКА) ==========
+-- ========== 10. ГЛАВНЫЙ ПОТОК (ПОКУПКА, ПОСАДКА) ==========
 task.spawn(function()
     local rs = game:GetService("ReplicatedStorage")
     local remotes = rs and rs:FindFirstChild("Remotes")
@@ -420,13 +419,7 @@ task.spawn(function()
     sitOnSeat(seat, hrp, humanoid)
     print("Посадка выполнена")
     
-    -- Подъём лодки после посадки
-    if rootPart then
-        local pos = rootPart.Position
-        rootPart.CFrame = CFrame.new(pos.X, 100, pos.Z)
-        print("[ПОДЪЁМ] Лодка поднята на высоту 100")
-    end
-    
+    -- Запуск движения (высота будет поддерживаться в цикле)
     startBoatMovement()
 end)
 
@@ -436,4 +429,4 @@ task.spawn(function()
     startFruitTracker()
 end)
 
-print("Скрипт запущен. Лодка покупается, садится, затем поднимается на высоту 100 и начинает движение.")
+print("Скрипт запущен. Лодка удерживается на высоте 100, ошибок отмены потоков нет.")
