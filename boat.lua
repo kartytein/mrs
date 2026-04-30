@@ -1,8 +1,8 @@
--- ===== ФИНАЛЬНЫЙ ПОЛНЫЙ СКРИПТ (ИСПРАВЛЕНА ПОСЛЕДОВАТЕЛЬНОСТЬ: СНАЧАЛА ПОСАДКА, ПОТОМ ПОДЪЁМ ЛОДКИ) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (ПОДЪЁМ ЛОДКИ ПОСЛЕ ПОСАДКИ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
-local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"  -- замените на свой
+local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
 
 -- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
 task.spawn(function()
@@ -62,9 +62,9 @@ local function findMyBoat()
     for _, boat in ipairs(boats:GetChildren()) do
         if boat:IsA("Model") and boat:FindFirstChildWhichIsA("VehicleSeat") then
             local owner = boat:GetAttribute("Owner")
-            if owner == playerName then return boat end
+            if owner == player.Name then return boat end
             local ownerObj = boat:FindFirstChild("Owner")
-            if ownerObj and tostring(ownerObj.Value) == playerName then return boat end
+            if ownerObj and tostring(ownerObj.Value) == player.Name then return boat end
         end
     end
     return nil
@@ -140,7 +140,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ДВИЖЕНИЕ ЛОДКИ (ПОСАДКА -> ПОДЪЁМ -> СКОРОСТЬ) ==========
+-- ========== 6. ДВИЖЕНИЕ ЛОДКИ (С ПОДЪЁМОМ ПОСЛЕ ПОСАДКИ) ==========
 local myBoat = nil
 local seat = nil
 local rootPart = nil
@@ -187,37 +187,20 @@ local function startBoatMovement()
     if movementActive then return end
     movementActive = true
     movementThread = task.spawn(function()
-        -- Проверяем, что персонаж уже сидит
-        if not (humanoid and humanoid.Sit and humanoid.SeatPart == seat) then
-            print("[ДВИЖЕНИЕ] Персонаж не сидит, движение не запускается")
-            movementActive = false
-            return
-        end
         local char = player.Character
         if not char then return end
         local upperTorso = char:FindFirstChild("UpperTorso")
         if not upperTorso then return end
         
-        -- ШАГ 1: Нулевой BodyVelocity
+        -- Создаём BodyVelocity с нулевой скоростью, затем сразу меняем на рабочую
         if bv then bv:Destroy() end
         bv = Instance.new("BodyVelocity")
         bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
         bv.Parent = upperTorso
         bv.Velocity = Vector3.new(0, 0, 0)
-        print("[ДВИЖЕНИЕ] BodyVelocity создан с нулевой скоростью")
-        
-        -- ШАГ 2: Поднимаем лодку на высоту 100
-        if rootPart then
-            local pos = rootPart.Position
-            rootPart.CFrame = CFrame.new(pos.X, 100, pos.Z)
-            print("[ДВИЖЕНИЕ] Лодка поднята на высоту 100")
-            task.wait(0.1)
-        end
-        
-        -- ШАГ 3: Задаём скорость движения
+        task.wait(0.05)
         local speedX = currentDirection * SPEED_X
         bv.Velocity = Vector3.new(speedX, SPEED_Y, SPEED_Z)
-        print("[ДВИЖЕНИЕ] Скорость установлена: " .. tostring(bv.Velocity))
         
         while movementActive do
             if not (humanoid and humanoid.Sit and humanoid.SeatPart == seat) then
@@ -276,6 +259,14 @@ local function forceSit()
     if not h or not r then return end
     if h.Sit and h.SeatPart == seat then return end
     sitOnSeat(seat, r, h)
+    
+    -- ПОДЪЁМ ЛОДКИ ПОСЛЕ УСПЕШНОЙ ПОСАДКИ
+    if rootPart then
+        local pos = rootPart.Position
+        rootPart.CFrame = CFrame.new(pos.X, 100, pos.Z)
+        print("[ПОДЪЁМ] Лодка поднята на высоту 100")
+    end
+    
     if not movementActive then
         startBoatMovement()
     end
@@ -428,7 +419,14 @@ task.spawn(function()
     humanoid = char:WaitForChild("Humanoid")
     sitOnSeat(seat, hrp, humanoid)
     print("Посадка выполнена")
-
+    
+    -- Подъём лодки после посадки
+    if rootPart then
+        local pos = rootPart.Position
+        rootPart.CFrame = CFrame.new(pos.X, 100, pos.Z)
+        print("[ПОДЪЁМ] Лодка поднята на высоту 100")
+    end
+    
     startBoatMovement()
 end)
 
@@ -438,4 +436,4 @@ task.spawn(function()
     startFruitTracker()
 end)
 
-print("Финальный скрипт запущен. Лодка поднимается ПОСЛЕ посадки, движение по эталону, остров обрабатывается.")
+print("Скрипт запущен. Лодка покупается, садится, затем поднимается на высоту 100 и начинает движение.")
