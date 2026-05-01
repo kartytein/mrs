@@ -1,4 +1,4 @@
--- ===== ФИНАЛЬНЫЙ РАБОЧИЙ СКРИПТ (ПОКУПКА ЛОДКИ ИСПРАВЛЕНА) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (ПОКУПКА ЛОДКИ ИСПРАВЛЕНА, ДОБАВЛЕНО ОЖИДАНИЕ ПОЯВЛЕНИЯ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
@@ -45,7 +45,7 @@ local function moveStep(targetPos, speed, keepY)
     return true
 end
 
--- Покупка лодки (с повторной проверкой)
+-- Покупка лодки
 local function buyBoat()
     local rs = game:GetService("ReplicatedStorage")
     if not rs then return end
@@ -307,11 +307,10 @@ task.spawn(function()
                 print("[ОСТРОВ] Лодка не найдена, покупаем...")
                 moveStep(Vector3.new(-16917,9.1,447),150,true)
                 buyBoat()
-                task.wait(3)
-                for i=1,10 do
+                for i = 1, 30 do
                     boat = findMyBoat()
                     if boat then break end
-                    task.wait(1)
+                    task.wait(0.5)
                 end
                 if boat then
                     seat = boat:FindFirstChildWhichIsA("VehicleSeat")
@@ -392,7 +391,7 @@ task.spawn(function()
             task.wait(0.5)
         end
         if not boat then
-            error("Лодка не появилась после покупки")
+            error("[ОШИБКА] Лодка не появилась после покупки")
         end
         print("[ПЕРВИЧНЫЙ ЗАПУСК] Лодка найдена: " .. boat.Name)
         seat = boat:FindFirstChildWhichIsA("VehicleSeat")
@@ -421,4 +420,4 @@ task.spawn(function()
     fruitTracker()
 end)
 
-print("Финальный скрипт запущен. Покупка лодки исправлена, ждите появления.")
+print("Финальный скрипт запущен. Покупка лодки с ожиданием появления, магнит, остров – всё работает.")
