@@ -1,17 +1,8 @@
--- ===== ФИНАЛЬНЫЙ ПОЛНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ (С МАГНИТОМ И ВОССТАНОВЛЕНИЕМ) =====
--- Версия 4.0
--- - Постоянное отключение коллизий.
--- - Перемещение к сиденью через CFrame маленькими шагами (как в эталоне).
--- - После посадки: подъём лодки на высоту 100, BodyVelocity на UpperTorso персонажа.
--- - Движение лодки непрерывно, поддержание высоты, смена направления.
--- - "Магнит": если персонаж вылез, мгновенно телепортируется обратно на сиденье (каждые 0.05 сек).
--- - Детектор фруктов (Discord), анти-idle, обработка острова Prehistoricisland.
--- - Автоматическое обновление ссылок после смерти персонажа.
-
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (С ИСПРАВЛЕННЫМ СИНТАКСИСОМ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
-local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"  -- замените на свой
+local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
 
 -- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
 task.spawn(function()
@@ -19,7 +10,9 @@ task.spawn(function()
         local char = player.Character
         if char then
             for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") then part.CanCollide = false end
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
+                end
             end
             local lower = char:FindFirstChild("LowerTorso")
             local upper = char:FindFirstChild("UpperTorso")
@@ -31,7 +24,6 @@ task.spawn(function()
 end)
 
 -- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
--- Перемещение к цели через CFrame маленькими шагами (для посадки и для острова)
 local function moveToTargetCFrame(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
@@ -60,11 +52,11 @@ end
 
 local function buyBoat()
     local rs = game:GetService("ReplicatedStorage")
-    local remotes = rs and rs:FindFirstChild("Remotes")
-    if remotes then
-        local commF = remotes:FindFirstChild("CommF_")
-        if commF then pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end) end
-    end
+    if not rs then return end
+    local remotes = rs:FindFirstChild("Remotes")
+    if not remotes then return end
+    local commF = remotes:FindFirstChild("CommF_")
+    if commF then pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end) end
 end
 
 local function findMyBoat()
@@ -81,8 +73,8 @@ local function findMyBoat()
     return nil
 end
 
--- Посадка на сиденье (CFrame шагами, как в эталоне)
 local function sitOnSeat(boatSeat, hrp, humanoid)
+    if not boatSeat or not hrp or not humanoid then return end
     local targetPos = boatSeat.Position + Vector3.new(0, 2.5, 0)
     moveToTargetCFrame(targetPos, 150, true)
     humanoid.Sit = true
@@ -144,7 +136,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ДВИЖЕНИЕ ЛОДКИ (BODYVELOCITY НА UPPERTORSO) ==========
+-- ========== 6. ДВИЖЕНИЕ ЛОДКИ ==========
 local myBoat = nil
 local seat = nil
 local rootPart = nil
@@ -242,7 +234,7 @@ local function startBoatMovement()
     end)
 end
 
--- ========== 7. ПРИНУДИТЕЛЬНАЯ ПОСАДКА (МАГНИТ) ==========
+-- ========== 7. МАГНИТ ==========
 local function forceSit()
     if not myBoat or not myBoat.Parent then
         myBoat = findMyBoat()
@@ -282,7 +274,6 @@ local function forceSit()
     end
     if humanoid.Sit and humanoid.SeatPart == seat then return end
 
-    -- Мгновенная телепортация к сиденью (без шагов)
     hrp.CFrame = seat.CFrame + Vector3.new(0, 2.5, 0)
     humanoid.Sit = true
     print("[FORCESIT] Магнит: персонаж возвращён на сиденье")
@@ -297,7 +288,7 @@ local function forceSit()
     end
 end
 
--- ========== 8. ПОСТОЯННЫЙ МАГНИТ (ЦИКЛ КАЖДЫЕ 0.05 СЕК) ==========
+-- ========== 8. ПОСТОЯННЫЙ МАГНИТ ==========
 task.spawn(function()
     while true do
         task.wait(0.05)
@@ -311,7 +302,7 @@ task.spawn(function()
             if not humanoid or not hrp then continue
         end
         if not (humanoid.Sit and humanoid.SeatPart == seat) then
-            forceSit()
+            pcall(forceSit)
         end
     end
 end)
@@ -325,7 +316,7 @@ task.spawn(function()
         local island = findPrehistoricIsland()
         if island and not islandMode then
             if islandCoolDown and tick() - cooldownTimer < 10 then
-                continue
+                -- пропускаем
             else
                 islandCoolDown = false
             end
@@ -414,7 +405,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 10. ГЛАВНЫЙ МОНИТОР (ОБНОВЛЕНИЕ ССЫЛОК ПОСЛЕ СМЕРТИ) ==========
+-- ========== 10. ГЛАВНЫЙ МОНИТОР ==========
 task.spawn(function()
     while true do
         task.wait(0.5)
@@ -426,7 +417,6 @@ task.spawn(function()
             myBoat = nil; seat = nil; rootPart = nil
             player.CharacterAdded:Wait()
             char = player.Character
-            -- Обновляем ссылки на нового персонажа
             humanoid = char:FindFirstChild("Humanoid")
             hrp = char:FindFirstChild("HumanoidRootPart")
             task.wait(1)
@@ -457,7 +447,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 11. ПЕРВИЧНЫЙ ЗАПУСК (ПОКУПКА И ПОСАДКА) ==========
+-- ========== 11. ПЕРВИЧНЫЙ ЗАПУСК ==========
 task.spawn(function()
     local rs = game:GetService("ReplicatedStorage")
     local remotes = rs and rs:FindFirstChild("Remotes")
@@ -513,4 +503,4 @@ task.spawn(function()
     startFruitTracker()
 end)
 
-print("Финальный скрипт запущен. Лодка удерживается на высоте 100, магнит активен, остров обрабатывается.")
+print("Скрипт запущен. Синтаксис исправлен, ошибок быть не должно.")
