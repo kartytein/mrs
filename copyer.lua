@@ -1,7 +1,10 @@
--- ===== ПОЛНАЯ ДИАГНОСТИКА ПЕРСОНАЖА (С ПЕРЕПОДПИСКОЙ ПОСЛЕ СМЕРТИ) =====
+-- ===== ПОЛНАЯ ДИАГНОСТИКА С МИЛЛИСЕКУНДАМИ =====
 local player = game.Players.LocalPlayer
 
-local function log(msg) print(os.date("%H:%M:%S"), msg) end
+local function log(msg)
+    local ms = (tick() % 1) * 1000
+    print(string.format("%s.%03d %s", os.date("%H:%M:%S"), ms, msg))
+end
 
 local function setupTracker(char)
     local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -55,7 +58,6 @@ local function setupTracker(char)
         log(string.format("[Sit] = %s, SeatPart = %s", tostring(humanoid.Sit), tostring(humanoid.SeatPart)))
     end)
 
-    -- Периодический вывод
     task.spawn(function()
         while char and char.Parent do
             task.wait(2)
@@ -70,13 +72,12 @@ local function setupTracker(char)
     end)
 end
 
--- Отслеживаем появление персонажа (первый раз и после смерти)
 if player.Character then
     setupTracker(player.Character)
 end
 player.CharacterAdded:Connect(function(newChar)
-    task.wait(0.5) -- даём время загрузиться
+    task.wait(0.5)
     setupTracker(newChar)
 end)
 
-log("Полная диагностика запущена (с переподпиской после смерти). Активируйте эталонный скрипт.")
+log("Полная диагностика запущена (с миллисекундами). Активируйте эталонный скрипт.")
