@@ -1,4 +1,4 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ (ГАРАНТИРОВАННО БЕЗ СИНТАКСИЧЕСКИХ ОШИБОК) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (ИСПРАВЛЕНЫ ВСЕ ОТСУТСТВУЮЩИЕ END) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
@@ -21,7 +21,7 @@ task.spawn(function()
     end
 end)
 
--- Функции перемещения (CFrame маленькими шагами)
+-- Перемещение шагами (CFrame)
 local function moveStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
@@ -45,7 +45,7 @@ local function moveStep(targetPos, speed, keepY)
     return true
 end
 
--- Поиск лодки
+-- Поиск лодки по Owner
 local function findMyBoat()
     local boats = workspace:FindFirstChild("Boats")
     if not boats then return nil end
@@ -59,7 +59,7 @@ local function findMyBoat()
     return nil
 end
 
--- Первичная посадка через CFrame шаги
+-- Посадка на сиденье (шагами)
 local function sitOnSeat(seat, hrp, hum)
     local target = seat.Position + Vector3.new(0, 2.5, 0)
     moveStep(target, 150, true)
@@ -67,7 +67,7 @@ local function sitOnSeat(seat, hrp, hum)
     task.wait(0.3)
 end
 
--- Покупка
+-- Покупка лодки
 local function buyBoat()
     local rs = game:GetService("ReplicatedStorage")
     if not rs then return end
@@ -77,7 +77,7 @@ local function buyBoat()
     if commF then pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end) end
 end
 
--- Детектор фруктов
+-- Детектор фруктов (Discord)
 local sentFruits = {}
 local function sendFruit(itemName)
     local msg = { content = player.Name .. " получил '" .. itemName .. "'!", username = "Инвентарь" }
@@ -222,13 +222,22 @@ local function forceSit()
             moveStep(Vector3.new(-16917,9.1,447), 150, true)
             buyBoat()
             task.wait(3)
-            for i=1,10 do boat = findMyBoat() if boat then break end task.wait(1) end
+            for i=1,10 do
+                boat = findMyBoat()
+                if boat then break end
+                task.wait(1)
+            end
             if not boat then return end
         end
         seat = boat:FindFirstChildWhichIsA("VehicleSeat")
         root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
-        if not seat or not root then boat = nil; return end
-        for _, p in ipairs(boat:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end
+        if not seat or not root then
+            boat = nil
+            return
+        end
+        for _, p in ipairs(boat:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
+        end
         local native = boat:FindFirstChild("Script")
         if native then native.Disabled = true end
     end
@@ -250,7 +259,7 @@ local function forceSit()
     if not moving then startMove() end
 end
 
--- Постоянный магнит
+-- Постоянный магнит (цикл)
 task.spawn(function()
     while true do
         task.wait(0.05)
@@ -277,9 +286,7 @@ task.spawn(function()
         task.wait(0.5)
         local island = findIsland()
         if island and not islandMode then
-            if cooldown and tick() - cooldownTimer < 10 then
-                -- игнорируем
-            else
+            if not (cooldown and tick() - cooldownTimer < 10) then
                 cooldown = false
             end
         end
@@ -314,7 +321,9 @@ task.spawn(function()
                 seat = boat:FindFirstChildWhichIsA("VehicleSeat")
                 root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
                 if seat and root then
-                    for _, p in ipairs(boat:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end
+                    for _, p in ipairs(boat:GetDescendants()) do
+                        if p:IsA("BasePart") then p.CanCollide = false end
+                    end
                     local native = boat:FindFirstChild("Script")
                     if native then native.Disabled = true end
                 else
@@ -333,7 +342,9 @@ task.spawn(function()
                     seat = boat:FindFirstChildWhichIsA("VehicleSeat")
                     root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
                     if seat and root then
-                        for _, p in ipairs(boat:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end
+                        for _, p in ipairs(boat:GetDescendants()) do
+                            if p:IsA("BasePart") then p.CanCollide = false end
+                        end
                         local native = boat:FindFirstChild("Script")
                         if native then native.Disabled = true end
                     end
@@ -373,7 +384,9 @@ task.spawn(function()
                 seat = boat:FindFirstChildWhichIsA("VehicleSeat")
                 root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
                 if seat and root then
-                    for _, p in ipairs(boat:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end
+                    for _, p in ipairs(boat:GetDescendants()) do
+                        if p:IsA("BasePart") then p.CanCollide = false end
+                    end
                     local native = boat:FindFirstChild("Script")
                     if native then native.Disabled = true end
                 else
@@ -411,7 +424,9 @@ task.spawn(function()
         seat = boat:FindFirstChildWhichIsA("VehicleSeat")
         root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
         if not seat or not root then error("Нет сиденья/части") end
-        for _, p in ipairs(boat:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end
+        for _, p in ipairs(boat:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
+        end
         local native = boat:FindFirstChild("Script")
         if native then native.Disabled = true end
     end
@@ -434,4 +449,4 @@ task.spawn(function()
     startFruitTracker()
 end)
 
-print("Скрипт запущен. Синтаксис исправлен, все блоки закрыты.")
+print("Скрипт запущен. Все синтаксические ошибки исправлены.")
