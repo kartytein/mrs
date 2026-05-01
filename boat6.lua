@@ -1,10 +1,10 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ (ПОСТОЯННЫЙ ГЛАВНЫЙ ЦИКЛ, МАГНИТ, ДВИЖЕНИЕ ЛОДКИ, ОСТРОВ) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (УСКОРЕННЫЙ МАГНИТ, СКОРОСТЬ 300) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
 local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
 
--- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ (ФОНОВЫЙ ПОТОК) ==========
+-- Постоянное отключение коллизий
 task.spawn(function()
     while true do
         local char = player.Character
@@ -21,8 +21,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
--- Перемещение шагами (CFrame) – для посадки и для острова
+-- Перемещение шагами (для посадки и острова, скорость 150)
 local function moveStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
@@ -46,7 +45,7 @@ local function moveStep(targetPos, speed, keepY)
     return true
 end
 
--- Покупка лодки (простой вызов, без перемещения)
+-- Покупка лодки
 local function buyBoat()
     local rs = game:GetService("ReplicatedStorage")
     if not rs then return end
@@ -70,7 +69,15 @@ local function findMyBoat()
     return nil
 end
 
--- Детектор фруктов (Discord)
+-- Посадка на сиденье (первичная)
+local function sitOnSeat(seat, hrp, hum)
+    local target = seat.Position + Vector3.new(0, 2.5, 0)
+    moveStep(target, 150, true)
+    hum.Sit = true
+    task.wait(0.3)
+end
+
+-- Детектор фруктов
 local sentFruits = {}
 local function sendFruit(name)
     local msg = { content = player.Name .. " получил '" .. name .. "'!", username = "Инвентарь" }
@@ -115,9 +122,9 @@ task.spawn(function()
     end
 end)
 
--- ========== 3. ОСТРОВ (ОТДЕЛЬНЫЙ ПОТОК) ==========
+-- ========== ОСТРОВ ==========
 local islandMode = false
-local islandReturn = false  -- флаг, что нужно вернуться к лодке после острова
+local islandReturn = false
 local function findIsland()
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then return obj end
@@ -131,54 +138,36 @@ task.spawn(function()
         local island = findIsland()
         if island and not islandMode then
             islandMode = true
-            -- Принудительно выходим из лодки (если сидим)
             local char = player.Character
             if char then
                 local hum = char:FindFirstChild("Humanoid")
                 if hum and hum.Sit then hum.Sit = false end
             end
-            -- Перемещаемся на остров (высоко)
             local target = island:GetPivot().Position + Vector3.new(0, 30, 0)
             moveStep(target, 200, true)
-            -- Ожидание (10 минут или появление/исчезновение DragonEgg)
             local startTime = os.clock()
             local eggSeen = false
             while islandMode do
-                if os.clock() - startTime >= 600 then
-                    print("[ОСТРОВ] 10 минут истекло, выходим")
-                    break
-                end
+                if os.clock() - startTime >= 600 then break end
                 local core = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Prehistoricisland") and workspace.Map.Prehistoricisland:FindFirstChild("Core")
                 local egg = core and core:FindFirstChild("SpawnedDragonEggs") and core.SpawnedDragonEggs:FindFirstChild("DragonEgg")
                 if egg and not eggSeen then
                     eggSeen = true
-                    print("[ОСТРОВ] DragonEgg появился, ждём исчезновения")
+                    print("[ОСТРОВ] DragonEgg появился, ждём")
                 end
                 if eggSeen and not egg then
-                    print("[ОСТРОВ] DragonEgg исчез, выходим")
+                    print("[ОСТРОВ] DragonEgg исчез")
                     break
                 end
                 task.wait(1)
             end
             islandMode = false
-            islandReturn = true   -- сигнал главному циклу, что нужно вернуться к лодке
+            islandReturn = true
         end
     end
 end)
 
--- ========== 4. ГЛАВНЫЙ ЦИКЛ (ПОСТОЯННАЯ ПРОВЕРКА ПОСАДКИ И ДВИЖЕНИЕ ЛОДКИ) ==========
--- Шаг 1: Выбор команды Marines
-local rs = game:GetService("ReplicatedStorage")
-local remotes = rs and rs:FindFirstChild("Remotes")
-if remotes then
-    local commF = remotes:FindFirstChild("CommF_")
-    if commF then pcall(function() commF:InvokeServer("SetTeam", "Marines") end) end
-    local mods = rs:FindFirstChild("Modules")
-    local ev = mods and mods:FindFirstChild("RE/OnEventServiceActivity")
-    if ev then pcall(function() ev:FireServer() end) end
-end
-
--- Глобальные переменные для лодки
+-- ========== ДВИЖЕНИЕ ЛОДКИ ==========
 local boat = nil
 local seat = nil
 local root = nil
@@ -195,30 +184,6 @@ local TARGET_Y = 100
 local moving = false
 local moveThread = nil
 
--- Функция для обновления ссылок на персонажа
-local function updateCharacter()
-    local char = player.Character
-    if char then
-        hum = char:FindFirstChild("Humanoid")
-        hrp = char:FindFirstChild("HumanoidRootPart")
-    else
-        hum = nil
-        hrp = nil
-    end
-end
-
--- Функция для подъёма лодки на нужную высоту (один раз)
-local function liftBoat()
-    if root then
-        local pos = root.Position
-        if math.abs(pos.Y - TARGET_Y) > 0.5 then
-            root.CFrame = CFrame.new(pos.X, TARGET_Y, pos.Z)
-            print("[ЛОДКА] Поднята на высоту 100")
-        end
-    end
-end
-
--- Функция поддержания BodyVelocity на персонаже (движение лодки)
 local function ensureBV()
     local ch = player.Character
     if not ch then return end
@@ -255,7 +220,12 @@ local function startMove()
         bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
         bv.Parent = upper
         bv.Velocity = Vector3.new(0, 0, 0)
-        liftBoat()
+        if root then
+            local p = root.Position
+            if math.abs(p.Y - TARGET_Y) > 0.5 then
+                root.CFrame = CFrame.new(p.X, TARGET_Y, p.Z)
+            end
+        end
         local sx = dir * SPEED_X
         bv.Velocity = Vector3.new(sx, SPEED_Y, SPEED_Z)
         while moving do
@@ -285,49 +255,41 @@ local function startMove()
     end)
 end
 
--- Магнит: плавное возвращение на сиденье (без принудительного Sit)
-local function magnet()
-    if not boat or not seat then return end
+-- ========== ГЛАВНЫЙ ЦИКЛ ==========
+-- Выбор команды Marines
+local rs = game:GetService("ReplicatedStorage")
+local remotes = rs and rs:FindFirstChild("Remotes")
+if remotes then
+    local commF = remotes:FindFirstChild("CommF_")
+    if commF then pcall(function() commF:InvokeServer("SetTeam", "Marines") end) end
+    local mods = rs:FindFirstChild("Modules")
+    local ev = mods and mods:FindFirstChild("RE/OnEventServiceActivity")
+    if ev then pcall(function() ev:FireServer() end) end
+end
+
+local function updateCharacter()
     local char = player.Character
-    if not char then return end
-    local humCur = char:FindFirstChild("Humanoid")
-    local hrpCur = char:FindFirstChild("HumanoidRootPart")
-    if not humCur or not hrpCur then return end
-    if humCur.Sit and humCur.SeatPart == seat then return end
-    local targetPos = seat.Position + Vector3.new(0, 2.5, 0)
-    local dist = (hrpCur.Position - targetPos).Magnitude
-    if dist > 0.3 then
-        local dirVec = (targetPos - hrpCur.Position).Unit
-        local step = math.min(150 * 0.05, dist)
-        local newPos = hrpCur.Position + dirVec * step
-        hrpCur.CFrame = CFrame.new(newPos)
+    if char then
+        hum = char:FindFirstChild("Humanoid")
+        hrp = char:FindFirstChild("HumanoidRootPart")
     else
-        hrpCur.CFrame = CFrame.new(targetPos)
+        hum = nil
+        hrp = nil
     end
 end
 
--- ГЛАВНЫЙ ЦИКЛ (постоянная проверка, выполняется всегда)
 task.spawn(function()
     while true do
         task.wait(0.5)
         updateCharacter()
-        if islandMode then
-            -- Если остров активен, не выполняем никаких действий с лодкой
-            continue
-        end
-        -- Если флаг возврата с острова установлен, сбрасываем ссылки на лодку и принудительно возвращаемся к посадке
+        if islandMode then continue end
         if islandReturn then
             islandReturn = false
-            boat = nil
-            seat = nil
-            root = nil
-            print("[ГЛАВНЫЙ] Возврат с острова, сброс лодки")
+            boat = nil; seat = nil; root = nil
         end
-        -- Если нет лодки, ищем или покупаем
         if not boat or not boat.Parent then
             boat = findMyBoat()
             if not boat then
-                print("[ГЛАВНЫЙ] Лодки нет, покупаем...")
                 buyBoat()
                 for i = 1, 20 do
                     boat = findMyBoat()
@@ -335,43 +297,64 @@ task.spawn(function()
                     task.wait(0.5)
                 end
                 if not boat then
-                    print("[ГЛАВНЫЙ] Лодка не появилась, повтор через 5 сек")
                     task.wait(5)
                     continue
                 end
             end
             seat = boat:FindFirstChildWhichIsA("VehicleSeat")
             root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
-            if not seat or not root then
-                boat = nil
-                continue
-            end
-            for _, p in ipairs(boat:GetDescendants()) do
-                if p:IsA("BasePart") then p.CanCollide = false end
-            end
+            if not seat or not root then boat = nil; continue end
+            for _, p in ipairs(boat:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end
             local nat = boat:FindFirstChild("Script")
             if nat then nat.Disabled = true end
-            print("[ГЛАВНЫЙ] Лодка найдена: " .. boat.Name)
         end
-        -- Проверка, сидит ли персонаж на этом сиденье
         if hum and hum.Sit and hum.SeatPart == seat then
-            -- Сидит: запускаем движение лодки, если ещё не запущено
-            if not moving then
-                startMove()
-            end
+            if not moving then startMove() end
         else
-            -- Не сидит: останавливаем движение и пытаемся сесть через магнит
             if moving then stopMove() end
-            magnet()
+            -- УСКОРЕННЫЙ МАГНИТ (скорость 300)
+            if boat and seat then
+                local char = player.Character
+                if char then
+                    local h = char:FindFirstChild("Humanoid")
+                    local r = char:FindFirstChild("HumanoidRootPart")
+                    if h and r then
+                        if h.Sit and h.SeatPart == seat then continue end
+                        local targetPos = seat.Position + Vector3.new(0, 2.5, 0)
+                        local dist = (r.Position - targetPos).Magnitude
+                        if dist > 0.3 then
+                            local dirVec = (targetPos - r.Position).Unit
+                            local step = math.min(300 * 0.05, dist)  -- скорость 300
+                            local newPos = r.Position + dirVec * step
+                            r.CFrame = CFrame.new(newPos)
+                        else
+                            r.CFrame = CFrame.new(targetPos)
+                        end
+                    end
+                end
+            end
         end
     end
 end)
 
--- Запуск детектора фруктов
+-- Первичная посадка
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        if islandMode then continue end
+        if boat and seat and hum and not (hum.Sit and hum.SeatPart == seat) then
+            local target = seat.Position + Vector3.new(0, 2.5, 0)
+            moveStep(target, 150, true)
+            hum.Sit = true
+        end
+        break
+    end
+end)
+
 task.spawn(function()
     if not player.Character then player.CharacterAdded:Wait() end
     task.wait(2)
     fruitTracker()
 end)
 
-print("Скрипт успешно запущен. Главный цикл активен, остров обрабатывается, магнит работает.")
+print("Финальный скрипт запущен. Магнит ускорен до 300, посадка и остров на 150.")
