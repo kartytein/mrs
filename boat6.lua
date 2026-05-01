@@ -1,6 +1,4 @@
--- ===== ФИНАЛЬНЫЙ ПОЛНЫЙ СКРИПТ (ИСПРАВЛЕНА СИНТАКСИЧЕСКАЯ ОШИБКА) =====
--- Вся предыдущая логика сохранена, ошибка исправлена.
-
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (ИСПРАВЛЕНА ПОКУПКА ЛОДКИ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
@@ -255,7 +253,7 @@ task.spawn(function()
         local island = findIsland()
         if island and not islandMode then
             if cooldown and tick() - cdTimer < 10 then
-                -- игнорируем
+                -- без действий
             else
                 cooldown = false
             end
@@ -275,7 +273,7 @@ task.spawn(function()
                 local egg = core and core:FindFirstChild("SpawnedDragonEggs") and core.SpawnedDragonEggs:FindFirstChild("DragonEgg")
                 if egg and not eggSeen then
                     eggSeen = true
-                    print("[ОСТРОВ] DragonEgg появился, ждём исчезновения")
+                    print("[ОСТРОВ] DragonEgg появился, ждём")
                 end
                 if eggSeen and not egg then
                     print("[ОСТРОВ] DragonEgg исчез")
@@ -372,16 +370,19 @@ task.spawn(function()
 
     boat = findMyBoat()
     if not boat then
-        moveStep(Vector3.new(-16917,9.1,447),150,true)
+        local purchasePoint = Vector3.new(-16917, 9.1, 447)
+        moveStep(purchasePoint, 150, true)
         buyBoat()
         print("Ожидание лодки...")
         task.wait(3)
-        for i=1,10 do
+        for i = 1, 10 do
             boat = findMyBoat()
             if boat then break end
             task.wait(1)
         end
-        if not boat then error("Лодка не найдена") end
+        if not boat then
+            error("Лодка не найдена после покупки")
+        end
         seat = boat:FindFirstChildWhichIsA("VehicleSeat")
         root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
         if not seat or not root then error("Нет сиденья/части") end
@@ -408,4 +409,4 @@ task.spawn(function()
     fruitTracker()
 end)
 
-print("Скрипт успешно запущен. Синтаксис исправлен.")
+print("Скрипт успешно запущен. Лодка покупается, магнит работает, остров обрабатывается.")
