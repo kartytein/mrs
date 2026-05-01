@@ -1,30 +1,7 @@
--- Магнит: возврат на сиденье (плавный, как в эталоне)
+-- Магнит: точное копирование эталонного поведения (постоянное обновление цели)
 local player = game.Players.LocalPlayer
 
--- Функция плавного перемещения к цели (маленькими шагами)
-local function moveTo(targetPos)
-    local char = player.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChild("Humanoid")
-    if not hrp or not hum then return end
-    local old = hum.PlatformStand
-    hum.PlatformStand = true
-    local step = 0.05
-    local speed = 150
-    local stepSize = speed * step
-    while (hrp.Position - targetPos).Magnitude > 0.5 do
-        local dir = (targetPos - hrp.Position).Unit
-        local move = math.min(stepSize, (targetPos - hrp.Position).Magnitude)
-        local newPos = hrp.Position + dir * move
-        hrp.CFrame = CFrame.new(newPos)
-        task.wait(step)
-    end
-    hrp.CFrame = CFrame.new(targetPos)
-    hum.PlatformStand = old
-end
-
--- Поиск своей лодки
+-- Функция поиска своей лодки
 local function findMyBoat()
     local boats = workspace:FindFirstChild("Boats")
     if not boats then return nil end
@@ -38,10 +15,10 @@ local function findMyBoat()
     return nil
 end
 
--- Основной цикл
+-- Главный цикл (очень частый, чтобы успевать за движением лодки)
 task.spawn(function()
     while true do
-        task.wait(0.2)
+        task.wait(0.05) -- интервал как в эталонном скрипте
         local boat = findMyBoat()
         if not boat then continue end
         local seat = boat:FindFirstChildWhichIsA("VehicleSeat")
@@ -51,12 +28,25 @@ task.spawn(function()
         local hum = char:FindFirstChild("Humanoid")
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if not hum or not hrp then continue end
+        
+        -- Если не сидит на нужном сиденье
         if not (hum.Sit and hum.SeatPart == seat) then
+            -- Актуальная цель (сиденье + 2.5 по Y, как в логах)
             local target = seat.Position + Vector3.new(0, 2.5, 0)
-            moveTo(target)
-            hum.Sit = true
+            local dist = (hrp.Position - target).Magnitude
+            if dist > 0.5 then
+                -- Маленький шаг к цели (скорость 150, шаг 0.05 сек)
+                local dir = (target - hrp.Position).Unit
+                local step = math.min(150 * 0.05, dist)
+                local newPos = hrp.Position + dir * step
+                hrp.CFrame = CFrame.new(newPos)
+            else
+                -- Достигли цели – садимся
+                hrp.CFrame = CFrame.new(target)
+                hum.Sit = true
+            end
         end
     end
 end)
 
-print("Магнит запущен")
+print("Магнит запущен (плавное следование за сиденьем)")
