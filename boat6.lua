@@ -1,10 +1,10 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ (ИСПРАВЛЕНА ПОКУПКА ЛОДКИ) =====
+-- ===== ФИНАЛЬНЫЙ РАБОЧИЙ СКРИПТ (ПОКУПКА ЛОДКИ ИСПРАВЛЕНА) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
 local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
 
--- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
+-- Постоянное отключение коллизий
 task.spawn(function()
     while true do
         local char = player.Character
@@ -21,7 +21,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+-- Перемещение шагами (CFrame)
 local function moveStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
@@ -45,15 +45,22 @@ local function moveStep(targetPos, speed, keepY)
     return true
 end
 
+-- Покупка лодки (с повторной проверкой)
 local function buyBoat()
     local rs = game:GetService("ReplicatedStorage")
     if not rs then return end
     local remotes = rs:FindFirstChild("Remotes")
     if not remotes then return end
     local commF = remotes:FindFirstChild("CommF_")
-    if commF then pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end) end
+    if commF then
+        pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end)
+        print("[ПОКУПКА] Команда отправлена")
+    else
+        warn("[ПОКУПКА] CommF_ не найден")
+    end
 end
 
+-- Поиск лодки по Owner
 local function findMyBoat()
     local boats = workspace:FindFirstChild("Boats")
     if not boats then return nil end
@@ -67,6 +74,7 @@ local function findMyBoat()
     return nil
 end
 
+-- Посадка на сиденье (первичная)
 local function sitOnSeat(seat, hrp, hum)
     local target = seat.Position + Vector3.new(0, 2.5, 0)
     moveStep(target, 150, true)
@@ -74,7 +82,7 @@ local function sitOnSeat(seat, hrp, hum)
     task.wait(0.3)
 end
 
--- ========== 3. ДЕТЕКТОР ФРУКТОВ ==========
+-- Детектор фруктов
 local sentFruits = {}
 local function sendFruit(name)
     local msg = { content = player.Name .. " получил '" .. name .. "'!", username = "Инвентарь" }
@@ -107,7 +115,7 @@ local function fruitTracker()
     print("Детектор фруктов запущен")
 end
 
--- ========== 4. ОСТРОВ ==========
+-- Остров
 local islandMode = false
 local function findIsland()
     for _, obj in ipairs(workspace:GetDescendants()) do
@@ -116,7 +124,7 @@ local function findIsland()
     return nil
 end
 
--- ========== 5. АНТИ-IDLE ==========
+-- Анти-idle
 task.spawn(function()
     local cam = workspace.CurrentCamera
     local orig = cam.CFrame
@@ -128,7 +136,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ДВИЖЕНИЕ ЛОДКИ ==========
+-- Движение лодки
 local boat = nil
 local seat = nil
 local root = nil
@@ -216,7 +224,7 @@ local function startMove()
     end)
 end
 
--- ========== 7. МАГНИТ ==========
+-- Магнит
 task.spawn(function()
     while true do
         task.wait(0.05)
@@ -244,7 +252,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 8. МОНИТОР ОСТРОВА ==========
+-- Монитор острова
 task.spawn(function()
     local cooldown = false
     local cdTimer = 0
@@ -253,7 +261,7 @@ task.spawn(function()
         local island = findIsland()
         if island and not islandMode then
             if cooldown and tick() - cdTimer < 10 then
-                -- без действий
+                -- игнорируем
             else
                 cooldown = false
             end
@@ -295,6 +303,8 @@ task.spawn(function()
                     if nat then nat.Disabled = true end
                 end
             else
+                boat = nil; seat = nil; root = nil
+                print("[ОСТРОВ] Лодка не найдена, покупаем...")
                 moveStep(Vector3.new(-16917,9.1,447),150,true)
                 buyBoat()
                 task.wait(3)
@@ -311,6 +321,8 @@ task.spawn(function()
                         local nat = boat:FindFirstChild("Script")
                         if nat then nat.Disabled = true end
                     end
+                else
+                    print("[ОСТРОВ] Не удалось купить лодку, ждём ручной посадки")
                 end
             end
             task.wait(2)
@@ -319,7 +331,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 9. ОСНОВНОЙ МОНИТОР ==========
+-- Основной монитор
 task.spawn(function()
     while true do
         task.wait(0.5)
@@ -356,7 +368,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 10. ПЕРВИЧНЫЙ ЗАПУСК ==========
+-- Первичный запуск
 task.spawn(function()
     local rs = game:GetService("ReplicatedStorage")
     local remotes = rs and rs:FindFirstChild("Remotes")
@@ -370,19 +382,19 @@ task.spawn(function()
 
     boat = findMyBoat()
     if not boat then
-        local purchasePoint = Vector3.new(-16917, 9.1, 447)
-        moveStep(purchasePoint, 150, true)
+        print("[ПЕРВИЧНЫЙ ЗАПУСК] Перемещение к точке покупки...")
+        moveStep(Vector3.new(-16917,9.1,447),150,true)
         buyBoat()
-        print("Ожидание лодки...")
-        task.wait(3)
-        for i = 1, 10 do
+        print("[ПЕРВИЧНЫЙ ЗАПУСК] Ожидание появления лодки...")
+        for i = 1, 30 do
             boat = findMyBoat()
             if boat then break end
-            task.wait(1)
+            task.wait(0.5)
         end
         if not boat then
-            error("Лодка не найдена после покупки")
+            error("Лодка не появилась после покупки")
         end
+        print("[ПЕРВИЧНЫЙ ЗАПУСК] Лодка найдена: " .. boat.Name)
         seat = boat:FindFirstChildWhichIsA("VehicleSeat")
         root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
         if not seat or not root then error("Нет сиденья/части") end
@@ -409,4 +421,4 @@ task.spawn(function()
     fruitTracker()
 end)
 
-print("Скрипт успешно запущен. Лодка покупается, магнит работает, остров обрабатывается.")
+print("Финальный скрипт запущен. Покупка лодки исправлена, ждите появления.")
