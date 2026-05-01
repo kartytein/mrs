@@ -1,7 +1,32 @@
--- Диагностика: CFrame персонажа и позиция сиденья (с миллисекундами, вывод при изменениях)
+-- ===== МАГНИТ: ВОЗВРАТ НА СИДЕНЬЕ (ПЛАВНО, КАК В ЭТАЛОНЕ) =====
 local player = game.Players.LocalPlayer
-local function log(msg) print(string.format("%s.%03d %s", os.date("%H:%M:%S"), math.floor((tick() % 1) * 1000), msg)) end
+local stepDuration = 0.05
+local walkSpeed = 150
+local stepSize = walkSpeed * stepDuration
 
+-- Функция плавного перемещения к цели (CFrame маленькими шагами)
+local function moveSmooth(targetPos, keepY)
+    local char = player.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChild("Humanoid")
+    if not hrp or not hum then return false end
+    local oldPlatform = hum.PlatformStand
+    hum.PlatformStand = true
+    while (hrp.Position - targetPos).Magnitude > 0.5 do
+        local dir = (targetPos - hrp.Position).Unit
+        local move = math.min(stepSize, (targetPos - hrp.Position).Magnitude)
+        local newPos = hrp.Position + dir * move
+        if keepY then newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z) end
+        hrp.CFrame = CFrame.new(newPos)
+        task.wait(stepDuration)
+    end
+    hrp.CFrame = CFrame.new(targetPos)
+    hum.PlatformStand = oldPlatform
+    return true
+end
+
+-- Поиск своей лодки по Owner
 local function findMyBoat()
     local boats = workspace:FindFirstChild("Boats")
     if not boats then return nil end
@@ -15,60 +40,37 @@ local function findMyBoat()
     return nil
 end
 
+-- Глобальные переменные для лодки и сиденья
 local boat = nil
 local seat = nil
-local lastCharCF = nil
-local lastSeatPos = nil
-local lastSit = nil
 
-while true do
+-- Функция обновления ссылок на лодку и сиденье
+local function updateReferences()
     boat = findMyBoat()
-    if boat then
-        seat = boat:FindFirstChildWhichIsA("VehicleSeat")
-    else
-        seat = nil
-    end
-
-    local char = player.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    local hum = char and char:FindFirstChild("Humanoid")
-    local sitting = hum and hum.Sit and hum.SeatPart == seat
-
-    if sitting ~= lastSit then
-        log("Sit = " .. tostring(sitting))
-        lastSit = sitting
-    end
-
-    -- CFrame персонажа (полный)
-    if hrp then
-        local charCF = hrp.CFrame
-        if lastCharCF == nil then
-            log("Персонаж CFrame: " .. tostring(charCF))
-            lastCharCF = charCF
-        else
-            local posDiff = (charCF.Position - lastCharCF.Position).Magnitude
-            local angDiff = (charCF.RightVector - lastCharCF.RightVector).Magnitude + (charCF.UpVector - lastCharCF.UpVector).Magnitude
-            if posDiff > 0.01 or angDiff > 0.01 then
-                log("Персонаж CFrame: " .. tostring(charCF))
-                lastCharCF = charCF
-            end
-        end
-    elseif lastCharCF ~= nil then
-        log("Персонаж пропал")
-        lastCharCF = nil
-    end
-
-    -- Позиция сиденья (только позиция)
-    if seat and seat.Parent then
-        local seatPos = seat.Position
-        if lastSeatPos == nil or (seatPos - lastSeatPos).Magnitude > 0.01 then
-            log(string.format("Сиденье позиция: (%.2f, %.2f, %.2f)", seatPos.X, seatPos.Y, seatPos.Z))
-            lastSeatPos = seatPos
-        end
-    elseif lastSeatPos ~= nil then
-        log("Сиденье пропало")
-        lastSeatPos = nil
-    end
-
-    task.wait(0.2)
+    if boat then seat = boat:FindFirstChildWhichIsA("VehicleSeat") else seat = nil end
 end
+
+-- Основной цикл магнита
+task.spawn(function()
+    while true do
+        task.wait(0.2) -- частота проверки
+        updateReferences()
+        if not boat or not seat then continue end
+        local char = player.Character
+        if not char then continue
+        local hum = char:FindFirstChild("Humanoid")
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if not hum or not hrp then continue
+        -- Если не сидит на нужном сиденье
+        if not (hum.Sit and hum.SeatPart == seat) then
+            -- Цель: чуть выше сиденья (как в логах, с запасом)
+            local targetPos = seat.Position + Vector3.new(0, 2.5, 0)
+            moveSmooth(targetPos, true)
+            -- После перемещения садимся
+            hum.Sit = true
+            task.wait(0.3) -- даём время стабилизироваться
+        end
+    end
+end)
+
+print("Магнит запущен, будет возвращать на сиденье при вылезании.")
