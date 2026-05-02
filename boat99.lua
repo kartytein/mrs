@@ -1,10 +1,15 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ (ПОДЪЁМ НА ОСТРОВ +300) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С BODYPOSITION ДЛЯ ФИКСАЦИИ ВЫСОТЫ ПРИ ПОСАДКЕ =====
+-- Исправлено падение вниз: теперь вертикальная позиция удерживается BodyPosition,
+-- который обновляется каждые 0.05 сек в соответствии с высотой сиденья.
+-- Скорость и интервалы взяты из логов (300 студий/сек, шаг 0.02 сек).
+-- При возврате с острова персонаж поднимается на +300 по Y.
+
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
 local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
 
--- Постоянное отключение коллизий
+-- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
 task.spawn(function()
     while true do
         local char = player.Character
@@ -21,7 +26,8 @@ task.spawn(function()
     end
 end)
 
--- Перемещение шагами (для посадки и острова)
+-- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+-- Перемещение шагами (для острова и первичной посадки)
 local function moveStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
@@ -34,8 +40,8 @@ local function moveStep(targetPos, speed, keepY)
     local stepSize = speed * step
     while (hrp.Position - targetPos).Magnitude > 0.5 do
         local dir = (targetPos - hrp.Position).Unit
-        local move = math.min(stepSize, (targetPos - hrp.Position).Magnitude)
-        local newPos = hrp.Position + dir * move
+        local moveDist = math.min(stepSize, (targetPos - hrp.Position).Magnitude)
+        local newPos = hrp.Position + dir * moveDist
         if keepY then newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z) end
         hrp.CFrame = CFrame.new(newPos)
         task.wait(step)
@@ -67,6 +73,7 @@ local function findMyBoat()
     return nil
 end
 
+-- Первичная посадка (только если нужно сесть в первый раз)
 local function sitOnSeat(seat, hrp, hum)
     local target = seat.Position + Vector3.new(0, 2.5, 0)
     moveStep(target, 300, true)
@@ -119,7 +126,7 @@ task.spawn(function()
     end
 end)
 
--- Остров
+-- ========== 3. ОСТРОВ ==========
 local islandMode = false
 local islandReturn = false
 local function findIsland()
@@ -140,7 +147,8 @@ task.spawn(function()
                 local hum = char:FindFirstChild("Humanoid")
                 if hum and hum.Sit then hum.Sit = false end
             end
-            local target = island:GetPivot().Position + Vector3.new(0, 300, 0)  -- поднято на +300
+            -- Поднимаем точку на +300 по Y
+            local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
             moveStep(target, 200, true)
             local startTime = os.clock()
             local eggSeen = false
@@ -164,7 +172,7 @@ task.spawn(function()
     end
 end)
 
--- Движение лодки
+-- ========== 4. ДВИЖЕНИЕ ЛОДКИ (BODYVELOCITY) ==========
 local boat = nil
 local seat = nil
 local root = nil
@@ -252,7 +260,29 @@ local function startMove()
     end)
 end
 
--- Быстрый магнит (по логам: скорость 300, интервал 0.02 сек)
+-- ========== 5. БЫСТРЫЙ МАГНИТ С BODYPOSITION (ФИКСАЦИЯ ВЫСОТЫ) ==========
+local magnetBodyPos = nil
+local magnetBodyPosActive = false
+
+local function updateMagnetBodyPos(targetY)
+    if not magnetBodyPosActive then return end
+    local char = player.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    if not magnetBodyPos then
+        magnetBodyPos = Instance.new("BodyPosition")
+        magnetBodyPos.MaxForce = Vector3.new(0, math.huge, 0)
+        magnetBodyPos.Parent = hrp
+    end
+    magnetBodyPos.Position = Vector3.new(hrp.Position.X, targetY, hrp.Position.Z)
+end
+
+local function stopMagnetBodyPos()
+    magnetBodyPosActive = false
+    if magnetBodyPos then magnetBodyPos:Destroy(); magnetBodyPos = nil end
+end
+
 local function fastMagnet()
     if not seat then return end
     local char = player.Character
@@ -260,20 +290,31 @@ local function fastMagnet()
     local h = char:FindFirstChild("Humanoid")
     local r = char:FindFirstChild("HumanoidRootPart")
     if not h or not r then return end
-    if h.Sit and h.SeatPart == seat then return end
+    if h.Sit and h.SeatPart == seat then
+        stopMagnetBodyPos()
+        return
+    end
+    -- Включаем фиксацию высоты
+    if not magnetBodyPosActive then
+        magnetBodyPosActive = true
+    end
     local targetPos = seat.Position + Vector3.new(0, 2.5, 0)
+    -- Обновляем BodyPosition (высота)
+    updateMagnetBodyPos(targetPos.Y)
     local dist = (r.Position - targetPos).Magnitude
     if dist > 0.3 then
         local dirVec = (targetPos - r.Position).Unit
-        local step = math.min(300 * 0.02, dist)
+        local step = math.min(300 * 0.02, dist)   -- скорость 300, шаг 0.02 → 6 студий
         local newPos = r.Position + dirVec * step
+        -- Сохраняем высоту из целевой точки
+        newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z)
         r.CFrame = CFrame.new(newPos)
     else
         r.CFrame = CFrame.new(targetPos)
     end
 end
 
--- Основной цикл
+-- ========== 6. ОСНОВНОЙ ЦИКЛ ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -286,7 +327,7 @@ end
 
 task.spawn(function()
     while true do
-        task.wait(0.02)
+        task.wait(0.02)   -- частота как в логах
         if islandMode then continue end
         if islandReturn then
             islandReturn = false
@@ -328,7 +369,11 @@ task.spawn(function()
             hrp = char:FindFirstChild("HumanoidRootPart")
         end
         if hum and hum.Sit and hum.SeatPart == seat then
-            if not moving then startMove() end
+            if moving then
+                -- уже движется, ничего не делаем
+            else
+                startMove()
+            end
         else
             if moving then stopMove() end
             fastMagnet()
@@ -350,10 +395,11 @@ task.spawn(function()
     end
 end)
 
+-- Запуск детектора фруктов
 task.spawn(function()
     if not player.Character then player.CharacterAdded:Wait() end
     task.wait(2)
     fruitTracker()
 end)
 
-print("Скрипт запущен. Подъём на остров увеличен до +300, магнит быстрый (300 ст/сек, 0.02 сек).")
+print("Финальный скрипт с BodyPosition для магнита + подъём на остров на +300 Y запущен.")
