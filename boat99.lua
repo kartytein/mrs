@@ -1,9 +1,4 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С BODYPOSITION ДЛЯ ФИКСАЦИИ ВЫСОТЫ ПРИ ПОСАДКЕ =====
--- Исправлено падение вниз: теперь вертикальная позиция удерживается BodyPosition,
--- который обновляется каждые 0.05 сек в соответствии с высотой сиденья.
--- Скорость и интервалы взяты из логов (300 студий/сек, шаг 0.02 сек).
--- При возврате с острова персонаж поднимается на +300 по Y.
-
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ДИАГНОСТИКОЙ (ПОСЛЕ ОСТРОВА НЕ САДИТСЯ — ДОБАВЛЕН ПОДРОБНЫЙ ЛОГ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
@@ -27,7 +22,6 @@ task.spawn(function()
 end)
 
 -- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
--- Перемещение шагами (для острова и первичной посадки)
 local function moveStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
@@ -73,7 +67,6 @@ local function findMyBoat()
     return nil
 end
 
--- Первичная посадка (только если нужно сесть в первый раз)
 local function sitOnSeat(seat, hrp, hum)
     local target = seat.Position + Vector3.new(0, 2.5, 0)
     moveStep(target, 300, true)
@@ -81,7 +74,7 @@ local function sitOnSeat(seat, hrp, hum)
     task.wait(0.3)
 end
 
--- Детектор фруктов
+-- Детектор фруктов (упрощённо)
 local sentFruits = {}
 local function sendFruit(name)
     local msg = { content = player.Name .. " получил '" .. name .. "'!", username = "Инвентарь" }
@@ -141,38 +134,42 @@ task.spawn(function()
         task.wait(0.5)
         local island = findIsland()
         if island and not islandMode then
+            print("[ДИАГНОСТИКА] ОСТРОВ ПОЯВИЛСЯ")
             islandMode = true
             local char = player.Character
             if char then
                 local hum = char:FindFirstChild("Humanoid")
                 if hum and hum.Sit then hum.Sit = false end
             end
-            -- Поднимаем точку на +300 по Y
             local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
             moveStep(target, 200, true)
             local startTime = os.clock()
             local eggSeen = false
             while islandMode do
-                if os.clock() - startTime >= 600 then break end
+                if os.clock() - startTime >= 600 then
+                    print("[ДИАГНОСТИКА] ТАЙМЕР 10 МИНУТ ИСТЁК, ВЫХОД")
+                    break
+                end
                 local core = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Prehistoricisland") and workspace.Map.Prehistoricisland:FindFirstChild("Core")
                 local egg = core and core:FindFirstChild("SpawnedDragonEggs") and core.SpawnedDragonEggs:FindFirstChild("DragonEgg")
                 if egg and not eggSeen then
                     eggSeen = true
-                    print("[ОСТРОВ] DragonEgg появился, ждём")
+                    print("[ДИАГНОСТИКА] DRAGON EGG ПОЯВИЛСЯ, ЖДЁМ ИСЧЕЗНОВЕНИЯ")
                 end
                 if eggSeen and not egg then
-                    print("[ОСТРОВ] DragonEgg исчез")
+                    print("[ДИАГНОСТИКА] DRAGON EGG ИСЧЕЗ, ВЫХОД ИЗ РЕЖИМА ОСТРОВА")
                     break
                 end
                 task.wait(1)
             end
             islandMode = false
             islandReturn = true
+            print("[ДИАГНОСТИКА] РЕЖИМ ОСТРОВА ЗАВЕРШЁН, islandReturn = true")
         end
     end
 end)
 
--- ========== 4. ДВИЖЕНИЕ ЛОДКИ (BODYVELOCITY) ==========
+-- ========== 4. ДВИЖЕНИЕ ЛОДКИ ==========
 local boat = nil
 local seat = nil
 local root = nil
@@ -260,7 +257,7 @@ local function startMove()
     end)
 end
 
--- ========== 5. БЫСТРЫЙ МАГНИТ С BODYPOSITION (ФИКСАЦИЯ ВЫСОТЫ) ==========
+-- ========== 5. БЫСТРЫЙ МАГНИТ С BODYPOSITION (ДЛЯ ПОСАДКИ) ==========
 local magnetBodyPos = nil
 local magnetBodyPosActive = false
 
@@ -294,19 +291,16 @@ local function fastMagnet()
         stopMagnetBodyPos()
         return
     end
-    -- Включаем фиксацию высоты
     if not magnetBodyPosActive then
         magnetBodyPosActive = true
     end
     local targetPos = seat.Position + Vector3.new(0, 2.5, 0)
-    -- Обновляем BodyPosition (высота)
     updateMagnetBodyPos(targetPos.Y)
     local dist = (r.Position - targetPos).Magnitude
     if dist > 0.3 then
         local dirVec = (targetPos - r.Position).Unit
-        local step = math.min(300 * 0.02, dist)   -- скорость 300, шаг 0.02 → 6 студий
+        local step = math.min(300 * 0.02, dist)
         local newPos = r.Position + dirVec * step
-        -- Сохраняем высоту из целевой точки
         newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z)
         r.CFrame = CFrame.new(newPos)
     else
@@ -314,7 +308,7 @@ local function fastMagnet()
     end
 end
 
--- ========== 6. ОСНОВНОЙ ЦИКЛ ==========
+-- ========== 6. ОСНОВНОЙ ЦИКЛ С ДИАГНОСТИКОЙ ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -327,17 +321,23 @@ end
 
 task.spawn(function()
     while true do
-        task.wait(0.02)   -- частота как в логах
-        if islandMode then continue end
+        task.wait(0.02)
+        if islandMode then
+            -- во время острова не делаем ничего с лодкой
+            continue
+        end
         if islandReturn then
+            print("[ДИАГНОСТИКА] ОБНАРУЖЕН islandReturn = true, сбрасываем boat и seat")
             islandReturn = false
-            boat = nil; seat = nil; root = nil
-            print("[ГЛАВНЫЙ] Возврат с острова, сброс лодки")
+            boat = nil
+            seat = nil
+            root = nil
+            print("[ДИАГНОСТИКА] boat/seat сброшены, при следующем цикле будет поиск и посадка")
         end
         if not boat or not boat.Parent then
             boat = findMyBoat()
             if not boat then
-                print("[ГЛАВНЫЙ] Лодки нет, покупаем")
+                print("[ДИАГНОСТИКА] Лодка не найдена, покупаем")
                 buyBoat()
                 for i = 1, 20 do
                     boat = findMyBoat()
@@ -345,7 +345,7 @@ task.spawn(function()
                     task.wait(0.5)
                 end
                 if not boat then
-                    print("[ГЛАВНЫЙ] Лодка не появилась, повтор через 5 сек")
+                    print("[ДИАГНОСТИКА] Лодка не появилась, повтор через 5 сек")
                     task.wait(5)
                     continue
                 end
@@ -353,6 +353,7 @@ task.spawn(function()
             seat = boat:FindFirstChildWhichIsA("VehicleSeat")
             root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
             if not seat or not root then
+                print("[ДИАГНОСТИКА] Ошибка: нет сиденья или основной части у лодки")
                 boat = nil
                 continue
             end
@@ -361,7 +362,7 @@ task.spawn(function()
             end
             local nat = boat:FindFirstChild("Script")
             if nat then nat.Disabled = true end
-            print("[ГЛАВНЫЙ] Лодка найдена: " .. boat.Name)
+            print("[ДИАГНОСТИКА] Лодка найдена и подготовлена: " .. boat.Name)
         end
         local char = player.Character
         if char then
@@ -369,24 +370,35 @@ task.spawn(function()
             hrp = char:FindFirstChild("HumanoidRootPart")
         end
         if hum and hum.Sit and hum.SeatPart == seat then
-            if moving then
-                -- уже движется, ничего не делаем
-            else
+            if not moving then
+                print("[ДИАГНОСТИКА] Персонаж сидит, запускаем движение лодки")
                 startMove()
             end
         else
-            if moving then stopMove() end
+            if moving then
+                print("[ДИАГНОСТИКА] Персонаж не сидит, останавливаем движение лодки")
+                stopMove()
+            end
+            -- вызываем магнит
             fastMagnet()
+            -- дополнительная диагностика расстояния до сиденья (раз в 2 секунды)
+            if math.floor(os.clock() * 2) % 2 == 0 then
+                if hrp and seat then
+                    local dist = (hrp.Position - (seat.Position + Vector3.new(0,2.5,0))).Magnitude
+                    print(string.format("[ДИАГНОСТИКА] Расстояние до сиденья: %.2f", dist))
+                end
+            end
         end
     end
 end)
 
--- Первичная посадка
+-- Первичная посадка (только если лодка есть и персонаж ещё не сидит)
 task.spawn(function()
     while true do
         task.wait(0.5)
         if islandMode then continue end
         if boat and seat and hum and not (hum.Sit and hum.SeatPart == seat) then
+            print("[ДИАГНОСТИКА] Первичная посадка (moveStep)")
             local target = seat.Position + Vector3.new(0, 2.5, 0)
             moveStep(target, 300, true)
             hum.Sit = true
@@ -402,4 +414,4 @@ task.spawn(function()
     fruitTracker()
 end)
 
-print("Финальный скрипт с BodyPosition для магнита + подъём на остров на +300 Y запущен.")
+print("Скрипт с диагностикой запущен. Все изменения будут выводиться в консоль.")
