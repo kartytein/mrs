@@ -1,4 +1,4 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С ДИАГНОСТИКОЙ (ПОСЛЕ ОСТРОВА НЕ САДИТСЯ — ДОБАВЛЕН ПОДРОБНЫЙ ЛОГ) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ИСПРАВЛЕНИЕМ: ПОСЛЕ ОСТРОВА ПРИНУДИТЕЛЬНАЯ ПОСАДКА И КУЛДАУН =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
@@ -74,7 +74,7 @@ local function sitOnSeat(seat, hrp, hum)
     task.wait(0.3)
 end
 
--- Детектор фруктов (упрощённо)
+-- Детектор фруктов
 local sentFruits = {}
 local function sendFruit(name)
     local msg = { content = player.Name .. " получил '" .. name .. "'!", username = "Инвентарь" }
@@ -119,8 +119,10 @@ task.spawn(function()
     end
 end)
 
--- ========== 3. ОСТРОВ ==========
+-- ========== 3. ОСТРОВ (С КУЛДАУНОМ) ==========
 local islandMode = false
+local islandCooldown = false      -- дополнительный флаг, чтобы не реагировать на тот же остров сразу
+local islandCooldownTimer = 0
 local islandReturn = false
 local function findIsland()
     for _, obj in ipairs(workspace:GetDescendants()) do
@@ -134,7 +136,15 @@ task.spawn(function()
         task.wait(0.5)
         local island = findIsland()
         if island and not islandMode then
-            print("[ДИАГНОСТИКА] ОСТРОВ ПОЯВИЛСЯ")
+            if islandCooldown and tick() - islandCooldownTimer < 15 then
+                -- игнорируем остров в течение 15 секунд после выхода
+                continue
+            else
+                islandCooldown = false
+            end
+        end
+        if island and not islandMode then
+            print("[ОСТРОВ] Остров появился, входим в режим острова")
             islandMode = true
             local char = player.Character
             if char then
@@ -147,24 +157,27 @@ task.spawn(function()
             local eggSeen = false
             while islandMode do
                 if os.clock() - startTime >= 600 then
-                    print("[ДИАГНОСТИКА] ТАЙМЕР 10 МИНУТ ИСТЁК, ВЫХОД")
+                    print("[ОСТРОВ] 10 минут истекло, выходим")
                     break
                 end
                 local core = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Prehistoricisland") and workspace.Map.Prehistoricisland:FindFirstChild("Core")
                 local egg = core and core:FindFirstChild("SpawnedDragonEggs") and core.SpawnedDragonEggs:FindFirstChild("DragonEgg")
                 if egg and not eggSeen then
                     eggSeen = true
-                    print("[ДИАГНОСТИКА] DRAGON EGG ПОЯВИЛСЯ, ЖДЁМ ИСЧЕЗНОВЕНИЯ")
+                    print("[ОСТРОВ] DragonEgg появился, ждём исчезновения")
                 end
                 if eggSeen and not egg then
-                    print("[ДИАГНОСТИКА] DRAGON EGG ИСЧЕЗ, ВЫХОД ИЗ РЕЖИМА ОСТРОВА")
+                    print("[ОСТРОВ] DragonEgg исчез, выходим")
                     break
                 end
                 task.wait(1)
             end
             islandMode = false
             islandReturn = true
-            print("[ДИАГНОСТИКА] РЕЖИМ ОСТРОВА ЗАВЕРШЁН, islandReturn = true")
+            -- Устанавливаем кулдаун, чтобы не реагировать на тот же остров сразу
+            islandCooldown = true
+            islandCooldownTimer = tick()
+            print("[ОСТРОВ] Режим острова завершён, включён кулдаун 15 секунд")
         end
     end
 end)
@@ -257,7 +270,7 @@ local function startMove()
     end)
 end
 
--- ========== 5. БЫСТРЫЙ МАГНИТ С BODYPOSITION (ДЛЯ ПОСАДКИ) ==========
+-- ========== 5. БЫСТРЫЙ МАГНИТ С BODYPOSITION ==========
 local magnetBodyPos = nil
 local magnetBodyPosActive = false
 
@@ -308,7 +321,7 @@ local function fastMagnet()
     end
 end
 
--- ========== 6. ОСНОВНОЙ ЦИКЛ С ДИАГНОСТИКОЙ ==========
+-- ========== 6. ОСНОВНОЙ ЦИКЛ (ПОСЛЕ ОСТРОВА ПРИНУДИТЕЛЬНАЯ ПОСАДКА) ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -323,21 +336,36 @@ task.spawn(function()
     while true do
         task.wait(0.02)
         if islandMode then
-            -- во время острова не делаем ничего с лодкой
             continue
         end
         if islandReturn then
-            print("[ДИАГНОСТИКА] ОБНАРУЖЕН islandReturn = true, сбрасываем boat и seat")
+            print("[ГЛАВНЫЙ] Обнаружен islandReturn = true, принудительно сбрасываем boat/seat и вызываем посадку")
             islandReturn = false
             boat = nil
             seat = nil
             root = nil
-            print("[ДИАГНОСТИКА] boat/seat сброшены, при следующем цикле будет поиск и посадка")
+            -- Сразу ищем лодку и садимся
+            boat = findMyBoat()
+            if boat then
+                seat = boat:FindFirstChildWhichIsA("VehicleSeat")
+                root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
+                if seat and root then
+                    for _, p in ipairs(boat:GetDescendants()) do
+                        if p:IsA("BasePart") then p.CanCollide = false end
+                    end
+                    local nat = boat:FindFirstChild("Script")
+                    if nat then nat.Disabled = true end
+                    print("[ГЛАВНЫЙ] Лодка найдена после острова, запускаем магнит")
+                else
+                    print("[ГЛАВНЫЙ] Лодка найдена, но нет сиденья/части")
+                end
+            else
+                print("[ГЛАВНЫЙ] Лодка не найдена после острова, возможно, будет куплена позже")
+            end
         end
         if not boat or not boat.Parent then
             boat = findMyBoat()
             if not boat then
-                print("[ДИАГНОСТИКА] Лодка не найдена, покупаем")
                 buyBoat()
                 for i = 1, 20 do
                     boat = findMyBoat()
@@ -345,7 +373,6 @@ task.spawn(function()
                     task.wait(0.5)
                 end
                 if not boat then
-                    print("[ДИАГНОСТИКА] Лодка не появилась, повтор через 5 сек")
                     task.wait(5)
                     continue
                 end
@@ -353,7 +380,6 @@ task.spawn(function()
             seat = boat:FindFirstChildWhichIsA("VehicleSeat")
             root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
             if not seat or not root then
-                print("[ДИАГНОСТИКА] Ошибка: нет сиденья или основной части у лодки")
                 boat = nil
                 continue
             end
@@ -362,7 +388,7 @@ task.spawn(function()
             end
             local nat = boat:FindFirstChild("Script")
             if nat then nat.Disabled = true end
-            print("[ДИАГНОСТИКА] Лодка найдена и подготовлена: " .. boat.Name)
+            print("[ГЛАВНЫЙ] Лодка найдена и подготовлена: " .. boat.Name)
         end
         local char = player.Character
         if char then
@@ -371,37 +397,25 @@ task.spawn(function()
         end
         if hum and hum.Sit and hum.SeatPart == seat then
             if not moving then
-                print("[ДИАГНОСТИКА] Персонаж сидит, запускаем движение лодки")
                 startMove()
             end
         else
-            if moving then
-                print("[ДИАГНОСТИКА] Персонаж не сидит, останавливаем движение лодки")
-                stopMove()
-            end
-            -- вызываем магнит
+            if moving then stopMove() end
             fastMagnet()
-            -- дополнительная диагностика расстояния до сиденья (раз в 2 секунды)
-            if math.floor(os.clock() * 2) % 2 == 0 then
-                if hrp and seat then
-                    local dist = (hrp.Position - (seat.Position + Vector3.new(0,2.5,0))).Magnitude
-                    print(string.format("[ДИАГНОСТИКА] Расстояние до сиденья: %.2f", dist))
-                end
-            end
         end
     end
 end)
 
--- Первичная посадка (только если лодка есть и персонаж ещё не сидит)
+-- Первичная посадка (если лодка есть и персонаж не сидит)
 task.spawn(function()
     while true do
         task.wait(0.5)
         if islandMode then continue end
         if boat and seat and hum and not (hum.Sit and hum.SeatPart == seat) then
-            print("[ДИАГНОСТИКА] Первичная посадка (moveStep)")
             local target = seat.Position + Vector3.new(0, 2.5, 0)
             moveStep(target, 300, true)
             hum.Sit = true
+            print("[ПЕРВИЧНАЯ ПОСАДКА] Выполнена")
         end
         break
     end
@@ -414,4 +428,4 @@ task.spawn(function()
     fruitTracker()
 end)
 
-print("Скрипт с диагностикой запущен. Все изменения будут выводиться в консоль.")
+print("Скрипт с кулдауном острова и принудительной посадкой после острова запущен.")
