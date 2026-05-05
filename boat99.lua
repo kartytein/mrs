@@ -1,9 +1,4 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С ОДНОКРАТНЫМ ПЕРЕМЕЩЕНИЕМ К ОСТРОВУ (БЕЗ ЗАВИСАНИЯ) =====
--- - Кулдаун 60 секунд после острова.
--- - Перемещение к острову однократное (не корректируется после таймаута).
--- - Персонаж не зависает в воздухе, так как после перемещения его не трогают.
--- - Возврат в лодку гарантирован.
-
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (moveStep прекращает по горизонтали, без таймеров) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
@@ -26,10 +21,8 @@ task.spawn(function()
     end
 end)
 
--- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (С ТАЙМАУТОМ И ОДНОКРАТНЫМ ВЫПОЛНЕНИЕМ) ==========
-local function moveStep(targetPos, speed, keepY, maxDuration)
-    maxDuration = maxDuration or 15
-    local startTime = os.clock()
+-- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (moveStep без таймера) ==========
+local function moveStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
     local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -39,14 +32,18 @@ local function moveStep(targetPos, speed, keepY, maxDuration)
     hum.PlatformStand = true
     local step = 0.02
     local stepSize = speed * step
-    while (hrp.Position - targetPos).Magnitude > 0.5 do
-        if os.clock() - startTime > maxDuration then
-            print("[moveStep] Таймаут, цель не достигнута. Расстояние: " .. (hrp.Position - targetPos).Magnitude)
+    while true do
+        local current = hrp.Position
+        local dx = targetPos.X - current.X
+        local dz = targetPos.Z - current.Z
+        local distXZ = math.sqrt(dx*dx + dz*dz)
+        if distXZ < 0.5 then
+            print("[moveStep] Горизонтальная цель достигнута, прекращаем")
             break
         end
-        local dir = (targetPos - hrp.Position).Unit
-        local moveDist = math.min(stepSize, (targetPos - hrp.Position).Magnitude)
-        local newPos = hrp.Position + dir * moveDist
+        local dir = (targetPos - current).Unit
+        local moveDist = math.min(stepSize, (targetPos - current).Magnitude)
+        local newPos = current + dir * moveDist
         if keepY then newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z) end
         hrp.CFrame = CFrame.new(newPos)
         task.wait(step)
@@ -80,7 +77,7 @@ end
 
 local function sitOnSeat(seat, hrp, hum)
     local target = seat.Position + Vector3.new(0, 2.5, 0)
-    moveStep(target, 300, true, 10)
+    moveStep(target, 300, true)
     hum.Sit = true
     task.wait(0.3)
 end
@@ -218,7 +215,7 @@ local function startMove()
     end)
 end
 
--- ========== 4. БЫСТРЫЙ МАГНИТ (ДЛЯ ВОЗВРАТА НА СИДЕНЬЕ) ==========
+-- ========== 4. БЫСТРЫЙ МАГНИТ С BODYPOSITION ==========
 local magnetBodyPos = nil
 local magnetBodyPosActive = false
 
@@ -269,7 +266,7 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. МОНИТОР ОСТРОВА (ОДНОКРАТНОЕ ПЕРЕМЕЩЕНИЕ) ==========
+-- ========== 5. МОНИТОР ОСТРОВА (БЕЗ ТАЙМЕРА) ==========
 local islandActive = false
 local pendingReturn = false
 local islandCooldownUntil = 0
@@ -295,9 +292,8 @@ task.spawn(function()
                 if hum and hum.Sit then hum.Sit = false end
             end
             local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
-            -- Однократное перемещение (таймаут 15 секунд)
-            moveStep(target, 200, true, 15)
-            print("[ОСТРОВ] Перемещение к острову выполнено, персонаж предоставлен сам себе")
+            moveStep(target, 200, true)   -- прекращает по горизонтали, Y не трогает
+            print("[ОСТРОВ] Перемещение к острову выполнено (или прекращено по горизонтали)")
             local start = os.clock()
             local eggSeen = false
             while true do
@@ -325,7 +321,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ОСНОВНОЙ ЦИКЛ (ПОКУПКА, ПОСАДКА, МАГНИТ, ВОЗВРАТ ПОСЛЕ ОСТРОВА) ==========
+-- ========== 6. ОСНОВНОЙ ЦИКЛ ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -339,9 +335,7 @@ end
 task.spawn(function()
     while true do
         task.wait(0.05)
-        if islandActive then
-            continue
-        end
+        if islandActive then continue end
         if pendingReturn then
             pendingReturn = false
             print("[ГЛАВНЫЙ] Возврат с острова, ищем лодку и садимся")
@@ -364,7 +358,7 @@ task.spawn(function()
                         local r = char:FindFirstChild("HumanoidRootPart")
                         if h and r then
                             local targetPos = seat.Position + Vector3.new(0, 2.5, 0)
-                            moveStep(targetPos, 300, true, 15)
+                            moveStep(targetPos, 300, true)
                             h.Sit = true
                             print("[ГЛАВНЫЙ] Посадка после острова выполнена")
                         end
@@ -419,14 +413,14 @@ task.spawn(function()
     end
 end)
 
--- Первичная посадка (если лодка есть и персонаж не сидит)
+-- Первичная посадка
 task.spawn(function()
     while true do
         task.wait(0.5)
         if islandActive then continue end
         if boat and seat and hum and not (hum.Sit and hum.SeatPart == seat) then
             local target = seat.Position + Vector3.new(0, 2.5, 0)
-            moveStep(target, 300, true, 15)
+            moveStep(target, 300, true)
             hum.Sit = true
             print("[ПЕРВИЧНАЯ ПОСАДКА] Выполнена")
         end
@@ -441,4 +435,4 @@ task.spawn(function()
     fruitTracker()
 end)
 
-print("Скрипт с однократным перемещением к острову и таймаутами запущен.")
+print("Скрипт с исправленным moveStep (без таймеров, прекращение по горизонтали) запущен.")
