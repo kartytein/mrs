@@ -1,4 +1,9 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ С ПРОСТОЙ ЛОГИКОЙ ОСТРОВА (ВОЗВРАТ В ЛОДКУ ГАРАНТИРОВАН) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ С ОДНОКРАТНЫМ ПЕРЕМЕЩЕНИЕМ К ОСТРОВУ (БЕЗ ЗАВИСАНИЯ) =====
+-- - Кулдаун 60 секунд после острова.
+-- - Перемещение к острову однократное (не корректируется после таймаута).
+-- - Персонаж не зависает в воздухе, так как после перемещения его не трогают.
+-- - Возврат в лодку гарантирован.
+
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
@@ -21,8 +26,10 @@ task.spawn(function()
     end
 end)
 
--- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
-local function moveStep(targetPos, speed, keepY)
+-- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (С ТАЙМАУТОМ И ОДНОКРАТНЫМ ВЫПОЛНЕНИЕМ) ==========
+local function moveStep(targetPos, speed, keepY, maxDuration)
+    maxDuration = maxDuration or 15
+    local startTime = os.clock()
     local char = player.Character
     if not char then return false end
     local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -33,6 +40,10 @@ local function moveStep(targetPos, speed, keepY)
     local step = 0.02
     local stepSize = speed * step
     while (hrp.Position - targetPos).Magnitude > 0.5 do
+        if os.clock() - startTime > maxDuration then
+            print("[moveStep] Таймаут, цель не достигнута. Расстояние: " .. (hrp.Position - targetPos).Magnitude)
+            break
+        end
         local dir = (targetPos - hrp.Position).Unit
         local moveDist = math.min(stepSize, (targetPos - hrp.Position).Magnitude)
         local newPos = hrp.Position + dir * moveDist
@@ -69,12 +80,12 @@ end
 
 local function sitOnSeat(seat, hrp, hum)
     local target = seat.Position + Vector3.new(0, 2.5, 0)
-    moveStep(target, 300, true)
+    moveStep(target, 300, true, 10)
     hum.Sit = true
     task.wait(0.3)
 end
 
--- Детектор фруктов (упрощённо)
+-- Детектор фруктов
 local sentFruits = {}
 local function sendFruit(name)
     local msg = { content = player.Name .. " получил '" .. name .. "'!", username = "Инвентарь" }
@@ -207,7 +218,7 @@ local function startMove()
     end)
 end
 
--- ========== 4. БЫСТРЫЙ МАГНИТ С BODYPOSITION ==========
+-- ========== 4. БЫСТРЫЙ МАГНИТ (ДЛЯ ВОЗВРАТА НА СИДЕНЬЕ) ==========
 local magnetBodyPos = nil
 local magnetBodyPosActive = false
 
@@ -258,7 +269,7 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. МОНИТОР ОСТРОВА (ПРОСТАЯ ЛОГИКА) ==========
+-- ========== 5. МОНИТОР ОСТРОВА (ОДНОКРАТНОЕ ПЕРЕМЕЩЕНИЕ) ==========
 local islandActive = false
 local pendingReturn = false
 local islandCooldownUntil = 0
@@ -274,21 +285,19 @@ task.spawn(function()
         task.wait(1)
         local island = findIsland()
         local now = tick()
-        -- Если остров есть, режим не активен, и кулдаун не истёк
         if island and not islandActive and now >= islandCooldownUntil then
             print("[ОСТРОВ] Обнаружен, входим в режим")
             islandActive = true
-            -- Останавливаем движение лодки, выходим из сиденья
             stopMove()
             local char = player.Character
             if char then
                 local hum = char:FindFirstChild("Humanoid")
                 if hum and hum.Sit then hum.Sit = false end
             end
-            -- Перемещаемся на остров (высоко)
             local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
-            moveStep(target, 200, true)
-            -- Ждём 10 минут либо появление и исчезновение DragonEgg
+            -- Однократное перемещение (таймаут 15 секунд)
+            moveStep(target, 200, true, 15)
+            print("[ОСТРОВ] Перемещение к острову выполнено, персонаж предоставлен сам себе")
             local start = os.clock()
             local eggSeen = false
             while true do
@@ -310,13 +319,13 @@ task.spawn(function()
             end
             islandActive = false
             pendingReturn = true
-            islandCooldownUntil = tick() + 30
-            print("[ОСТРОВ] Режим завершён, pendingReturn установлен, кулдаун 30 сек")
+            islandCooldownUntil = tick() + 60
+            print("[ОСТРОВ] Режим завершён, pendingReturn установлен, кулдаун 60 сек")
         end
     end
 end)
 
--- ========== 6. ОСНОВНОЙ ЦИКЛ (С ВОЗВРАТОМ ПОСЛЕ ОСТРОВА) ==========
+-- ========== 6. ОСНОВНОЙ ЦИКЛ (ПОКУПКА, ПОСАДКА, МАГНИТ, ВОЗВРАТ ПОСЛЕ ОСТРОВА) ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -329,20 +338,16 @@ end
 
 task.spawn(function()
     while true do
-        task.wait(0.05)  -- частая проверка для магнита
+        task.wait(0.05)
         if islandActive then
-            -- Во время острова ничего не делаем с лодкой
             continue
         end
-        -- Обработка возврата с острова
         if pendingReturn then
             pendingReturn = false
             print("[ГЛАВНЫЙ] Возврат с острова, ищем лодку и садимся")
-            -- Сбрасываем старые ссылки
             boat = nil
             seat = nil
             root = nil
-            -- Находим лодку
             boat = findMyBoat()
             if boat then
                 seat = boat:FindFirstChildWhichIsA("VehicleSeat")
@@ -353,14 +358,13 @@ task.spawn(function()
                     end
                     local nat = boat:FindFirstChild("Script")
                     if nat then nat.Disabled = true end
-                    -- Принудительная посадка
                     local char = player.Character
                     if char then
                         local h = char:FindFirstChild("Humanoid")
                         local r = char:FindFirstChild("HumanoidRootPart")
                         if h and r then
                             local targetPos = seat.Position + Vector3.new(0, 2.5, 0)
-                            moveStep(targetPos, 300, true)
+                            moveStep(targetPos, 300, true, 15)
                             h.Sit = true
                             print("[ГЛАВНЫЙ] Посадка после острова выполнена")
                         end
@@ -372,7 +376,6 @@ task.spawn(function()
                 print("[ГЛАВНЫЙ] Лодка не найдена, будет куплена позже")
             end
         end
-        -- Обычный цикл: покупка/поиск лодки, магнит, движение
         if not boat or not boat.Parent then
             boat = findMyBoat()
             if not boat then
@@ -423,7 +426,7 @@ task.spawn(function()
         if islandActive then continue end
         if boat and seat and hum and not (hum.Sit and hum.SeatPart == seat) then
             local target = seat.Position + Vector3.new(0, 2.5, 0)
-            moveStep(target, 300, true)
+            moveStep(target, 300, true, 15)
             hum.Sit = true
             print("[ПЕРВИЧНАЯ ПОСАДКА] Выполнена")
         end
@@ -438,4 +441,4 @@ task.spawn(function()
     fruitTracker()
 end)
 
-print("Скрипт с простой логикой острова (гарантированный возврат) запущен.")
+print("Скрипт с однократным перемещением к острову и таймаутами запущен.")
