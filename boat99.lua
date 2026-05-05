@@ -436,3 +436,21 @@ task.spawn(function()
 end)
 
 print("Скрипт с исправленным moveStep (без таймеров, прекращение по горизонтали) запущен.")
+
+-- ========== АНТИ-IDLE: НАЖАТИЕ W КАЖДЫЕ 10 МИНУТ ==========
+task.spawn(function()
+    local vim = game:GetService("VirtualInputManager")
+    if not vim then
+        print("[ANTI-IDLE] VirtualInputManager не доступен, анти-idle только через камеру")
+        return
+    end
+    while true do
+        task.wait(600) -- 10 минут
+        pcall(function()
+            vim:SendKeyEvent(true, "W", false, game)
+            task.wait(0.1)
+            vim:SendKeyEvent(false, "W", false, game)
+        end)
+        print("[ANTI-IDLE] Нажата клавиша W")
+    end
+end)
