@@ -1,4 +1,4 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ (moveStep прекращает по горизонтали, без таймеров) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (ОСТРОВ ОТКЛЮЧАЕТ МАГНИТ И ДВИЖЕНИЕ ЛОДКИ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
@@ -21,7 +21,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (moveStep без таймера) ==========
+-- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 local function moveStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
@@ -38,7 +38,6 @@ local function moveStep(targetPos, speed, keepY)
         local dz = targetPos.Z - current.Z
         local distXZ = math.sqrt(dx*dx + dz*dz)
         if distXZ < 0.5 then
-            print("[moveStep] Горизонтальная цель достигнута, прекращаем")
             break
         end
         local dir = (targetPos - current).Unit
@@ -115,7 +114,7 @@ local function fruitTracker()
     print("Детектор фруктов запущен")
 end
 
--- Анти-idle
+-- Анти-idle (движение камеры и нажатие W)
 task.spawn(function()
     local cam = workspace.CurrentCamera
     local orig = cam.CFrame
@@ -124,6 +123,19 @@ task.spawn(function()
         cam.CFrame = cam.CFrame * CFrame.Angles(0, math.rad(1), 0)
         task.wait(0.5)
         cam.CFrame = orig
+    end
+end)
+task.spawn(function()
+    local vim = game:GetService("VirtualInputManager")
+    if vim then
+        while true do
+            task.wait(600)
+            pcall(function()
+                vim:SendKeyEvent(true, "W", false, game)
+                task.wait(0.1)
+                vim:SendKeyEvent(false, "W", false, game)
+            end)
+        end
     end
 end)
 
@@ -143,8 +155,11 @@ local SPEED_Z = -2
 local TARGET_Y = 100
 local moving = false
 local moveThread = nil
+local islandModeActive = false      -- режим острова активен
+local waitingForDespawn = false
 
 local function ensureBV()
+    if islandModeActive then return end
     local ch = player.Character
     if not ch then return end
     local upper = ch:FindFirstChild("UpperTorso")
@@ -168,7 +183,7 @@ local function stopMove()
 end
 
 local function startMove()
-    if moving then return end
+    if moving or islandModeActive then return end
     moving = true
     moveThread = task.spawn(function()
         local ch = player.Character
@@ -188,7 +203,7 @@ local function startMove()
         end
         local sx = dir * SPEED_X
         bv.Velocity = Vector3.new(sx, SPEED_Y, SPEED_Z)
-        while moving do
+        while moving and not islandModeActive do
             if not (hum and hum.Sit and hum.SeatPart == seat) then
                 stopMove()
                 break
@@ -215,12 +230,12 @@ local function startMove()
     end)
 end
 
--- ========== 4. БЫСТРЫЙ МАГНИТ С BODYPOSITION ==========
+-- ========== 4. БЫСТРЫЙ МАГНИТ (ОТКЛЮЧАЕТСЯ ПРИ ОСТРОВЕ) ==========
 local magnetBodyPos = nil
 local magnetBodyPosActive = false
 
 local function updateMagnetBodyPos(targetY)
-    if not magnetBodyPosActive then return end
+    if not magnetBodyPosActive or islandModeActive then return end
     local char = player.Character
     if not char then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -239,6 +254,7 @@ local function stopMagnetBodyPos()
 end
 
 local function fastMagnet()
+    if islandModeActive then return end
     if not seat then return end
     local char = player.Character
     if not char then return end
@@ -266,15 +282,11 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. МОНИТОР ОСТРОВА (ТОЛЬКО ПОСЛЕ ИСЧЕЗНОВЕНИЯ) ==========
-local islandModeActive = false      -- мы находимся в режиме острова
-local waitingForDespawn = false     -- ждём, пока остров исчезнет после выхода
+-- ========== 5. МОНИТОР ОСТРОВА (ОТКЛЮЧАЕТ МАГНИТ И ДВИЖЕНИЕ) ==========
 local pendingReturn = false
 local function findIsland()
     for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then
-            return obj
-        end
+        if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then return obj end
     end
     return nil
 end
@@ -285,36 +297,33 @@ task.spawn(function()
         local island = findIsland()
         local present = island ~= nil
 
-        -- Если мы ждём исчезновения (после выхода из режима) и острова больше нет, сбрасываем флаг
         if waitingForDespawn and not present then
             waitingForDespawn = false
-            print("[ОСТРОВ] Остров исчез, готов к повторной активации")
+            print("[ОСТРОВ] Остров исчез, готов к новой активации")
         end
 
-        -- Если остров есть, мы не в режиме и не ждём исчезновения → входим в режим
         if present and not islandModeActive and not waitingForDespawn then
-            print("[ОСТРОВ] Обнаружен остров, входим в режим")
+            print("[ОСТРОВ] Обнаружен, входим в режим")
             islandModeActive = true
-
-            -- Останавливаем движение лодки и выходим из сиденья
+            -- Останавливаем всё, связанное с лодкой
             stopMove()
+            stopMagnetBodyPos()
+            -- Выходим из сиденья
             local char = player.Character
             if char then
                 local hum = char:FindFirstChild("Humanoid")
                 if hum and hum.Sit then hum.Sit = false end
             end
-
-            -- Перемещаемся на остров (высоко)
+            -- Перемещаемся к острову (высоко)
             local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
             moveStep(target, 200, true)
-
-            -- Ожидание (10 минут или появление/исчезновение DragonEgg)
+            -- Ожидание
             local startTime = os.clock()
             local eggSeen = false
             while islandModeActive do
                 task.wait(1)
                 if os.clock() - startTime >= 600 then
-                    print("[ОСТРОВ] 10 минут истекло, выходим из режима")
+                    print("[ОСТРОВ] 10 минут истекло, выходим")
                     break
                 end
                 local core = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Prehistoricisland") and workspace.Map.Prehistoricisland:FindFirstChild("Core")
@@ -324,20 +333,19 @@ task.spawn(function()
                     print("[ОСТРОВ] DragonEgg появился, ждём исчезновения")
                 end
                 if eggSeen and not egg then
-                    print("[ОСТРОВ] DragonEgg исчез, выходим из режима")
+                    print("[ОСТРОВ] DragonEgg исчез, выходим")
                     break
                 end
             end
-
-            -- Выход из режима
             islandModeActive = false
-            waitingForDespawn = true   -- теперь ждём, пока остров исчезнет, чтобы разрешить новый вход
+            waitingForDespawn = true
             pendingReturn = true
-            print("[ОСТРОВ] Режим завершён, ждём исчезновения острова для новой активации")
+            print("[ОСТРОВ] Режим завершён, ждём исчезновения острова")
         end
     end
 end)
--- ========== 6. ОСНОВНОЙ ЦИКЛ ==========
+
+-- ========== 6. ОСНОВНОЙ ЦИКЛ (С ВОЗВРАТОМ ПОСЛЕ ОСТРОВА) ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -351,13 +359,11 @@ end
 task.spawn(function()
     while true do
         task.wait(0.05)
-        if islandActive then continue end
+        if islandModeActive then continue end
         if pendingReturn then
             pendingReturn = false
             print("[ГЛАВНЫЙ] Возврат с острова, ищем лодку и садимся")
-            boat = nil
-            seat = nil
-            root = nil
+            boat = nil; seat = nil; root = nil
             boat = findMyBoat()
             if boat then
                 seat = boat:FindFirstChildWhichIsA("VehicleSeat")
@@ -433,7 +439,7 @@ end)
 task.spawn(function()
     while true do
         task.wait(0.5)
-        if islandActive then continue end
+        if islandModeActive then continue end
         if boat and seat and hum and not (hum.Sit and hum.SeatPart == seat) then
             local target = seat.Position + Vector3.new(0, 2.5, 0)
             moveStep(target, 300, true)
@@ -451,22 +457,4 @@ task.spawn(function()
     fruitTracker()
 end)
 
-print("Скрипт с исправленным moveStep (без таймеров, прекращение по горизонтали) запущен.")
-
--- ========== АНТИ-IDLE: НАЖАТИЕ W КАЖДЫЕ 10 МИНУТ ==========
-task.spawn(function()
-    local vim = game:GetService("VirtualInputManager")
-    if not vim then
-        print("[ANTI-IDLE] VirtualInputManager не доступен, анти-idle только через камеру")
-        return
-    end
-    while true do
-        task.wait(600) -- 10 минут
-        pcall(function()
-            vim:SendKeyEvent(true, "W", false, game)
-            task.wait(0.1)
-            vim:SendKeyEvent(false, "W", false, game)
-        end)
-        print("[ANTI-IDLE] Нажата клавиша W")
-    end
-end)
+print("Скрипт запущен. Остров полностью отключает управление лодкой.")
