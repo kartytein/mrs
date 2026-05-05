@@ -266,13 +266,15 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. МОНИТОР ОСТРОВА (БЕЗ ТАЙМЕРА) ==========
-local islandActive = false
+-- ========== 5. МОНИТОР ОСТРОВА (ТОЛЬКО ПОСЛЕ ИСЧЕЗНОВЕНИЯ) ==========
+local islandModeActive = false      -- мы находимся в режиме острова
+local waitingForDespawn = false     -- ждём, пока остров исчезнет после выхода
 local pendingReturn = false
-local islandCooldownUntil = 0
 local function findIsland()
     for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then return obj end
+        if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then
+            return obj
+        end
     end
     return nil
 end
@@ -281,25 +283,38 @@ task.spawn(function()
     while true do
         task.wait(1)
         local island = findIsland()
-        local now = tick()
-        if island and not islandActive and now >= islandCooldownUntil then
-            print("[ОСТРОВ] Обнаружен, входим в режим")
-            islandActive = true
+        local present = island ~= nil
+
+        -- Если мы ждём исчезновения (после выхода из режима) и острова больше нет, сбрасываем флаг
+        if waitingForDespawn and not present then
+            waitingForDespawn = false
+            print("[ОСТРОВ] Остров исчез, готов к повторной активации")
+        end
+
+        -- Если остров есть, мы не в режиме и не ждём исчезновения → входим в режим
+        if present and not islandModeActive and not waitingForDespawn then
+            print("[ОСТРОВ] Обнаружен остров, входим в режим")
+            islandModeActive = true
+
+            -- Останавливаем движение лодки и выходим из сиденья
             stopMove()
             local char = player.Character
             if char then
                 local hum = char:FindFirstChild("Humanoid")
                 if hum and hum.Sit then hum.Sit = false end
             end
+
+            -- Перемещаемся на остров (высоко)
             local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
-            moveStep(target, 200, true)   -- прекращает по горизонтали, Y не трогает
-            print("[ОСТРОВ] Перемещение к острову выполнено (или прекращено по горизонтали)")
-            local start = os.clock()
+            moveStep(target, 200, true)
+
+            -- Ожидание (10 минут или появление/исчезновение DragonEgg)
+            local startTime = os.clock()
             local eggSeen = false
-            while true do
+            while islandModeActive do
                 task.wait(1)
-                if os.clock() - start >= 600 then
-                    print("[ОСТРОВ] 10 минут прошло, выходим")
+                if os.clock() - startTime >= 600 then
+                    print("[ОСТРОВ] 10 минут истекло, выходим из режима")
                     break
                 end
                 local core = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Prehistoricisland") and workspace.Map.Prehistoricisland:FindFirstChild("Core")
@@ -309,18 +324,19 @@ task.spawn(function()
                     print("[ОСТРОВ] DragonEgg появился, ждём исчезновения")
                 end
                 if eggSeen and not egg then
-                    print("[ОСТРОВ] DragonEgg исчез, выходим")
+                    print("[ОСТРОВ] DragonEgg исчез, выходим из режима")
                     break
                 end
             end
-            islandActive = false
+
+            -- Выход из режима
+            islandModeActive = false
+            waitingForDespawn = true   -- теперь ждём, пока остров исчезнет, чтобы разрешить новый вход
             pendingReturn = true
-            islandCooldownUntil = tick() + 60
-            print("[ОСТРОВ] Режим завершён, pendingReturn установлен, кулдаун 60 сек")
+            print("[ОСТРОВ] Режим завершён, ждём исчезновения острова для новой активации")
         end
     end
 end)
-
 -- ========== 6. ОСНОВНОЙ ЦИКЛ ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
