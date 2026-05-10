@@ -276,8 +276,8 @@ end
 
 -- Смещения для яиц (добавьте ваши)
 local PLAYER_OFFSETS = {
-    ["AgniPlay21"] = Vector3.new(212.7, -686.0, -554.4),
-    ["SilentStorm2912"] = Vector3.new(203.9, -686.0, -531.4),
+    ["MichaelJohnson84562"] = Vector3.new(212.7, -686.0, -554.4),
+    ["Willow_hspt2015"] = Vector3.new(203.9, -686.0, -531.4),
     -- добавьте остальных
 }
 local myOffset = PLAYER_OFFSETS[player.Name]
