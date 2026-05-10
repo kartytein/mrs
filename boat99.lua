@@ -1,4 +1,4 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ (ПОДЪЁМ ЧЕРЕЗ CFrame, BODYPOSITION, ПЕРЕМЕЩЕНИЕ К ОСТРОВУ, СБОР ЯЙЦА) =====
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (ПОДЪЁМ, ОЖИДАНИЕ ЯЙЦА, ПЕРЕМЕЩЕНИЕ НА ГОРИЗОНТАЛИ, АКТИВАЦИЯ, ВОЗВРАТ В ЛОДКУ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
@@ -22,7 +22,7 @@ task.spawn(function()
 end)
 
 -- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
-local function moveStep(targetPos, speed, keepY)   -- основная функция плавного перемещения (фиксирует Y, если нужно)
+local function moveStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
     local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -41,6 +41,31 @@ local function moveStep(targetPos, speed, keepY)   -- основная функ�
         task.wait(step)
     end
     hrp.CFrame = CFrame.new(targetPos)
+    hum.PlatformStand = oldPlatform
+    return true
+end
+
+local function moveStepHorizontal(targetPos, speed)
+    local char = player.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChild("Humanoid")
+    if not hrp or not hum then return false end
+    local oldPlatform = hum.PlatformStand
+    hum.PlatformStand = true
+    local step = 0.05
+    local stepSize = speed * step
+    local targetXZ = Vector3.new(targetPos.X, 0, targetPos.Z)
+    while true do
+        local currentXZ = Vector3.new(hrp.Position.X, 0, hrp.Position.Z)
+        local distXZ = (targetXZ - currentXZ).Magnitude
+        if distXZ < 0.5 then break end
+        local dirXZ = (targetXZ - currentXZ).Unit
+        local moveDist = math.min(stepSize, distXZ)
+        local newPos = hrp.Position + Vector3.new(dirXZ.X * moveDist, 0, dirXZ.Z * moveDist)
+        hrp.CFrame = CFrame.new(newPos)
+        task.wait(step)
+    end
     hum.PlatformStand = oldPlatform
     return true
 end
@@ -258,7 +283,7 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. МОНИТОР ОСТРОВА (С ПОДЪЁМОМ И ПЕРЕМЕЩЕНИЕМ ЧЕРЕЗ moveStep) ==========
+-- ========== 5. МОНИТОР ОСТРОВА (ОЖИДАНИЕ ЯЙЦА, ПЕРЕМЕЩЕНИЕ К НЕМУ) ==========
 local islandActive = false
 local pendingReturn = false
 local islandCooldown = false
@@ -269,14 +294,6 @@ local function findIsland()
     end
     return nil
 end
-
--- Смещения для яиц (добавьте свои)
-local PLAYER_OFFSETS = {
-    ["AgniPlay21"] = Vector3.new(212.7, -686.0, -554.4),
-    ["SilentStorm2912"] = Vector3.new(203.9, -686.0, -531.4),
-    -- добавьте остальных
-}
-local myOffset = PLAYER_OFFSETS[player.Name]
 
 local function pressE()
     local vim = game:GetService("VirtualInputManager")
@@ -305,36 +322,49 @@ task.spawn(function()
             if hum then hum.Sit = false end
             task.wait(0.5)
 
-            -- Шаг 1: Подъём на высоту 330 (или выше острова) через CFrame (moveStep с keepY)
+            -- Шаг 1: Подъём на высоту
             local liftTarget = island:GetPivot().Position + Vector3.new(0, 330, 0)
-            print("[ОСТРОВ] Подъём на высоту 330")
+            print("[ОСТРОВ] Подъём на высоту")
             moveStep(liftTarget, 200, true)
 
-            -- Шаг 2: Если есть своё яйцо, перемещаемся к его позиции (с фиксацией Y)
-            if myOffset then
-                local eggTarget = island:GetPivot().Position + myOffset
-                print("[ОСТРОВ] Перемещение к яйцу")
-                moveStep(eggTarget, 200, true)
-                pressE()
-                -- После активации яйца, вероятно, оно исчезнет, но остров может остаться
-            else
-                print("[ОСТРОВ] Нет смещения для яйца, перемещаемся к центру острова")
-                moveStep(island:GetPivot().Position + Vector3.new(0, 330, 0), 200, true)
-            end
-
-            -- Ожидание завершения (таймер 10 минут или исчезновение острова)
+            -- Шаг 2: Ожидание появления яйца (максимум 10 минут)
             local startTime = os.clock()
-            while islandActive do
-                task.wait(1)
+            local eggTarget = nil
+            while true do
                 if os.clock() - startTime >= 600 then
-                    print("[ОСТРОВ] Таймер 10 минут истёк")
+                    print("[ОСТРОВ] Таймер 10 минут истёк, яйцо не появилось")
                     break
                 end
                 if not findIsland() then
                     print("[ОСТРОВ] Остров исчез")
                     break
                 end
+                local core = island:FindFirstChild("Core")
+                if core then
+                    local spawned = core:FindFirstChild("SpawnedDragonEggs")
+                    if spawned then
+                        local eggModel = spawned:FindFirstChild("DragonEgg")
+                        if eggModel then
+                            local eggPart = eggModel:FindFirstChild("EggCrust") or eggModel:FindFirstChildWhichIsA("BasePart")
+                            if eggPart then
+                                eggTarget = eggPart.Position + Vector3.new(0, 2, 0)
+                                print("[ОСТРОВ] Яйцо появилось, перемещаемся")
+                                break
+                            end
+                        end
+                    end
+                end
+                task.wait(0.5)
             end
+
+            if eggTarget then
+                -- Шаг 3: Горизонтальное перемещение к яйцу (без фиксации Y)
+                moveStepHorizontal(eggTarget, 200)
+                pressE()
+                task.wait(1)
+            end
+
+            -- Завершение режима острова
             islandActive = false
             pendingReturn = true
             islandCooldown = true
@@ -452,4 +482,4 @@ task.spawn(function()
     fruitTracker()
 end)
 
-print("Скрипт полностью запущен. При активации острова выполняется подъём на высоту, перемещение к яйцу (если задано), активация, после чего возврат в лодку.")
+print("Финальный скрипт запущен. Остров: подъём, ожидание яйца, горизонтальное перемещение, активация, возврат в лодку.")
