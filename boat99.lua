@@ -1,8 +1,4 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ (ЛОДКА + ОСТРОВ + СБОР ЯЙЦА) =====
--- Версия 3.0
--- Исправлена логика завершения режима острова: после активации яйца или по таймеру,
--- персонаж возвращается в лодку, и повторный вход в режим острова возможен только после исчезновения острова.
-
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (ПОДЪЁМ ЧЕРЕЗ CFrame, BODYPOSITION, ПЕРЕМЕЩЕНИЕ К ОСТРОВУ, СБОР ЯЙЦА) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
@@ -26,7 +22,7 @@ task.spawn(function()
 end)
 
 -- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
-local function moveStep(targetPos, speed, keepY)
+local function moveStep(targetPos, speed, keepY)   -- основная функция плавного перемещения (фиксирует Y, если нужно)
     local char = player.Character
     if not char then return false end
     local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -262,7 +258,7 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. МОНИТОР ОСТРОВА (С ПРАВИЛЬНЫМ ЗАВЕРШЕНИЕМ) ==========
+-- ========== 5. МОНИТОР ОСТРОВА (С ПОДЪЁМОМ И ПЕРЕМЕЩЕНИЕМ ЧЕРЕЗ moveStep) ==========
 local islandActive = false
 local pendingReturn = false
 local islandCooldown = false
@@ -274,34 +270,13 @@ local function findIsland()
     return nil
 end
 
--- Смещения для яиц (добавьте ваши)
+-- Смещения для яиц (добавьте свои)
 local PLAYER_OFFSETS = {
-    ["MichaelJohnson84562"] = Vector3.new(212.7, -686.0, -554.4),
-    ["Willow_hspt2015"] = Vector3.new(203.9, -686.0, -531.4),
+    ["AgniPlay21"] = Vector3.new(212.7, -686.0, -554.4),
+    ["SilentStorm2912"] = Vector3.new(203.9, -686.0, -531.4),
     -- добавьте остальных
 }
 local myOffset = PLAYER_OFFSETS[player.Name]
-
-local function moveToPoint(targetPos, speed)
-    local char = player.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChild("Humanoid")
-    if not hrp or not hum then return end
-    local oldPlatform = hum.PlatformStand
-    hum.PlatformStand = true
-    local step = 0.05
-    local stepSize = speed * step
-    while (hrp.Position - targetPos).Magnitude > 1.0 do
-        local dir = (targetPos - hrp.Position).Unit
-        local move = math.min(stepSize, (targetPos - hrp.Position).Magnitude)
-        local newPos = hrp.Position + dir * move
-        hrp.CFrame = CFrame.new(newPos)
-        task.wait(step)
-    end
-    hrp.CFrame = CFrame.new(targetPos)
-    hum.PlatformStand = oldPlatform
-end
 
 local function pressE()
     local vim = game:GetService("VirtualInputManager")
@@ -330,23 +305,27 @@ task.spawn(function()
             if hum then hum.Sit = false end
             task.wait(0.5)
 
-            -- Если есть своё яйцо, идём к нему и активируем
+            -- Шаг 1: Подъём на высоту 330 (или выше острова) через CFrame (moveStep с keepY)
+            local liftTarget = island:GetPivot().Position + Vector3.new(0, 330, 0)
+            print("[ОСТРОВ] Подъём на высоту 330")
+            moveStep(liftTarget, 200, true)
+
+            -- Шаг 2: Если есть своё яйцо, перемещаемся к его позиции (с фиксацией Y)
             if myOffset then
-                local targetPos = island:GetPivot().Position + myOffset
-                print("[ОСТРОВ] Перемещение к яйцу для", player.Name)
-                moveToPoint(targetPos, 200)
+                local eggTarget = island:GetPivot().Position + myOffset
+                print("[ОСТРОВ] Перемещение к яйцу")
+                moveStep(eggTarget, 200, true)
                 pressE()
-                -- После активации яйцо исчезнет, и остров может ещё оставаться, но мы ждём либо таймер, либо исчезновение острова
+                -- После активации яйца, вероятно, оно исчезнет, но остров может остаться
             else
-                print("[ОСТРОВ] Нет смещения, просто ждём 10 минут")
+                print("[ОСТРОВ] Нет смещения для яйца, перемещаемся к центру острова")
+                moveStep(island:GetPivot().Position + Vector3.new(0, 330, 0), 200, true)
             end
 
-            -- Ожидание завершения островного режима (10 минут или исчезновение острова)
+            -- Ожидание завершения (таймер 10 минут или исчезновение острова)
             local startTime = os.clock()
-            local eggActivated = false
             while islandActive do
                 task.wait(1)
-                -- Если яйцо было активировано, то возможно остров всё ещё есть, но мы всё равно ждём исчезновения или таймера
                 if os.clock() - startTime >= 600 then
                     print("[ОСТРОВ] Таймер 10 минут истёк")
                     break
@@ -360,7 +339,7 @@ task.spawn(function()
             pendingReturn = true
             islandCooldown = true
             cooldownTimer = tick()
-            print("[ОСТРОВ] Режим завершён, ожидание возврата в лодку")
+            print("[ОСТРОВ] Режим завершён, возврат в лодку")
         end
     end
 end)
@@ -473,4 +452,4 @@ task.spawn(function()
     fruitTracker()
 end)
 
-print("Скрипт полностью запущен. Лодка управляется, остров обрабатывается, после сбора яйца возврат в лодку гарантирован.")
+print("Скрипт полностью запущен. При активации острова выполняется подъём на высоту, перемещение к яйцу (если задано), активация, после чего возврат в лодку.")
