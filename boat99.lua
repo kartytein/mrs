@@ -283,7 +283,7 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. МОНИТОР ОСТРОВА (ОЖИДАНИЕ ЯЙЦА, ПЕРЕМЕЩЕНИЕ К НЕМУ) ==========
+-- ========== 5. МОНИТОР ОСТРОВА (ОЖИДАНИЕ ЯЙЦА, АКТИВАЦИЯ, ЗАТЕМ ВОЗВРАТ В ЛОДКУ) ==========
 local islandActive = false
 local pendingReturn = false
 local islandCooldown = false
@@ -303,6 +303,32 @@ local function pressE()
         vim:SendKeyEvent(false, "E", false, game)
         print("[ЯЙЦО] Активация выполнена")
     end
+end
+
+-- Горизонтальное перемещение (только X/Z)
+local function moveStepHorizontal(targetPos, speed)
+    local char = player.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChild("Humanoid")
+    if not hrp or not hum then return false end
+    local oldPlatform = hum.PlatformStand
+    hum.PlatformStand = true
+    local step = 0.05
+    local stepSize = speed * step
+    local targetXZ = Vector3.new(targetPos.X, 0, targetPos.Z)
+    while true do
+        local currentXZ = Vector3.new(hrp.Position.X, 0, hrp.Position.Z)
+        local distXZ = (targetXZ - currentXZ).Magnitude
+        if distXZ < 0.5 then break end
+        local dirXZ = (targetXZ - currentXZ).Unit
+        local moveDist = math.min(stepSize, distXZ)
+        local newPos = hrp.Position + Vector3.new(dirXZ.X * moveDist, 0, dirXZ.Z * moveDist)
+        hrp.CFrame = CFrame.new(newPos)
+        task.wait(step)
+    end
+    hum.PlatformStand = oldPlatform
+    return true
 end
 
 task.spawn(function()
@@ -327,16 +353,16 @@ task.spawn(function()
             print("[ОСТРОВ] Подъём на высоту")
             moveStep(liftTarget, 200, true)
 
-            -- Шаг 2: Ожидание появления яйца (максимум 10 минут)
+            -- Шаг 2: Ожидание появления яйца и его активация
             local startTime = os.clock()
-            local eggTarget = nil
+            local eggActivated = false
             while true do
                 if os.clock() - startTime >= 600 then
                     print("[ОСТРОВ] Таймер 10 минут истёк, яйцо не появилось")
                     break
                 end
                 if not findIsland() then
-                    print("[ОСТРОВ] Остров исчез")
+                    print("[ОСТРОВ] Остров исчез до появления яйца")
                     break
                 end
                 local core = island:FindFirstChild("Core")
@@ -347,8 +373,12 @@ task.spawn(function()
                         if eggModel then
                             local eggPart = eggModel:FindFirstChild("EggCrust") or eggModel:FindFirstChildWhichIsA("BasePart")
                             if eggPart then
-                                eggTarget = eggPart.Position + Vector3.new(0, 2, 0)
-                                print("[ОСТРОВ] Яйцо появилось, перемещаемся")
+                                local eggTarget = eggPart.Position + Vector3.new(0, 2, 0)
+                                print("[ОСТРОВ] Яйцо появилось, перемещаемся (горизонтально)")
+                                moveStepHorizontal(eggTarget, 200)
+                                print("[ОСТРОВ] Активация яйца")
+                                pressE()
+                                eggActivated = true
                                 break
                             end
                         end
@@ -357,19 +387,12 @@ task.spawn(function()
                 task.wait(0.5)
             end
 
-            if eggTarget then
-                -- Шаг 3: Горизонтальное перемещение к яйцу (без фиксации Y)
-                moveStepHorizontal(eggTarget, 200)
-                pressE()
-                task.wait(1)
-            end
-
-            -- Завершение режима острова
+            -- Шаг 3: Завершение режима острова (независимо от того, было ли яйцо активировано)
             islandActive = false
+            print("[ОСТРОВ] Режим завершён, возврат в лодку")
             pendingReturn = true
             islandCooldown = true
             cooldownTimer = tick()
-            print("[ОСТРОВ] Режим завершён, возврат в лодку")
         end
     end
 end)
