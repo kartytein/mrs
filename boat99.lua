@@ -324,11 +324,10 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. МОНИТОР ОСТРОВА (С ПРИВЯЗКОЙ К ЯЙЦУ ПО БЛИЗОСТИ) ==========
-local islandActive = false
+-- ========== 5. МОНИТОР ОСТРОВА (С ОЖИДАНИЕМ ИСЧЕЗНОВЕНИЯ) ==========
+local islandModeActive = false      -- мы в режиме острова
+local waitingForDespawn = false     -- ждём, пока остров исчезнет после выхода
 local pendingReturn = false
-local islandCooldown = false
-local cooldownTimer = 0
 local function findIsland()
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then return obj end
@@ -336,66 +335,27 @@ local function findIsland()
     return nil
 end
 
--- Привязка игроков к порядковому номеру яйца (1 = ближайшее, 2 = второе по близости, 3 = третье)
-local PLAYER_EGG_RANK = {
-    ["Willow_hspt2015"] = 1,
-    ["MichaelJohnson84562"] = 2,
-    ["GigaGrimShade74"] = 3,
-}
-local myRank = PLAYER_EGG_RANK[playerName]
-
-local function pressE()
-    local vim = game:GetService("VirtualInputManager")
-    if vim then
-        vim:SendKeyEvent(true, "E", false, game)
-        task.wait(1.5)
-        vim:SendKeyEvent(false, "E", false, game)
-        print("[ЯЙЦО] Активация выполнена")
-    end
-end
-
--- Функция получения всех яиц с их позициями
-local function getEggsSortedByDistance()
-    local island = findIsland()
-    if not island then return {} end
-    local core = island:FindFirstChild("Core")
-    if not core then return {} end
-    local spawned = core:FindFirstChild("SpawnedDragonEggs")
-    if not spawned then return {} end
-    local eggs = {}
-    local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-    if not hrp then return {} end
-    for _, child in ipairs(spawned:GetChildren()) do
-        if child:IsA("Model") and child.Name == "DragonEgg" then
-            local eggPart = child:FindFirstChild("EggCrust") or child:FindFirstChildWhichIsA("BasePart")
-            if eggPart then
-                local dist = (hrp.Position - eggPart.Position).Magnitude
-                table.insert(eggs, {part = eggPart, model = child, dist = dist})
-            end
-        end
-    end
-    table.sort(eggs, function(a,b) return a.dist < b.dist end)
-    return eggs
-end
-
 task.spawn(function()
     while true do
         task.wait(1)
         local island = findIsland()
-        local now = tick()
-        if island and not islandActive then
-            if islandCooldown and now - cooldownTimer < 60 then
-                continue
-            else
-                islandCooldown = false
-            end
-            islandActive = true
-            print("[ОСТРОВ] Режим активирован")
+        local present = island ~= nil
+
+        -- Если мы ждём исчезновения и острова больше нет, сбрасываем флаг
+        if waitingForDespawn and not present then
+            waitingForDespawn = false
+            print("[ОСТРОВ] Остров исчез, готов к повторной активации")
+        end
+
+        -- Если остров есть, мы не в режиме и не ждём исчезновения → входим в режим
+        if present and not islandModeActive and not waitingForDespawn then
+            islandModeActive = true
+            print("[ОСТРОВ] Обнаружен остров, входим в режим")
             stopMove()
             if hum then hum.Sit = false end
             task.wait(0.5)
 
-            -- Шаг 1: Подъём на высоту 330
+            -- Шаг 1: Подъём на высоту
             local liftTarget = island:GetPivot().Position + Vector3.new(0, 330, 0)
             print("[ОСТРОВ] Подъём на высоту")
             moveStep(liftTarget, 200, true)
@@ -431,12 +391,11 @@ task.spawn(function()
                 task.wait(1)
             end
 
-            -- Шаг 3: Завершение режима
-            islandActive = false
+            -- Выход из режима
+            islandModeActive = false
+            waitingForDespawn = true   -- теперь ждём, пока остров исчезнет
             pendingReturn = true
-            islandCooldown = true
-            cooldownTimer = tick()
-            print("[ОСТРОВ] Режим завершён, возврат в лодку")
+            print("[ОСТРОВ] Режим завершён, ждём исчезновения острова для новой активации")
         end
     end
 end)
