@@ -1,13 +1,15 @@
--- ===== ФИНАЛЬНЫЙ ПОЛНЫЙ СКРИПТ (ИСПРАВЛЕНА ОШИБКА HumanoidRootPart) =====
--- Версия 5.1
--- Добавлены проверки на nil в getEggsSortedByDistance и других местах.
+-- ===== ИСПРАВЛЕННЫЙ ФИНАЛЬНЫЙ СКРИПТ (КОЛЛИЗИИ ПОСТОЯННО ОТКЛЮЧЕНЫ) =====
+-- Версия 5.2
+-- Коллизии отключаются фоновым потоком каждые 0.3 секунды.
+-- Функции перемещения используют PlatformStand, но не трогают CanCollide.
+-- Лодка движется, персонаж не застревает.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
 local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
 
--- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
+-- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ (ФОНОВЫЙ ПОТОК) ==========
 task.spawn(function()
     while true do
         local char = player.Character
@@ -19,6 +21,11 @@ task.spawn(function()
             local upper = char:FindFirstChild("UpperTorso")
             if lower then lower.CanCollide = false end
             if upper then upper.CanCollide = false end
+        end
+        if root then
+            for _, part in ipairs(root:GetDescendants()) do
+                if part:IsA("BasePart") then part.CanCollide = false end
+            end
         end
         task.wait(0.3)
     end
@@ -44,14 +51,6 @@ local function moveStep(targetPos, speed, keepY)
         task.wait(step)
     end
     hrp.CFrame = CFrame.new(targetPos)
-    if not keepY then
-        local finalPos = hrp.Position
-        local ray = Ray.new(finalPos + Vector3.new(0, 1, 0), Vector3.new(0, -10, 0))
-        local hit, hitPos = workspace:FindPartOnRay(ray, char)
-        if hit then
-            hrp.CFrame = CFrame.new(finalPos.X, hitPos.Y + 2, finalPos.Z)
-        end
-    end
     hum.PlatformStand = oldPlatform
     return true
 end
@@ -316,7 +315,7 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. МОНИТОР ОСТРОВА (С ПРОВЕРКАМИ НА NIL) ==========
+-- ========== 5. МОНИТОР ОСТРОВА (С ПРОВЕРКАМИ) ==========
 local islandActive = false
 local pendingReturn = false
 local waitingForDespawn = false
@@ -327,7 +326,6 @@ local function findIsland()
     return nil
 end
 
--- Привязка игроков к порядковому номеру яйца (1 = ближайшее, 2 = второе, 3 = третье)
 local PLAYER_EGG_RANK = {
     ["Willow_hspt2015"] = 1,
     ["MichaelJohnson84562"] = 2,
@@ -374,11 +372,8 @@ task.spawn(function()
     while true do
         task.wait(1)
         local island = findIsland()
-        local now = tick()
         if island and not islandActive then
-            if waitingForDespawn then
-                continue
-            end
+            if waitingForDespawn then continue end
             islandActive = true
             print("[ОСТРОВ] Режим активирован")
             magnetEnabled = false
@@ -514,9 +509,7 @@ task.spawn(function()
             hrp = char:FindFirstChild("HumanoidRootPart")
         end
         if hum and hum.Sit and hum.SeatPart == seat then
-            if not moving then
-                startMove()
-            end
+            if not moving then startMove() end
         else
             if moving then stopMove() end
             fastMagnet()
@@ -546,4 +539,4 @@ task.spawn(function()
     fruitTracker()
 end)
 
-print("Скрипт полностью запущен. Ошибка HumanoidRootPart исправлена.")
+print("Скрипт полностью запущен. Коллизии постоянно отключены, лодка движется, остров обрабатывается.")
