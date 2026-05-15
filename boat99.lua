@@ -1,10 +1,8 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ + ОСТРОВ + ЯЙЦА (С ПРИВЯЗКОЙ ПО БЛИЗОСТИ) =====
--- Версия 4.0
--- Автоматическая покупка лодки, посадка, движение, магнит,
--- при появлении острова подъём, ожидание яиц, сортировка по расстоянию,
--- каждый игрок идёт к своему яйцу (1-е ближайшее, 2-е, 3-е),
--- активация E, возврат в лодку, перезапуск движения.
--- Детектор фруктов (Discord), анти-idle (камера + W).
+-- ===== ФИНАЛЬНЫЙ ПОЛНЫЙ СКРИПТ (ЛОДКА + ОСТРОВ + ЯЙЦА + МАГНИТ + ДЕТЕКТОР ФРУКТОВ) =====
+-- Версия 5.0
+-- Исправлено: при активации острова полностью отключается магнит и движение лодки,
+-- персонаж не разрывается, после возврата всё восстанавливается.
+-- Яйца сортируются по расстоянию, каждый игрок идёт к своему (1,2,3).
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -50,7 +48,6 @@ local function moveStep(targetPos, speed, keepY)
     end
     hrp.CFrame = CFrame.new(targetPos)
     if not keepY then
-        -- Доводка (опускание на землю)
         local finalPos = hrp.Position
         local ray = Ray.new(finalPos + Vector3.new(0, 1, 0), Vector3.new(0, -10, 0))
         local hit, hitPos = workspace:FindPartOnRay(ray, char)
@@ -172,11 +169,9 @@ task.spawn(function()
     local vim = game:GetService("VirtualInputManager")
     while true do
         task.wait(600)
-        -- движение камеры
         cam.CFrame = cam.CFrame * CFrame.Angles(0, math.rad(1), 0)
         task.wait(0.5)
         cam.CFrame = orig
-        -- нажатие W (если доступно)
         if vim then
             vim:SendKeyEvent(true, "W", false, game)
             task.wait(0.1)
@@ -273,7 +268,8 @@ local function startMove()
     end)
 end
 
--- ========== 4. БЫСТРЫЙ МАГНИТ (ДЛЯ ПОСАДКИ) ==========
+-- ========== 4. БЫСТРЫЙ МАГНИТ (С ФЛАГОМ ВКЛ/ВЫКЛ) ==========
+local magnetEnabled = true
 local magnetBodyPos = nil
 local magnetBodyPosActive = false
 
@@ -297,6 +293,7 @@ local function stopMagnetBodyPos()
 end
 
 local function fastMagnet()
+    if not magnetEnabled then return end
     if not seat then return end
     local char = player.Character
     if not char then return end
@@ -324,10 +321,10 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. МОНИТОР ОСТРОВА (С ОЖИДАНИЕМ ИСЧЕЗНОВЕНИЯ) ==========
-local islandModeActive = false      -- мы в режиме острова
-local waitingForDespawn = false     -- ждём, пока остров исчезнет после выхода
+-- ========== 5. МОНИТОР ОСТРОВА (С ОТКЛЮЧЕНИЕМ МАГНИТА И ДВИЖЕНИЯ ЛОДКИ) ==========
+local islandActive = false
 local pendingReturn = false
+local waitingForDespawn = false
 local function findIsland()
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then return obj end
@@ -335,27 +332,65 @@ local function findIsland()
     return nil
 end
 
+-- Привязка игроков к порядковому номеру яйца (1 = ближайшее, 2 = второе, 3 = третье)
+local PLAYER_EGG_RANK = {
+    ["Willow_hspt2015"] = 1,
+    ["MichaelJohnson84562"] = 2,
+    ["GigaGrimShade74"] = 3,
+}
+local myRank = PLAYER_EGG_RANK[playerName]
+
+local function pressE()
+    local vim = game:GetService("VirtualInputManager")
+    if vim then
+        vim:SendKeyEvent(true, "E", false, game)
+        task.wait(1.5)
+        vim:SendKeyEvent(false, "E", false, game)
+        print("[ЯЙЦО] Активация выполнена")
+    end
+end
+
+local function getEggsSortedByDistance()
+    local island = findIsland()
+    if not island then return {} end
+    local core = island:FindFirstChild("Core")
+    if not core then return {} end
+    local spawned = core:FindFirstChild("SpawnedDragonEggs")
+    if not spawned then return {} end
+    local eggs = {}
+    local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return {} end
+    for _, child in ipairs(spawned:GetChildren()) do
+        if child:IsA("Model") and child.Name == "DragonEgg" then
+            local eggPart = child:FindFirstChild("EggCrust") or child:FindFirstChildWhichIsA("BasePart")
+            if eggPart then
+                local dist = (hrp.Position - eggPart.Position).Magnitude
+                table.insert(eggs, {part = eggPart, model = child, dist = dist})
+            end
+        end
+    end
+    table.sort(eggs, function(a,b) return a.dist < b.dist end)
+    return eggs
+end
+
 task.spawn(function()
     while true do
         task.wait(1)
         local island = findIsland()
-        local present = island ~= nil
-
-        -- Если мы ждём исчезновения и острова больше нет, сбрасываем флаг
-        if waitingForDespawn and not present then
-            waitingForDespawn = false
-            print("[ОСТРОВ] Остров исчез, готов к повторной активации")
-        end
-
-        -- Если остров есть, мы не в режиме и не ждём исчезновения → входим в режим
-        if present and not islandModeActive and not waitingForDespawn then
-            islandModeActive = true
-            print("[ОСТРОВ] Обнаружен остров, входим в режим")
+        local now = tick()
+        if island and not islandActive then
+            if waitingForDespawn then
+                continue
+            end
+            islandActive = true
+            print("[ОСТРОВ] Режим активирован")
+            -- Отключаем магнит и движение лодки
+            magnetEnabled = false
             stopMove()
             if hum then hum.Sit = false end
             task.wait(0.5)
 
-            -- Шаг 1: Подъём на высоту
+            -- Шаг 1: Подъём на высоту 330
             local liftTarget = island:GetPivot().Position + Vector3.new(0, 330, 0)
             print("[ОСТРОВ] Подъём на высоту")
             moveStep(liftTarget, 200, true)
@@ -391,11 +426,16 @@ task.spawn(function()
                 task.wait(1)
             end
 
-            -- Выход из режима
-            islandModeActive = false
-            waitingForDespawn = true   -- теперь ждём, пока остров исчезнет
+            -- Шаг 3: Завершение режима
+            islandActive = false
             pendingReturn = true
+            waitingForDespawn = true
             print("[ОСТРОВ] Режим завершён, ждём исчезновения острова для новой активации")
+        end
+        -- Если острова больше нет и мы ждали его исчезновения, сбрасываем флаг
+        if waitingForDespawn and not findIsland() then
+            waitingForDespawn = false
+            print("[ОСТРОВ] Остров исчез, готов к новой активации")
         end
     end
 end)
@@ -436,7 +476,8 @@ task.spawn(function()
                             moveStep(targetPos, 300, true)
                             h.Sit = true
                             print("[ГЛАВНЫЙ] Посадка выполнена")
-                            -- Перезапуск движения лодки
+                            -- Включаем магнит обратно и перезапускаем движение лодки
+                            magnetEnabled = true
                             stopMove()
                             moving = false
                             startMove()
@@ -514,4 +555,4 @@ task.spawn(function()
     fruitTracker()
 end)
 
-print("Финальный скрипт запущен. Остров обрабатывается, привязка яиц по близости к игрокам.")
+print("Скрипт полностью запущен. Остров обрабатывается, магнит отключается на время острова, яйца сортируются, после возврата всё восстанавливается.")
