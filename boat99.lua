@@ -451,29 +451,42 @@ task.spawn(function()
                 seat = boat:FindFirstChildWhichIsA("VehicleSeat")
                 root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
                 if seat and root then
-                    for _, p in ipairs(boat:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end
+                        -- Отключаем коллизии и нативный скрипт лодки
+                    for _, p in ipairs(boat:GetDescendants()) do
+                        if p:IsA("BasePart") then p.CanCollide = false end
+                    end
                     local nat = boat:FindFirstChild("Script")
                     if nat then nat.Disabled = true end
+
                     local char = player.Character
                     if char then
                         local h = char:FindFirstChild("Humanoid")
                         local r = char:FindFirstChild("HumanoidRootPart")
                         if h and r then
                             local targetPos = seat.Position + Vector3.new(0, 2.5, 0)
-                            moveStep(targetPos, 300, true)
+                            moveStep(targetPos, 300, true)   -- плавно сажаем
                             h.Sit = true
+                            task.wait(0.5)  -- ⏳ Ждём, пока сиденье зафиксирует персонажа
                             print("[ГЛАВНЫЙ] Посадка выполнена")
+
+                            -- Обновляем ссылки (на случай, если лодка пересоздалась)
+                            if not boat.Parent then boat = findMyBoat() end
+                            if boat then
+                                seat = boat:FindFirstChildWhichIsA("VehicleSeat")
+                                root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
+                            end
+        
                             magnetEnabled = true
-                            stopMove()
+                            stopMove()      -- сбрасываем старый BodyVelocity и поток
                             moving = false
-                            startMove()
+                            startMove()     -- запускаем движение заново
                         end
                     end
                 else
-                    print("[ГЛАВНЫЙ] Лодка найдена, но нет сиденья/части")
+                    print("[ГЛАВНЫЙ] Лодка найдена, но нет сиденья/главной части")
                 end
             else
-                print("[ГЛАВНЫЙ] Лодка не найдена, будет куплена позже")
+               print("[ГЛАВНЫЙ] Лодка не найдена, будет куплена позже")
             end
         end
         if not boat or not boat.Parent then
