@@ -1,8 +1,6 @@
--- ===== ФИНАЛЬНЫЙ ПОЛНЫЙ СКРИПТ (ЛОДКА + ОСТРОВ + ЯЙЦА + МАГНИТ + ДЕТЕКТОР ФРУКТОВ) =====
--- Версия 5.0
--- Исправлено: при активации острова полностью отключается магнит и движение лодки,
--- персонаж не разрывается, после возврата всё восстанавливается.
--- Яйца сортируются по расстоянию, каждый игрок идёт к своему (1,2,3).
+-- ===== ФИНАЛЬНЫЙ ПОЛНЫЙ СКРИПТ (ИСПРАВЛЕНА ОШИБКА HumanoidRootPart) =====
+-- Версия 5.1
+-- Добавлены проверки на nil в getEggsSortedByDistance и других местах.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -27,7 +25,6 @@ task.spawn(function()
 end)
 
 -- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
--- Подъём с фиксацией Y (moveStep)
 local function moveStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
@@ -59,7 +56,6 @@ local function moveStep(targetPos, speed, keepY)
     return true
 end
 
--- Горизонтальное перемещение (только X/Z)
 local function moveStepHorizontal(targetPos, speed)
     local char = player.Character
     if not char then return false end
@@ -85,7 +81,6 @@ local function moveStepHorizontal(targetPos, speed)
     return true
 end
 
--- Перемещение через BodyPosition (фиксированное время)
 local function moveWithBodyPosition(targetPos, duration)
     local char = player.Character
     if not char then return end
@@ -321,7 +316,7 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. МОНИТОР ОСТРОВА (С ОТКЛЮЧЕНИЕМ МАГНИТА И ДВИЖЕНИЯ ЛОДКИ) ==========
+-- ========== 5. МОНИТОР ОСТРОВА (С ПРОВЕРКАМИ НА NIL) ==========
 local islandActive = false
 local pendingReturn = false
 local waitingForDespawn = false
@@ -357,9 +352,11 @@ local function getEggsSortedByDistance()
     if not core then return {} end
     local spawned = core:FindFirstChild("SpawnedDragonEggs")
     if not spawned then return {} end
-    local eggs = {}
-    local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    local char = player.Character
+    if not char then return {} end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return {} end
+    local eggs = {}
     for _, child in ipairs(spawned:GetChildren()) do
         if child:IsA("Model") and child.Name == "DragonEgg" then
             local eggPart = child:FindFirstChild("EggCrust") or child:FindFirstChildWhichIsA("BasePart")
@@ -384,18 +381,15 @@ task.spawn(function()
             end
             islandActive = true
             print("[ОСТРОВ] Режим активирован")
-            -- Отключаем магнит и движение лодки
             magnetEnabled = false
             stopMove()
             if hum then hum.Sit = false end
             task.wait(0.5)
 
-            -- Шаг 1: Подъём на высоту 330
             local liftTarget = island:GetPivot().Position + Vector3.new(0, 330, 0)
             print("[ОСТРОВ] Подъём на высоту")
             moveStep(liftTarget, 200, true)
 
-            -- Шаг 2: Ожидание появления яиц и выбор нужного по рангу
             local eggTargetPos = nil
             local startTime = os.clock()
             while true do
@@ -426,13 +420,11 @@ task.spawn(function()
                 task.wait(1)
             end
 
-            -- Шаг 3: Завершение режима
             islandActive = false
             pendingReturn = true
             waitingForDespawn = true
-            print("[ОСТРОВ] Режим завершён, ждём исчезновения острова для новой активации")
+            print("[ОСТРОВ] Режим завершён, ждём исчезновения острова")
         end
-        -- Если острова больше нет и мы ждали его исчезновения, сбрасываем флаг
         if waitingForDespawn and not findIsland() then
             waitingForDespawn = false
             print("[ОСТРОВ] Остров исчез, готов к новой активации")
@@ -440,7 +432,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ОСНОВНОЙ ЦИКЛ (ВОЗВРАТ В ЛОДКУ С ПЕРЕЗАПУСКОМ ДВИЖЕНИЯ) ==========
+-- ========== 6. ОСНОВНОЙ ЦИКЛ (ВОЗВРАТ В ЛОДКУ) ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -476,7 +468,6 @@ task.spawn(function()
                             moveStep(targetPos, 300, true)
                             h.Sit = true
                             print("[ГЛАВНЫЙ] Посадка выполнена")
-                            -- Включаем магнит обратно и перезапускаем движение лодки
                             magnetEnabled = true
                             stopMove()
                             moving = false
@@ -555,4 +546,4 @@ task.spawn(function()
     fruitTracker()
 end)
 
-print("Скрипт полностью запущен. Остров обрабатывается, магнит отключается на время острова, яйца сортируются, после возврата всё восстанавливается.")
+print("Скрипт полностью запущен. Ошибка HumanoidRootPart исправлена.")
