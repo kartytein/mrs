@@ -1,88 +1,63 @@
--- ========== ДИАГНОСТИК УДЕРЖАНИЯ ВЫСОТЫ (ПАССИВНЫЙ) ==========
+-- ========== ЛОГГЕР ПАРАМЕТРОВ УДЕРЖАНИЯ ==========
 local player = game.Players.LocalPlayer
-local runService = game:GetService("RunService")
 
--- GUI
-local gui = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
-local frame = Instance.new("Frame", gui)
-frame.Size = UDim2.new(0, 450, 0, 320)
-frame.Position = UDim2.new(0, 10, 0, 10)
-frame.BackgroundTransparency = 0.5
-frame.BackgroundColor3 = Color3.new(0,0,0)
-frame.BorderSizePixel = 0
+-- Ждём появления персонажа
+local function waitForCharacter()
+    if player.Character then return player.Character end
+    return player.CharacterAdded:Wait()
+end
 
-local text = Instance.new("TextLabel", frame)
-text.Size = UDim2.new(1,0,1,0)
-text.BackgroundTransparency = 1
-text.TextColor3 = Color3.new(1,1,0)
-text.TextSize = 14
-text.TextXAlignment = Enum.TextXAlignment.Left
-text.TextYAlignment = Enum.TextYAlignment.Top
-text.Text = "Сбор данных..."
+local char = waitForCharacter()
+print("[ЛОГГЕР] Персонаж появился, начинаем сбор данных")
 
-local function getMotorsInfo()
+-- Основной цикл
+while true do
+    task.wait(1) -- раз в секунду
+    
     local char = player.Character
-    if not char then return "нет персонажа" end
-    local info = {}
+    if not char then 
+        print("[ЛОГГЕР] Нет персонажа")
+        continue
+    end
+    
     local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChild("Humanoid")
+    if not hrp or not hum then
+        print("[ЛОГГЕР] Нет HRP или Humanoid")
+        continue
+    end
+    
+    -- Собираем информацию о двигателях на персонаже
+    local motors = {}
     local upper = char:FindFirstChild("UpperTorso")
     for _, part in ipairs({hrp, upper}) do
         if part then
             for _, child in ipairs(part:GetChildren()) do
-                if child:IsA("BodyVelocity") then
-                    table.insert(info, string.format("BodyVelocity Y=%.4f (Force Y=%s)", child.Velocity.Y, tostring(child.MaxForce.Y)))
-                elseif child:IsA("BodyPosition") then
-                    table.insert(info, string.format("BodyPosition Y=%.2f (Force Y=%s)", child.Position.Y, tostring(child.MaxForce.Y)))
-                elseif child:IsA("BodyGyro") then
-                    table.insert(info, "BodyGyro present")
-                elseif child:IsA("BodyThrust") then
-                    table.insert(info, "BodyThrust")
+                local c = child.ClassName
+                if c == "BodyVelocity" or c == "BodyPosition" or c == "BodyGyro" or c == "BodyThrust" or c == "LinearVelocity" or c == "AlignPosition" then
+                    local info = c
+                    if c == "BodyVelocity" then
+                        info = info .. string.format(" VelY=%.4f", child.Velocity.Y)
+                    elseif c == "BodyPosition" then
+                        info = info .. string.format(" PosY=%.2f", child.Position.Y)
+                    end
+                    table.insert(motors, info .. " on " .. part.Name)
                 end
             end
         end
     end
-    if #info == 0 then return "нет двигателей" end
-    return table.concat(info, "; ")
-end
-
-local function update()
-    local char = player.Character
-    if not char then
-        text.Text = "Нет персонажа"
-        return
-    end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChild("Humanoid")
-    if not hrp or not hum then
-        text.Text = "Нет HRP/Humanoid"
-        return
-    end
+    local motorStr = (#motors > 0) and table.concat(motors, "; ") or "нет"
     
-    local y = hrp.Position.Y
-    local velY = hrp.Velocity.Y
-    local platform = hum.PlatformStand
-    local autoRotate = hum.AutoRotate
-    local gravityScale = hum.GravityScale
-    local sit = hum.Sit
-    local motors = getMotorsInfo()
-    
-    text.Text = string.format(
-        [[Y = %.2f
-Верт. скорость = %.3f ст/с
-PlatformStand = %s
-AutoRotate = %s
-GravityScale = %.2f
-Sit = %s
-Двигатели: %s]],
-        y, velY, tostring(platform), tostring(autoRotate), gravityScale, tostring(sit), motors
-    )
+    -- Выводим всё в консоль
+    print(string.format(
+        "[%.1f] Y=%.2f | VelY=%.3f | Platform=%s | AutoRotate=%s | Gravity=%.2f | Sit=%s | Motors: %s",
+        tick(),
+        hrp.Position.Y,
+        hrp.Velocity.Y,
+        tostring(hum.PlatformStand),
+        tostring(hum.AutoRotate),
+        hum.GravityScale,
+        tostring(hum.Sit),
+        motorStr
+    ))
 end
-
-task.spawn(function()
-    while true do
-        update()
-        task.wait(0.1)
-    end
-end)
-
-print("Диагност удержания высоты запущен. Зафиксируйте параметры.")
