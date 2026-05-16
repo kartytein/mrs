@@ -316,20 +316,26 @@ local function fastMagnet()
 end
 
 -- ========== 5. МОНИТОР ОСТРОВА (С ПРОВЕРКАМИ) ==========
+-- ========== 5. МОНИТОР ОСТРОВА (С ПРОВЕРКАМИ И УНИКАЛЬНЫМ ЯЙЦОМ) ==========
 local islandActive = false
 local pendingReturn = false
 local waitingForDespawn = false
+
 local function findIsland()
     for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then return obj end
+        if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then
+            return obj
+        end
     end
     return nil
 end
 
+-- Таблица рангов игроков (уникальный номер для каждого аккаунта)
 local PLAYER_EGG_RANK = {
-    ["Willow_hspt2015"] = 1,
-    ["MichaelJohnson84562"] = 2,
-    ["GigaGrimShade74"] = 3,
+    ["Willow_hspt2015"] = 1,        -- берёт ближайшее яйцо
+    ["MichaelJohnson84562"] = 2,    -- берёт среднее
+    ["GigaGrimShade74"] = 3,        -- берёт дальнее
+    -- Добавьте других игроков по необходимости
 }
 local myRank = PLAYER_EGG_RANK[playerName]
 
@@ -358,7 +364,7 @@ local function getEggsSortedByDistance()
     for _, child in ipairs(spawned:GetChildren()) do
         if child:IsA("Model") and child.Name == "DragonEgg" then
             local eggPart = child:FindFirstChild("EggCrust") or child:FindFirstChildWhichIsA("BasePart")
-            if eggPart then
+            if eggPart and eggPart.Parent then  -- яйцо существует
                 local dist = (hrp.Position - eggPart.Position).Magnitude
                 table.insert(eggs, {part = eggPart, model = child, dist = dist})
             end
@@ -368,58 +374,94 @@ local function getEggsSortedByDistance()
     return eggs
 end
 
+-- Основной поток обработки острова
 task.spawn(function()
     while true do
         task.wait(1)
         local island = findIsland()
+        
         if island and not islandActive then
-            if waitingForDespawn then continue end
+            if waitingForDespawn then 
+                -- Пропускаем, если ждём исчезновения старого острова
+                continue 
+            end
+            
             islandActive = true
             print("[ОСТРОВ] Режим активирован")
+            
+            -- 1. Отключаем магнит и движение лодки
             magnetEnabled = false
             stopMove()
             if hum then hum.Sit = false end
             task.wait(0.5)
-
+            
+            -- 2. Поднимаем персонажа на высоту 330 над центром острова
             local liftTarget = island:GetPivot().Position + Vector3.new(0, 330, 0)
             print("[ОСТРОВ] Подъём на высоту")
             moveStep(liftTarget, 200, true)
-
+            
+            -- 3. Ожидание появления яиц (до 10 минут) и выбор своего по рангу
             local eggTargetPos = nil
+            local myEggModel = nil
             local startTime = os.clock()
+            
             while true do
                 if os.clock() - startTime >= 600 then
                     print("[ОСТРОВ] Таймер 10 минут истёк, яйца не появились")
                     break
                 end
-                if not findIsland() then
-                    print("[ОСТРОВ] Остров исчез")
+                
+                local currentIsland = findIsland()
+                if not currentIsland then
+                    print("[ОСТРОВ] Остров исчез во время ожидания")
                     break
                 end
+                
                 local eggsSorted = getEggsSortedByDistance()
-                if #eggsSorted >= 3 and myRank then
-                    local myEgg = eggsSorted[myRank]
-                    if myEgg then
-                        eggTargetPos = myEgg.part.Position + Vector3.new(0, 2, 0)
-                        print(string.format("[ОСТРОВ] Найдено яйцо ранга %d, перемещаемся", myRank))
+                if #eggsSorted >= myRank and myRank then
+                    local candidate = eggsSorted[myRank]
+                    if candidate and candidate.part and candidate.part.Parent then
+                        myEggModel = candidate.model
+                        eggTargetPos = candidate.part.Position + Vector3.new(0, 2, 0)
+                        print(string.format("[ОСТРОВ] Выбрано яйцо ранга %d (расстояние %.1f)", myRank, candidate.dist))
                         break
                     end
                 end
                 task.wait(0.5)
             end
-
-            if eggTargetPos then
+            
+            -- 4. Перемещение к яйцу и активация (если яйцо всё ещё существует)
+            if eggTargetPos and myEggModel and myEggModel.Parent then
                 print("[ОСТРОВ] Перемещение к яйцу через BodyPosition")
                 moveWithBodyPosition(eggTargetPos, 3)
-                pressE()
-                task.wait(1)
+                
+                -- Финальная проверка: не исчезло ли яйцо (например, другой игрок активировал)
+                if not myEggModel.Parent then
+                    print("[ОСТРОВ] Яйцо исчезло до активации (кто-то опередил)")
+                else
+                    pressE()
+                    task.wait(1)
+                    -- Ждём, пока яйцо окончательно активируется (исчезнет)
+                    for _ = 1, 20 do
+                        if not myEggModel.Parent then break end
+                        task.wait(0.2)
+                    end
+                    print("[ОСТРОВ] Активация завершена")
+                end
+            elseif not myRank then
+                print("[ОСТРОВ] Нет ранга для игрока", playerName)
+            else
+                print("[ОСТРОВ] Не найдено яйцо для ранга", myRank)
             end
-
+            
+            -- 5. Завершение режима острова
             islandActive = false
-            pendingReturn = true
-            waitingForDespawn = true
+            pendingReturn = true      -- сигнал основному циклу вернуться в лодку
+            waitingForDespawn = true  -- ждём исчезновения острова перед следующей активацией
             print("[ОСТРОВ] Режим завершён, ждём исчезновения острова")
         end
+        
+        -- Если ждём исчезновения острова и острова больше нет – сбрасываем флаг
         if waitingForDespawn and not findIsland() then
             waitingForDespawn = false
             print("[ОСТРОВ] Остров исчез, готов к новой активации")
