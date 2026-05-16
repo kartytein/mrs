@@ -1,118 +1,131 @@
--- ========== ДИАГНОСТИК ДВИГАТЕЛЕЙ (ИСПРАВЛЕННЫЙ) ==========
+-- ========== РАСШИРЕННЫЙ ДИАГНОСТИК ВЕРТИКАЛИ И ДВИЖЕНИЯ ==========
+-- Отслеживает ВСЁ, что влияет на плавность: Y-позиция, GravityScale, PlatformStand, AutoRotate, двигатели.
+
 local player = game.Players.LocalPlayer
-local playerName = player.Name
+local runService = game:GetService("RunService")
+local userInput = game:GetService("UserInputService")
 
-local function getTimestamp()
-    local now = os.time()
-    local ms = tick() % 1 * 1000
-    return string.format("%s.%03d", os.date("%H:%M:%S", now), ms)
+-- Хранилище замеров (последние 200)
+local measurements = {}   -- каждый: { time, y, deltaY, platform, autoRotate, gravityScale, motorInfo }
+
+local function getTimestampMS()
+    return tick() * 1000
 end
 
-local function watchMotor(instance, parentName)
-    if not instance then return end
-    local className = instance.ClassName
-    local props = {}
-    if className == "BodyVelocity" then
-        props = {"Velocity", "MaxForce"}
-    elseif className == "BodyPosition" then
-        props = {"Position", "MaxForce"}
-    elseif className == "BodyThrust" then
-        props = {"Force", "Location", "MaxForce"}
-    elseif className == "AlignPosition" then
-        props = {"Position", "MaxForce", "Responsiveness"}
-    elseif className == "LinearVelocity" then
-        props = {"VectorVelocity", "MaxForce"}
-    else
-        return
-    end
-    
-    print(string.format("[%s] НАЙДЕН %s на %s", getTimestamp(), className, parentName))
-    for _, prop in ipairs(props) do
-        local val = instance[prop]
-        local valStr = type(val) == "Vector3" and string.format("(%.1f, %.1f, %.1f)", val.X, val.Y, val.Z) or tostring(val)
-        print(string.format("  └─ %s = %s", prop, valStr))
-    end
-    
-    for _, prop in ipairs(props) do
-        instance:GetPropertyChangedSignal(prop):Connect(function()
-            local newVal = instance[prop]
-            local newStr = type(newVal) == "Vector3" and string.format("(%.1f, %.1f, %.1f)", newVal.X, newVal.Y, newVal.Z) or tostring(newVal)
-            print(string.format("[%s] %s на %s: %s изменён на %s", getTimestamp(), className, parentName, prop, newStr))
-        end)
-    end
+local function logToConsole(msg)
+    print(string.format("[%.0f] %s", getTimestampMS(), msg))
 end
 
-local function scanForMotors(container, containerName)
-    if not container then return end
-    for _, child in ipairs(container:GetDescendants()) do
-        if child:IsA("BodyVelocity") or child:IsA("BodyPosition") or child:IsA("BodyThrust") or 
-           child:IsA("AlignPosition") or child:IsA("LinearVelocity") then
-            watchMotor(child, containerName .. "/" .. child.Parent.Name)
-        end
-    end
-end
-
-local function watchContainer(container, containerName)
-    if not container then return end
-    scanForMotors(container, containerName)
-    container.DescendantAdded:Connect(function(desc)
-        if desc:IsA("BodyVelocity") or desc:IsA("BodyPosition") or desc:IsA("BodyThrust") or 
-           desc:IsA("AlignPosition") or desc:IsA("LinearVelocity") then
-            watchMotor(desc, containerName .. "/" .. desc.Parent.Name)
-        end
-    end)
-end
-
-local function startDiagnostic()
-    print("[ДИАГНОСТ] Начинаю наблюдение...")
-    
-    local function watchCharacter()
-        local char = player.Character
-        if char then
-            watchContainer(char, "Character")
-        end
-    end
-    watchCharacter()
-    player.CharacterAdded:Connect(watchCharacter)
-    
-    local function findAndWatchBoat()
-        local boats = workspace:FindFirstChild("Boats")
-        if not boats then return nil end
-        for _, boat in ipairs(boats:GetChildren()) do
-            if boat:IsA("Model") then
-                local owner = boat:GetAttribute("Owner") or (boat:FindFirstChild("Owner") and boat.Owner.Value)
-                if owner == playerName then
-                    print("[ДИАГНОСТ] Найдена моя лодка: " .. boat.Name)
-                    watchContainer(boat, "Boat/" .. boat.Name)
-                    return boat
+-- Проверяет наличие двигателей на персонаже и лодке (если сидит)
+local function getMotorInfo()
+    local char = player.Character
+    if not char then return "нет персонажа" end
+    local info = {}
+    local upper = char:FindFirstChild("UpperTorso")
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    for _, part in ipairs({upper, hrp}) do
+        if part then
+            for _, child in ipairs(part:GetChildren()) do
+                if child:IsA("BodyVelocity") or child:IsA("BodyPosition") or child:IsA("BodyThrust") or child:IsA("BodyGyro") then
+                    local vel = child:IsA("BodyVelocity") and child.Velocity or nil
+                    local pos = child:IsA("BodyPosition") and child.Position or nil
+                    local yVel = vel and string.format("Y=%.3f", vel.Y) or ""
+                    local yPos = pos and string.format("Y=%.2f", pos.Y) or ""
+                    table.insert(info, string.format("%s on %s %s %s", child.ClassName, part.Name, yVel, yPos))
                 end
             end
         end
-        return nil
     end
-    
-    -- Периодический поиск лодки
-    task.spawn(function()
-        while true do
-            findAndWatchBoat()
-            task.wait(3)
-        end
-    end)
-    
-    local boatsFolder = workspace:FindFirstChild("Boats")
-    if boatsFolder then
-        boatsFolder.ChildAdded:Connect(function(boat)
-            if boat:IsA("Model") then
-                local owner = boat:GetAttribute("Owner") or (boat:FindFirstChild("Owner") and boat.Owner.Value)
-                if owner == playerName then
-                    print("[ДИАГНОСТ] Появилась моя лодка: " .. boat.Name)
-                    watchContainer(boat, "Boat/" .. boat.Name)
-                end
-            end
-        end)
-    end
+    if #info == 0 then return "нет двигателей" end
+    return table.concat(info, "; ")
 end
 
-task.wait(2)
-startDiagnostic()
-print("[ДИАГНОСТ] Скрипт активен. Начинайте движение эталонным скриптом.")
+local lastY = nil
+local lastTime = nil
+
+local function recordFrame()
+    local char = player.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChild("Humanoid")
+    if not hrp or not hum then return end
+
+    local now = getTimestampMS()
+    local y = hrp.Position.Y
+    local platform = hum.PlatformStand
+    local autoRotate = hum.AutoRotate
+    local gravityScale = hum.GravityScale
+    local motorInfo = getMotorInfo()
+
+    if lastY and lastTime then
+        local dt = (now - lastTime) / 1000
+        if dt > 0.001 then
+            local deltaY = y - lastY
+            local verticalSpeed = deltaY / dt
+            -- Записываем ВСЕ замеры, но в консоль выводим только при колебании >0.2 студий
+            table.insert(measurements, {
+                t = now,
+                y = y,
+                deltaY = deltaY,
+                speed = verticalSpeed,
+                platform = platform,
+                autoRotate = autoRotate,
+                gravityScale = gravityScale,
+                motor = motorInfo
+            })
+            if #measurements > 300 then table.remove(measurements, 1) end
+
+            if math.abs(deltaY) > 0.2 then
+                logToConsole(string.format(
+                    "📊 КОЛЕБАНИЕ: dY=%.3f | speed=%.1f | platform=%s | autoRotate=%s | gravity=%.2f | %s",
+                    deltaY, verticalSpeed, tostring(platform), tostring(autoRotate), gravityScale, motorInfo
+                ))
+            end
+        end
+    end
+
+    lastY = y
+    lastTime = now
+end
+
+-- Запускаем частую запись (каждый рендер)
+runService.RenderStepped:Connect(recordFrame)
+
+-- Каждые 5 секунд – средняя амплитуда колебаний
+task.spawn(function()
+    while true do
+        task.wait(5)
+        if #measurements == 0 then
+            logToConsole("Нет измерений (возможно, нет персонажа)")
+        else
+            local totalAbsDelta = 0
+            local maxDelta = 0
+            local count = 0
+            for _, m in ipairs(measurements) do
+                totalAbsDelta = totalAbsDelta + math.abs(m.deltaY)
+                if math.abs(m.deltaY) > maxDelta then maxDelta = math.abs(m.deltaY) end
+                count = count + 1
+            end
+            local avgDelta = totalAbsDelta / count
+            logToConsole(string.format("📈 Статистика за 5с: среднее dY=%.4f, макс dY=%.3f (записей %d)", avgDelta, maxDelta, count))
+            if maxDelta > 0.5 then
+                logToConsole("⚠️ ВЫСОКИЕ ВЕРТИКАЛЬНЫЕ КОЛЕБАНИЯ! (max dY > 0.5)")
+            end
+        end
+    end
+end)
+
+-- Отчёт по F12 (подробные все измерения)
+userInput.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.F12 then
+        logToConsole("================ ПОДРОБНЫЙ ОТЧЁТ ================")
+        for i, m in ipairs(measurements) do
+            logToConsole(string.format("[%d] t=%.0f | Y=%.2f | dY=%.4f | v=%.1f | plat=%s | rot=%s | grav=%.2f | %s",
+                i, m.t, m.y, m.deltaY, m.speed, tostring(m.platform), tostring(m.autoRotate), m.gravityScale, m.motor))
+        end
+        logToConsole("================ КОНЕЦ ОТЧЁТА ================")
+    end
+end)
+
+logToConsole("🔍 Диагностик запущен. Отслеживаю вертикаль. Нажмите F12 для подробного отчёта.")
