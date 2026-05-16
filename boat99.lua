@@ -1,6 +1,6 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ (СТАБИЛЬНОЕ ДВИЖЕНИЕ, ПЛАВНОЕ ПЕРЕМЕЩЕНИЕ) =====
--- Версия 7.0
--- Больше нет тряски, улёта вверх, телепортации и проблем с посадкой.
+-- ===== ФИНАЛЬНЫЙ СКРИПТ 8.0 (ПЛАВНОЕ ПЕРЕМЕЩЕНИЕ, БЕЗ КОЛЕБАНИЙ) =====
+-- Устранены вертикальные прыжки при движении к лодке и острову.
+-- Движение лодки стабильное, без тряски.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -15,10 +15,6 @@ task.spawn(function()
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then part.CanCollide = false end
             end
-            local lower = char:FindFirstChild("LowerTorso")
-            local upper = char:FindFirstChild("UpperTorso")
-            if lower then lower.CanCollide = false end
-            if upper then upper.CanCollide = false end
         end
         local boats = workspace:FindFirstChild("Boats")
         if boats then
@@ -34,42 +30,52 @@ task.spawn(function()
     end
 end)
 
--- ========== 2. ПЛАВНОЕ ПОШАГОВОЕ ПЕРЕМЕЩЕНИЕ (БЕЗ ТЕЛЕПОРТАЦИИ) ==========
-local function moveStep(targetPos, speed, keepY)
+-- ========== 2. ПЛАВНОЕ ПЕРЕМЕЩЕНИЕ (LERPA, БЕЗ РЫВКОВ) ==========
+local isMoving = false   -- защита от одновременных перемещений
+
+local function moveToPosition(targetPos, speed, keepY)
+    if isMoving then return false end
     local char = player.Character
     if not char then return false end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChild("Humanoid")
     if not hrp or not hum then return false end
-    
+
+    isMoving = true
     local oldPlatform = hum.PlatformStand
     hum.PlatformStand = true
     hum.AutoRotate = false
-    
-    local step = 0.02
-    local stepSize = speed * step
-    local maxIter = 500
-    local iter = 0
-    
-    while (hrp.Position - targetPos).Magnitude > 0.5 and iter < maxIter do
-        local dir = (targetPos - hrp.Position).Unit
-        local moveDist = math.min(stepSize, (targetPos - hrp.Position).Magnitude)
-        local newPos = hrp.Position + dir * moveDist
-        if keepY then newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z) end
-        hrp.CFrame = CFrame.new(newPos)
-        task.wait(step)
-        iter = iter + 1
+
+    local startPos = hrp.Position
+    local goal = keepY and Vector3.new(targetPos.X, targetPos.Y, targetPos.Z) or targetPos
+    local distance = (startPos - goal).Magnitude
+    if distance < 0.5 then
+        hrp.CFrame = CFrame.new(goal)
+        hum.PlatformStand = oldPlatform
+        hum.AutoRotate = true
+        isMoving = false
+        return true
     end
-    
-    hrp.CFrame = CFrame.new(targetPos)
+
+    local duration = math.max(0.2, distance / speed)
+    local startTime = tick()
+    while tick() - startTime < duration do
+        local alpha = (tick() - startTime) / duration
+        local newPos = startPos:Lerp(goal, alpha)
+        hrp.CFrame = CFrame.new(newPos)
+        task.wait()
+    end
+
+    hrp.CFrame = CFrame.new(goal)
     hum.PlatformStand = oldPlatform
     hum.AutoRotate = true
+    isMoving = false
     return true
 end
 
 local function moveToSeat(seat)
     local target = seat.Position + Vector3.new(0, 2.5, 0)
-    return moveStep(target, 400, true)
+    return moveToPosition(target, 400, true)
 end
 
 -- ========== 3. ПОКУПКА И ПОИСК ЛОДКИ ==========
@@ -95,7 +101,7 @@ local function findMyBoat()
     return nil
 end
 
--- ========== 4. ДВИЖЕНИЕ ЛОДКИ (СТАБИЛЬНОЕ, БЕЗ ТРЯСКИ) ==========
+-- ========== 4. ДВИЖЕНИЕ ЛОДКИ (СТАБИЛЬНОЕ) ==========
 local boat = nil
 local seat = nil
 local root = nil
@@ -106,7 +112,7 @@ local dir = -1
 local X_MIN = -77389.3
 local X_MAX = -47968.4
 local SPEED_X = 250
-local SPEED_Y = -0.0002     -- почти ноль, гравитация компенсируется игрой
+local SPEED_Y = -0.0002
 local SPEED_Z = -0.0002
 local TARGET_Y = 100
 local moving = false
@@ -142,7 +148,7 @@ local function startMove()
     end
     moving = true
     moveThread = task.spawn(function()
-        task.wait(0.3) -- небольшая задержка для фиксации
+        task.wait(0.3)
         while moving do
             if not (hum and hum.Sit and hum.SeatPart == seat) then
                 stopMove()
@@ -152,12 +158,10 @@ local function startMove()
                 stopMove()
                 break
             end
-            
-            -- Мягкая коррекция высоты (только при сильном уходе)
+            -- Мягкая коррекция высоты (только при сильном отклонении)
             local p = root.Position
             local yDev = p.Y - TARGET_Y
             if math.abs(yDev) > 5 then
-                -- Плавно возвращаем за несколько шагов
                 local steps = 10
                 for i = 1, steps do
                     local newY = p.Y + (TARGET_Y - p.Y) * (i / steps)
@@ -166,8 +170,7 @@ local function startMove()
                 end
                 root.CFrame = CFrame.new(p.X, TARGET_Y, p.Z)
             end
-            
-            -- Смена направления на границах
+            -- Смена направления
             if p.X <= X_MIN and dir == -1 then
                 dir = 1
                 ensureBV()
@@ -175,14 +178,13 @@ local function startMove()
                 dir = -1
                 ensureBV()
             end
-            
-            task.wait(0.1) -- реже для стабильности
+            task.wait(0.1)
         end
     end)
     ensureBV()
 end
 
--- ========== 5. МАГНИТ (ТОЛЬКО ПО ВЕРТИКАЛИ + МЯГКИЙ ГОРИЗОНТ) ==========
+-- ========== 5. МАГНИТ (ВЕРТИКАЛЬНЫЙ BODYPOSITION + МЯГКИЙ СFRAME) ==========
 local magnetEnabled = true
 local magnetBodyPos = nil
 local magnetBodyPosActive = false
@@ -351,11 +353,11 @@ task.spawn(function()
             stopMove()
             if hum then hum.Sit = false end
             task.wait(0.5)
-            
+
             local liftTarget = island:GetPivot().Position + Vector3.new(0, 330, 0)
             print("[ОСТРОВ] Подъём на высоту")
-            moveStep(liftTarget, 400, true)
-            
+            moveToPosition(liftTarget, 400, true)
+
             local eggTargetPos = nil
             local myEggModel = nil
             local startTime = os.clock()
@@ -380,10 +382,10 @@ task.spawn(function()
                 end
                 task.wait(0.5)
             end
-            
+
             if eggTargetPos and myEggModel and myEggModel.Parent then
                 print("[ОСТРОВ] Перемещение к яйцу")
-                moveStep(eggTargetPos, 400, true)
+                moveToPosition(eggTargetPos, 400, true)
                 if myEggModel.Parent then
                     pressE()
                     for _ = 1, 20 do
@@ -392,7 +394,7 @@ task.spawn(function()
                     end
                 end
             end
-            
+
             islandActive = false
             pendingReturn = true
             waitingForDespawn = true
@@ -420,7 +422,7 @@ task.spawn(function()
     while true do
         task.wait(0.05)
         if islandActive then continue end
-        
+
         if pendingReturn then
             pendingReturn = false
             print("[ГЛАВНЫЙ] Возврат с острова")
@@ -441,13 +443,11 @@ task.spawn(function()
                         if h then
                             moveToSeat(seat)
                             h.Sit = true
-                            -- Ждём фиксации в сиденье
                             local startWait = tick()
                             while tick() - startWait < 2 do
                                 if h.SeatPart == seat then break end
                                 task.wait(0.05)
                             end
-                            -- Обновляем ссылки после посадки
                             boat = findMyBoat()
                             if boat then
                                 seat = boat:FindFirstChildWhichIsA("VehicleSeat")
@@ -463,7 +463,7 @@ task.spawn(function()
                 end
             end
         end
-        
+
         if not boat or not boat.Parent then
             boat = findMyBoat()
             if not boat then
@@ -491,13 +491,13 @@ task.spawn(function()
             if nat then nat.Disabled = true end
             print("[ГЛАВНЫЙ] Лодка найдена: " .. boat.Name)
         end
-        
+
         local char = player.Character
         if char then
             hum = char:FindFirstChild("Humanoid")
             hrp = char:FindFirstChild("HumanoidRootPart")
         end
-        
+
         if hum and hum.Sit and hum.SeatPart == seat then
             if not moving then startMove() end
         else
@@ -507,7 +507,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 10. ПЕРВИЧНАЯ ПОСАДКА С ФИКСАЦИЕЙ ==========
+-- ========== 10. ПЕРВИЧНАЯ ПОСАДКА ==========
 task.spawn(function()
     while not boat or not seat do task.wait(0.5) end
     local char = player.Character
@@ -541,4 +541,4 @@ task.spawn(function()
     fruitTracker()
 end)
 
-print("Скрипт версии 7.0 запущен. Движение стабильное, без тряски и улётов.")
+print("Скрипт 8.0 запущен. Перемещение плавное, без вертикальных скачков.")
