@@ -1,12 +1,9 @@
--- ========== РАСШИРЕННЫЙ ДИАГНОСТИК ВЕРТИКАЛИ И ДВИЖЕНИЯ ==========
--- Отслеживает ВСЁ, что влияет на плавность: Y-позиция, GravityScale, PlatformStand, AutoRotate, двигатели.
-
+-- ========== РАСШИРЕННЫЙ ДИАГНОСТИК ВЕРТИКАЛИ И ДВИЖЕНИЯ (исправленный) ==========
 local player = game.Players.LocalPlayer
 local runService = game:GetService("RunService")
 local userInput = game:GetService("UserInputService")
 
--- Хранилище замеров (последние 200)
-local measurements = {}   -- каждый: { time, y, deltaY, platform, autoRotate, gravityScale, motorInfo }
+local measurements = {}
 
 local function getTimestampMS()
     return tick() * 1000
@@ -16,7 +13,6 @@ local function logToConsole(msg)
     print(string.format("[%.0f] %s", getTimestampMS(), msg))
 end
 
--- Проверяет наличие двигателей на персонаже и лодке (если сидит)
 local function getMotorInfo()
     local char = player.Character
     if not char then return "нет персонажа" end
@@ -54,7 +50,6 @@ local function recordFrame()
     local y = hrp.Position.Y
     local platform = hum.PlatformStand
     local autoRotate = hum.AutoRotate
-    local gravityScale = hum.GravityScale
     local motorInfo = getMotorInfo()
 
     if lastY and lastTime then
@@ -62,7 +57,6 @@ local function recordFrame()
         if dt > 0.001 then
             local deltaY = y - lastY
             local verticalSpeed = deltaY / dt
-            -- Записываем ВСЕ замеры, но в консоль выводим только при колебании >0.2 студий
             table.insert(measurements, {
                 t = now,
                 y = y,
@@ -70,15 +64,14 @@ local function recordFrame()
                 speed = verticalSpeed,
                 platform = platform,
                 autoRotate = autoRotate,
-                gravityScale = gravityScale,
                 motor = motorInfo
             })
             if #measurements > 300 then table.remove(measurements, 1) end
 
             if math.abs(deltaY) > 0.2 then
                 logToConsole(string.format(
-                    "📊 КОЛЕБАНИЕ: dY=%.3f | speed=%.1f | platform=%s | autoRotate=%s | gravity=%.2f | %s",
-                    deltaY, verticalSpeed, tostring(platform), tostring(autoRotate), gravityScale, motorInfo
+                    "📊 КОЛЕБАНИЕ: dY=%.3f | speed=%.1f | platform=%s | autoRotate=%s | %s",
+                    deltaY, verticalSpeed, tostring(platform), tostring(autoRotate), motorInfo
                 ))
             end
         end
@@ -88,10 +81,8 @@ local function recordFrame()
     lastTime = now
 end
 
--- Запускаем частую запись (каждый рендер)
 runService.RenderStepped:Connect(recordFrame)
 
--- Каждые 5 секунд – средняя амплитуда колебаний
 task.spawn(function()
     while true do
         task.wait(5)
@@ -115,14 +106,13 @@ task.spawn(function()
     end
 end)
 
--- Отчёт по F12 (подробные все измерения)
 userInput.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     if input.KeyCode == Enum.KeyCode.F12 then
         logToConsole("================ ПОДРОБНЫЙ ОТЧЁТ ================")
         for i, m in ipairs(measurements) do
-            logToConsole(string.format("[%d] t=%.0f | Y=%.2f | dY=%.4f | v=%.1f | plat=%s | rot=%s | grav=%.2f | %s",
-                i, m.t, m.y, m.deltaY, m.speed, tostring(m.platform), tostring(m.autoRotate), m.gravityScale, m.motor))
+            logToConsole(string.format("[%d] t=%.0f | Y=%.2f | dY=%.4f | v=%.1f | plat=%s | rot=%s | %s",
+                i, m.t, m.y, m.deltaY, m.speed, tostring(m.platform), tostring(m.autoRotate), m.motor))
         end
         logToConsole("================ КОНЕЦ ОТЧЁТА ================")
     end
