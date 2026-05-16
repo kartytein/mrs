@@ -1,63 +1,61 @@
--- ========== ЛОГГЕР ПАРАМЕТРОВ УДЕРЖАНИЯ ==========
+-- ========== ЛОГГЕР ПЕРВИЧНОЙ ПОСАДКИ (РАБОТАЕТ В ФОНЕ) ==========
 local player = game.Players.LocalPlayer
+local startTime = tick()
 
--- Ждём появления персонажа
-local function waitForCharacter()
-    if player.Character then return player.Character end
-    return player.CharacterAdded:Wait()
+local function log(msg)
+    local now = (tick() - startTime) * 1000
+    print(string.format("[%.1fms] %s", now, msg))
 end
 
-local char = waitForCharacter()
-print("[ЛОГГЕР] Персонаж появился, начинаем сбор данных")
-
--- Основной цикл
-while true do
-    task.wait(1) -- раз в секунду
-    
+local function getBodyVelocityInfo()
     local char = player.Character
-    if not char then 
-        print("[ЛОГГЕР] Нет персонажа")
-        continue
-    end
-    
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChild("Humanoid")
-    if not hrp or not hum then
-        print("[ЛОГГЕР] Нет HRP или Humanoid")
-        continue
-    end
-    
-    -- Собираем информацию о двигателях на персонаже
-    local motors = {}
+    if not char then return "Нет персонажа" end
     local upper = char:FindFirstChild("UpperTorso")
-    for _, part in ipairs({hrp, upper}) do
-        if part then
-            for _, child in ipairs(part:GetChildren()) do
-                local c = child.ClassName
-                if c == "BodyVelocity" or c == "BodyPosition" or c == "BodyGyro" or c == "BodyThrust" or c == "LinearVelocity" or c == "AlignPosition" then
-                    local info = c
-                    if c == "BodyVelocity" then
-                        info = info .. string.format(" VelY=%.4f", child.Velocity.Y)
-                    elseif c == "BodyPosition" then
-                        info = info .. string.format(" PosY=%.2f", child.Position.Y)
-                    end
-                    table.insert(motors, info .. " on " .. part.Name)
-                end
-            end
+    if not upper then return "Нет UpperTorso" end
+    for _, child in ipairs(upper:GetChildren()) do
+        if child:IsA("BodyVelocity") then
+            return string.format("BodyVelocity: Vel=(%.2f, %.4f, %.2f) MaxForce=(%s,%s,%s)",
+                child.Velocity.X, child.Velocity.Y, child.Velocity.Z,
+                tostring(child.MaxForce.X), tostring(child.MaxForce.Y), tostring(child.MaxForce.Z))
         end
     end
-    local motorStr = (#motors > 0) and table.concat(motors, "; ") or "нет"
-    
-    -- Выводим всё в консоль
-    print(string.format(
-        "[%.1f] Y=%.2f | VelY=%.3f | Platform=%s | AutoRotate=%s | Gravity=%.2f | Sit=%s | Motors: %s",
-        tick(),
-        hrp.Position.Y,
-        hrp.Velocity.Y,
-        tostring(hum.PlatformStand),
-        tostring(hum.AutoRotate),
-        hum.GravityScale,
-        tostring(hum.Sit),
-        motorStr
-    ))
+    return "BodyVelocity ОТСУТСТВУЕТ"
 end
+
+-- Основной цикл логирования (каждые 50 мс)
+task.spawn(function()
+    local lastY = nil
+    while true do
+        task.wait(0.05)
+        local char = player.Character
+        if not char then
+            log("Ожидание персонажа...")
+            continue
+        end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChild("Humanoid")
+        if not hrp or not hum then
+            log("Нет HRP или Humanoid")
+            continue
+        end
+        
+        local y = hrp.Position.Y
+        local velY = hrp.Velocity.Y
+        local sit = hum.Sit
+        local seatPart = hum.SeatPart and hum.SeatPart.Name or "none"
+        local platform = hum.PlatformStand
+        local bvInfo = getBodyVelocityInfo()
+        
+        -- Выводим строку каждые 50 мс
+        log(string.format("Y=%.2f | VelY=%.3f | Sit=%s | Seat=%s | Platform=%s | %s",
+            y, velY, tostring(sit), seatPart, tostring(platform), bvInfo))
+        
+        -- Фиксируем резкий скачок Y (более 0.5 студий)
+        if lastY and math.abs(y - lastY) > 0.5 then
+            log(string.format("⚠️ РЕЗКИЙ СКАЧОК Y: %.2f -> %.2f (dY=%.2f)", lastY, y, y - lastY))
+        end
+        lastY = y
+    end
+end)
+
+log("Логгер запущен. Выполните первичную посадку и скопируйте вывод консоли (F9).")
