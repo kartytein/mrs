@@ -509,18 +509,63 @@ task.spawn(function()
     end
 end)
 
--- Первичная быстрая посадка
+-- Первичная посадка (с ожиданием реальной фиксации в сиденье)
 task.spawn(function()
-    while not boat or not seat do task.wait(0.5) end
-    local char = player.Character
-    if not char then char = player.CharacterAdded:Wait() end
-    hum = char:FindFirstChild("Humanoid")
-    if hum and not (hum.Sit and hum.SeatPart == seat) then
-        moveToSeat(seat)
-        hum.Sit = true
-        print("[ПЕРВИЧНАЯ ПОСАДКА] Выполнена")
-        startMove()
+    -- Ждём, пока лодка и сиденье появятся
+    while not boat or not seat do 
+        task.wait(0.5) 
     end
+    
+    local char = player.Character
+    if not char then 
+        char = player.CharacterAdded:Wait()
+        task.wait(1)
+    end
+    
+    local hum = char:FindFirstChild("Humanoid")
+    if not hum then return end
+    
+    -- Если уже сидит в нужном сиденье – просто запускаем движение
+    if hum.Sit and hum.SeatPart == seat then
+        print("[ПЕРВИЧНАЯ] Уже сидит")
+        startMove()
+        return
+    end
+    
+    -- Перемещаемся к сиденью
+    local targetPos = seat.Position + Vector3.new(0, 2.5, 0)
+    moveStep(targetPos, 400, true)
+    
+    -- Садимся
+    hum.Sit = true
+    
+    -- Ожидаем, пока SeatPart действительно станет равен seat (максимум 2 секунды)
+    local startWait = tick()
+    while tick() - startWait < 2 do
+        if hum.SeatPart == seat then
+            print("[ПЕРВИЧНАЯ] Фиксация в сиденье подтверждена")
+            break
+        end
+        task.wait(0.05)
+    end
+    
+    if hum.SeatPart ~= seat then
+        print("[ПЕРВИЧНАЯ] Не удалось зафиксироваться в сиденье, пробуем ещё раз")
+        hum.Sit = false
+        task.wait(0.5)
+        hum.Sit = true
+        task.wait(0.5)
+    end
+    
+    -- Обновляем глобальные переменные (на случай, если лодка пересоздалась)
+    boat = findMyBoat()
+    if boat then
+        seat = boat:FindFirstChildWhichIsA("VehicleSeat")
+        root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
+    end
+    
+    startMove()
+    print("[ПЕРВИЧНАЯ ПОСАДКА] Движение запущено")
 end)
 
 -- Запуск детектора фруктов
