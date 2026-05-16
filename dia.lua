@@ -1,19 +1,13 @@
--- ========== ДИАГНОСТИК ДВИГАТЕЛЕЙ ==========
--- Отслеживает появление BodyVelocity/BodyPosition/BodyThrust/AlignPosition
--- на лодке и персонаже, а также изменения их свойств.
-
+-- ========== ДИАГНОСТИК ДВИГАТЕЛЕЙ (ИСПРАВЛЕННЫЙ) ==========
 local player = game.Players.LocalPlayer
 local playerName = player.Name
-local httpService = game:GetService("HttpService")
 
--- Функция для красивого вывода времени
 local function getTimestamp()
     local now = os.time()
     local ms = tick() % 1 * 1000
     return string.format("%s.%03d", os.date("%H:%M:%S", now), ms)
 end
 
--- Отслеживание изменений в конкретном объекте (например, BodyVelocity)
 local function watchMotor(instance, parentName)
     if not instance then return end
     local className = instance.ClassName
@@ -39,7 +33,6 @@ local function watchMotor(instance, parentName)
         print(string.format("  └─ %s = %s", prop, valStr))
     end
     
-    -- Отслеживаем изменения свойств
     for _, prop in ipairs(props) do
         instance:GetPropertyChangedSignal(prop):Connect(function()
             local newVal = instance[prop]
@@ -49,7 +42,6 @@ local function watchMotor(instance, parentName)
     end
 end
 
--- Сканирование всех потомков на наличие двигателей
 local function scanForMotors(container, containerName)
     if not container then return end
     for _, child in ipairs(container:GetDescendants()) do
@@ -60,7 +52,6 @@ local function scanForMotors(container, containerName)
     end
 end
 
--- Наблюдение за появлением новых объектов (через DescendantAdded)
 local function watchContainer(container, containerName)
     if not container then return end
     scanForMotors(container, containerName)
@@ -72,11 +63,9 @@ local function watchContainer(container, containerName)
     end)
 end
 
--- Основная логика: следим за лодкой и персонажем
 local function startDiagnostic()
     print("[ДИАГНОСТ] Начинаю наблюдение...")
     
-    -- Следим за персонажем (текущим и будущим)
     local function watchCharacter()
         local char = player.Character
         if char then
@@ -84,15 +73,11 @@ local function startDiagnostic()
         end
     end
     watchCharacter()
-    player.CharacterAdded:Connect(function()
-        print("[ДИАГНОСТ] Персонаж пересоздан, переподключаюсь")
-        watchCharacter()
-    end)
+    player.CharacterAdded:Connect(watchCharacter)
     
-    -- Следим за лодкой (поиск в workspace.Boats)
     local function findAndWatchBoat()
         local boats = workspace:FindFirstChild("Boats")
-        if not boats then return end
+        if not boats then return nil end
         for _, boat in ipairs(boats:GetChildren()) do
             if boat:IsA("Model") then
                 local owner = boat:GetAttribute("Owner") or (boat:FindFirstChild("Owner") and boat.Owner.Value)
@@ -106,7 +91,7 @@ local function startDiagnostic()
         return nil
     end
     
-    -- Повторный поиск каждые 3 секунды
+    -- Периодический поиск лодки
     task.spawn(function()
         while true do
             findAndWatchBoat()
@@ -114,7 +99,6 @@ local function startDiagnostic()
         end
     end)
     
-    -- Также следим за появлением новых лодок в Boats
     local boatsFolder = workspace:FindFirstChild("Boats")
     if boatsFolder then
         boatsFolder.ChildAdded:Connect(function(boat)
@@ -127,9 +111,8 @@ local function startDiagnostic()
             end
         end)
     end
-end)
+end
 
--- Запуск с задержкой 2 секунды, чтобы игра прогрузилась
 task.wait(2)
 startDiagnostic()
 print("[ДИАГНОСТ] Скрипт активен. Начинайте движение эталонным скриптом.")
