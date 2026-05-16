@@ -7,7 +7,6 @@
 local player = game.Players.LocalPlayer
 local playerName = player.Name
 local HttpService = game:GetService("HttpService")
-local TweenService = game:GetService("TweenService")
 local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
 
 -- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
@@ -38,28 +37,43 @@ task.spawn(function()
 end)
 
 -- ========== 2. ПЛАВНОЕ ПЕРЕМЕЩЕНИЕ (TWEEN) ==========
-local function tweenToPosition(targetPos, duration, keepY)
+-- ========== 2. ПЛАВНОЕ ПОШАГОВОЕ ПЕРЕМЕЩЕНИЕ (БЕЗ ТЕЛЕПОРТАЦИИ) ==========
+local function moveStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChild("Humanoid")
     if not hrp or not hum then return false end
+    
     local oldPlatform = hum.PlatformStand
     hum.PlatformStand = true
-    local target = keepY and Vector3.new(targetPos.X, targetPos.Y, targetPos.Z) or targetPos
-    local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    local tween = TweenService:Create(hrp, tweenInfo, {CFrame = CFrame.new(target)})
-    tween:Play()
-    tween.Completed:Wait()
+    hum.AutoRotate = false  -- отключаем авто-поворот для стабильности
+    
+    local step = 0.02
+    local stepSize = speed * step
+    local maxIterations = 500 -- защита от бесконечного цикла
+    local iterations = 0
+    
+    while (hrp.Position - targetPos).Magnitude > 0.5 and iterations < maxIterations do
+        local dir = (targetPos - hrp.Position).Unit
+        local moveDist = math.min(stepSize, (targetPos - hrp.Position).Magnitude)
+        local newPos = hrp.Position + dir * moveDist
+        if keepY then newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z) end
+        hrp.CFrame = CFrame.new(newPos)
+        task.wait(step)
+        iterations = iterations + 1
+    end
+    
+    hrp.CFrame = CFrame.new(targetPos)
     hum.PlatformStand = oldPlatform
+    hum.AutoRotate = true
     return true
 end
 
 local function moveToSeat(seat)
     local target = seat.Position + Vector3.new(0, 2.5, 0)
-    return tweenToPosition(target, 1.2, true)
+    return moveStep(target, 400, true)  -- скорость 400
 end
-
 -- ========== 3. ПОКУПКА И ПОИСК ЛОДКИ ==========
 local function buyBoat()
     local rs = game:GetService("ReplicatedStorage")
@@ -345,7 +359,7 @@ task.spawn(function()
 
             local liftTarget = island:GetPivot().Position + Vector3.new(0, 330, 0)
             print("[ОСТРОВ] Подъём на высоту")
-            tweenToPosition(liftTarget, 2.5, true)
+            moveStep(liftTarget, 400, true)
 
             local eggTargetPos = nil
             local myEggModel = nil
@@ -374,7 +388,7 @@ task.spawn(function()
 
             if eggTargetPos and myEggModel and myEggModel.Parent then
                 print("[ОСТРОВ] Перемещение к яйцу")
-                tweenToPosition(eggTargetPos, 2, true)
+                moveStep(eggTargetPos, 400, true)
                 if myEggModel.Parent then
                     pressE()
                     for _ = 1, 20 do
@@ -431,7 +445,8 @@ task.spawn(function()
                         local h = char:FindFirstChild("Humanoid")
                         local r = char:FindFirstChild("HumanoidRootPart")
                         if h and r then
-                            moveToSeat(seat)
+                            local targetPos = seat.Position + Vector3.new(0, 2.5, 0)
+                            moveStep(targetPos, 400, true)
                             h.Sit = true
                             task.wait(0.3)
                             -- Обновляем ссылки после посадки
