@@ -1,174 +1,135 @@
--- ========== ДИАГНОСТИК ДВИЖЕНИЯ ==========
--- Версия 1.0
--- Запустите этот скрипт ОДНОВРЕМЕННО с эталонным скриптом
--- Он будет каждые 0.05 сек записывать позицию персонажа
--- и выводить сводку каждые 2 секунды, а также отмечать резкие ускорения.
+-- ========== ДИАГНОСТИК ДВИГАТЕЛЕЙ ==========
+-- Отслеживает появление BodyVelocity/BodyPosition/BodyThrust/AlignPosition
+-- на лодке и персонаже, а также изменения их свойств.
 
 local player = game.Players.LocalPlayer
-local runService = game:GetService("RunService")
-local logEnabled = true   -- Вывод в консоль
-local guiEnabled = true   -- Создать небольшое окошко на экране
+local playerName = player.Name
+local httpService = game:GetService("HttpService")
 
--- Хранилище замеров (последние 100)
-local measurements = {}   -- каждый элемент: {time, pos, deltaTime, deltaDist, speed, smooth}
-
--- Создаём простой GUI для отображения текущей скорости
-local screenGui = nil
-local textLabel = nil
-if guiEnabled then
-    screenGui = Instance.new("ScreenGui")
-    screenGui.Parent = player:WaitForChild("PlayerGui")
-    textLabel = Instance.new("TextLabel")
-    textLabel.Size = UDim2.new(0, 300, 0, 60)
-    textLabel.Position = UDim2.new(0, 10, 0, 10)
-    textLabel.BackgroundTransparency = 0.5
-    textLabel.BackgroundColor3 = Color3.new(0, 0, 0)
-    textLabel.TextColor3 = Color3.new(1, 1, 1)
-    textLabel.Text = "Диагност: ожидание персонажа..."
-    textLabel.Font = Enum.Font.SourceSansBold
-    textLabel.TextSize = 14
-    textLabel.Parent = screenGui
+-- Функция для красивого вывода времени
+local function getTimestamp()
+    local now = os.time()
+    local ms = tick() % 1 * 1000
+    return string.format("%s.%03d", os.date("%H:%M:%S", now), ms)
 end
 
-local function logToConsole(msg)
-    if logEnabled then
-        print(os.date("%X"), msg)
-    end
-end
-
--- Получить время в миллисекундах (от запуска игры)
-local function getMillis()
-    return tick() * 1000
-end
-
-local lastPos = nil
-local lastTime = nil
-local lastSmooth = nil
-local jerkCount = 0   -- счётчик рывков
-
-local function recordMeasurement()
-    local char = player.Character
-    if not char then
-        if textLabel then textLabel.Text = "Нет персонажа" end
+-- Отслеживание изменений в конкретном объекте (например, BodyVelocity)
+local function watchMotor(instance, parentName)
+    if not instance then return end
+    local className = instance.ClassName
+    local props = {}
+    if className == "BodyVelocity" then
+        props = {"Velocity", "MaxForce"}
+    elseif className == "BodyPosition" then
+        props = {"Position", "MaxForce"}
+    elseif className == "BodyThrust" then
+        props = {"Force", "Location", "MaxForce"}
+    elseif className == "AlignPosition" then
+        props = {"Position", "MaxForce", "Responsiveness"}
+    elseif className == "LinearVelocity" then
+        props = {"VectorVelocity", "MaxForce"}
+    else
         return
     end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChild("Humanoid")
-    if not hrp or not hum then return end
     
-    local now = getMillis()
-    local pos = hrp.Position
-    local sit = hum.Sit and hum.SeatPart ~= nil
+    print(string.format("[%s] НАЙДЕН %s на %s", getTimestamp(), className, parentName))
+    for _, prop in ipairs(props) do
+        local val = instance[prop]
+        local valStr = type(val) == "Vector3" and string.format("(%.1f, %.1f, %.1f)", val.X, val.Y, val.Z) or tostring(val)
+        print(string.format("  └─ %s = %s", prop, valStr))
+    end
     
-    if lastPos and lastTime then
-        local deltaTime = (now - lastTime) / 1000   -- секунды
-        if deltaTime > 0 then
-            local deltaDist = (pos - lastPos).Magnitude
-            local speed = deltaDist / deltaTime    -- скорость в студиях/сек
-            -- Вычисляем "гладкость": изменение скорости за последние 2 замера
-            local smooth = 0
-            if lastSmooth then
-                smooth = math.abs(speed - lastSmooth) / deltaTime
-            end
-            lastSmooth = speed
-            
-            -- Добавляем замер
-            table.insert(measurements, {
-                t = now,
-                pos = pos,
-                dt = deltaTime * 1000, -- миллисекунды
-                dist = deltaDist,
-                speed = speed,
-                smooth = smooth,
-                sit = sit
-            })
-            if #measurements > 200 then table.remove(measurements, 1) end
-            
-            -- Определяем рывок: резкое изменение скорости > 50 студий/сек^2 ИЛИ ускорение > 100
-            if smooth > 80 and deltaDist > 0.5 then
-                jerkCount = jerkCount + 1
-                logToConsole(string.format("[РЫВОК] %.1f мс: ускорение %.1f, скорость %.1f -> %.1f", 
-                    now, smooth, lastSmooth or 0, speed))
-                if textLabel then
-                    textLabel.TextColor3 = Color3.new(1, 0, 0)
-                    task.wait(0.2)
-                    textLabel.TextColor3 = Color3.new(1, 1, 1)
+    -- Отслеживаем изменения свойств
+    for _, prop in ipairs(props) do
+        instance:GetPropertyChangedSignal(prop):Connect(function()
+            local newVal = instance[prop]
+            local newStr = type(newVal) == "Vector3" and string.format("(%.1f, %.1f, %.1f)", newVal.X, newVal.Y, newVal.Z) or tostring(newVal)
+            print(string.format("[%s] %s на %s: %s изменён на %s", getTimestamp(), className, parentName, prop, newStr))
+        end)
+    end
+end
+
+-- Сканирование всех потомков на наличие двигателей
+local function scanForMotors(container, containerName)
+    if not container then return end
+    for _, child in ipairs(container:GetDescendants()) do
+        if child:IsA("BodyVelocity") or child:IsA("BodyPosition") or child:IsA("BodyThrust") or 
+           child:IsA("AlignPosition") or child:IsA("LinearVelocity") then
+            watchMotor(child, containerName .. "/" .. child.Parent.Name)
+        end
+    end
+end
+
+-- Наблюдение за появлением новых объектов (через DescendantAdded)
+local function watchContainer(container, containerName)
+    if not container then return end
+    scanForMotors(container, containerName)
+    container.DescendantAdded:Connect(function(desc)
+        if desc:IsA("BodyVelocity") or desc:IsA("BodyPosition") or desc:IsA("BodyThrust") or 
+           desc:IsA("AlignPosition") or desc:IsA("LinearVelocity") then
+            watchMotor(desc, containerName .. "/" .. desc.Parent.Name)
+        end
+    end)
+end
+
+-- Основная логика: следим за лодкой и персонажем
+local function startDiagnostic()
+    print("[ДИАГНОСТ] Начинаю наблюдение...")
+    
+    -- Следим за персонажем (текущим и будущим)
+    local function watchCharacter()
+        local char = player.Character
+        if char then
+            watchContainer(char, "Character")
+        end
+    end
+    watchCharacter()
+    player.CharacterAdded:Connect(function()
+        print("[ДИАГНОСТ] Персонаж пересоздан, переподключаюсь")
+        watchCharacter()
+    end)
+    
+    -- Следим за лодкой (поиск в workspace.Boats)
+    local function findAndWatchBoat()
+        local boats = workspace:FindFirstChild("Boats")
+        if not boats then return end
+        for _, boat in ipairs(boats:GetChildren()) do
+            if boat:IsA("Model") then
+                local owner = boat:GetAttribute("Owner") or (boat:FindFirstChild("Owner") and boat.Owner.Value)
+                if owner == playerName then
+                    print("[ДИАГНОСТ] Найдена моя лодка: " .. boat.Name)
+                    watchContainer(boat, "Boat/" .. boat.Name)
+                    return boat
                 end
             end
-            
-            -- Обновляем GUI каждые ~0.1 сек
-            if textLabel and now % 100 < 20 then
-                textLabel.Text = string.format(
-                    "Скорость: %.1f ст/с\nУскорение: %.1f\nРывков: %d | Сидит: %s",
-                    speed, smooth, jerkCount, tostring(sit))
-            end
         end
+        return nil
     end
     
-    lastPos = pos
-    lastTime = now
-end
-
--- Запускаем измерение каждый кадр (или через 0.05 сек)
-local connection
-connection = runService.RenderStepped:Connect(function(deltaTime)
-    -- Используем RenderStepped для синхронизации с отрисовкой (высокая точность)
-    recordMeasurement()
-end)
-
--- Каждые 5 секунд выводим статистику в консоль
-task.spawn(function()
-    while true do
-        task.wait(5)
-        if #measurements == 0 then continue end
-        
-        local totalDist = 0
-        local maxSpeed = 0
-        local avgSpeed = 0
-        local maxSmooth = 0
-        for i = 2, #measurements do
-            local m = measurements[i]
-            totalDist = totalDist + m.dist
-            if m.speed > maxSpeed then maxSpeed = m.speed end
-            if m.smooth > maxSmooth then maxSmooth = m.smooth end
-            avgSpeed = avgSpeed + m.speed
+    -- Повторный поиск каждые 3 секунды
+    task.spawn(function()
+        while true do
+            findAndWatchBoat()
+            task.wait(3)
         end
-        avgSpeed = avgSpeed / (#measurements - 1)
-        
-        logToConsole("=== СТАТИСТИКА за 5 сек ===")
-        logToConsole(string.format("Пройдено: %.1f ст | Средняя скор.: %.1f | Макс скор.: %.1f | Макс ускор.: %.1f | Рывков: %d",
-            totalDist, avgSpeed, maxSpeed, maxSmooth, jerkCount))
-        logToConsole("Тип движения (предположительно): " ..
-            (maxSmooth < 20 and "Tween/плавное" or (maxSmooth < 80 and "BodyVelocity" or "BodyPosition/рывки")))
-        logToConsole("============================")
+    end)
+    
+    -- Также следим за появлением новых лодок в Boats
+    local boatsFolder = workspace:FindFirstChild("Boats")
+    if boatsFolder then
+        boatsFolder.ChildAdded:Connect(function(boat)
+            if boat:IsA("Model") then
+                local owner = boat:GetAttribute("Owner") or (boat:FindFirstChild("Owner") and boat.Owner.Value)
+                if owner == playerName then
+                    print("[ДИАГНОСТ] Появилась моя лодка: " .. boat.Name)
+                    watchContainer(boat, "Boat/" .. boat.Name)
+                end
+            end
+        end)
     end
 end)
 
--- Вывод начальной инструкции
-logToConsole("Диагност запущен. Наблюдаю за движением персонажа...")
-if textLabel then
-    textLabel.Text = "Диагност активен. Ожидание движения..."
-end
-
--- При пересоздании персонажа сбрасываем историю
-player.CharacterAdded:Connect(function()
-    lastPos = nil
-    lastTime = nil
-    lastSmooth = nil
-    jerkCount = 0
-    measurements = {}
-    logToConsole("Персонаж пересоздан, история сброшена")
-end)
-
--- Опционально: горячая клавиша для вывода подробного отчёта
-game:GetService("UserInputService").InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    if input.KeyCode == Enum.KeyCode.F12 then
-        logToConsole("=== ПОДРОБНЫЙ ОТЧЁТ (последние " .. #measurements .. " замеров) ===")
-        for i, m in ipairs(measurements) do
-            logToConsole(string.format("[%d] %.0f мс: Δt=%.1f мс, Δd=%.2f, v=%.1f, a=%.1f, sit=%s",
-                i, m.t, m.dt, m.dist, m.speed, m.smooth, tostring(m.sit)))
-        end
-        logToConsole("=== КОНЕЦ ОТЧЁТА ===")
-    end
-end)
+-- Запуск с задержкой 2 секунды, чтобы игра прогрузилась
+task.wait(2)
+startDiagnostic()
+print("[ДИАГНОСТ] Скрипт активен. Начинайте движение эталонным скриптом.")
