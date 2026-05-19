@@ -1,6 +1,8 @@
--- ===== ФИНАЛЬНЫЙ СКРИПТ (РАБОЧАЯ ВЕРСИЯ 7.1) =====
--- Добавлено: покупка лодки с перемещением, мониторинг лодки (ресет + перепокупка),
--- активация яйца удержанием E до исчезновения модели.
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (ВЕРСИЯ 7.2) =====
+-- Покупка лодки: сначала перемещение на (-16917, 9.1, 447), затем покупка.
+-- Мониторинг лодки: если лодка пропала → ресет персонажа → перемещение → покупка.
+-- Активация яйца: удержание E до исчезновения модели DragonEgg.
+-- Остальное (движение, магнит, пересадка, фрукты, анти-idle) без изменений.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -67,6 +69,7 @@ local function moveWithBodyPosition(targetPos, duration)
     hrp.CFrame = CFrame.new(targetPos)
 end
 
+-- Принудительная посадка на главное сиденье (рабочая версия)
 local function forceSitOnSeat(targetSeat, maxAttempts)
     maxAttempts = maxAttempts or 3
     for attempt = 1, maxAttempts do
@@ -96,8 +99,8 @@ local function forceSitOnSeat(targetSeat, maxAttempts)
     return false
 end
 
--- Новая покупка с перемещением
-local function buyBoat()
+-- Покупка лодки с ПРЕДВАРИТЕЛЬНЫМ перемещением на координаты
+local function buyBoatWithMove()
     local targetPos = Vector3.new(-16917.0, 9.1, 447.0)
     print("[ПОКУПКА] Перемещение к месту покупки...")
     moveStep(targetPos, 200, true)
@@ -107,9 +110,13 @@ local function buyBoat()
     local remotes = rs:FindFirstChild("Remotes")
     if not remotes then return end
     local commF = remotes:FindFirstChild("CommF_")
-    if commF then pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end) end
+    if commF then 
+        pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end)
+        print("[ПОКУПКА] Лодка заказана")
+    end
 end
 
+-- Поиск своей лодки
 local function findMyBoat()
     local boats = workspace:FindFirstChild("Boats")
     if not boats then return nil end
@@ -123,17 +130,17 @@ local function findMyBoat()
     return nil
 end
 
--- Мониторинг лодки (ресет + перепокупка при пропаже)
+-- Мониторинг лодки: если пропала → ресет, перемещение на точку, новая покупка
 task.spawn(function()
     while true do
         task.wait(5)
         if islandModeActive then continue end
         local myBoat = findMyBoat()
         if not myBoat and boat then
-            print("[ЛОДКА] Лодка потеряна! Ресет и перепокупка")
+            print("[ЛОДКА] Лодка потеряна! Ресет + перепокупка")
             player:LoadCharacter()
             task.wait(3)
-            buyBoat()
+            buyBoatWithMove()
             task.wait(5)
             boat = nil
         end
@@ -173,7 +180,7 @@ local function fruitTracker()
     print("Детектор фруктов запущен")
 end
 
--- Анти-idle (камера + клавиша W)
+-- Анти-idle
 task.spawn(function()
     local cam = workspace.CurrentCamera
     local orig = cam.CFrame
@@ -198,7 +205,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 3. ДВИЖЕНИЕ ЛОДКИ (BodyVelocity на UpperTorso) ==========
+-- ========== 3. ДВИЖЕНИЕ ЛОДКИ ==========
 local boat = nil
 local seat = nil
 local root = nil
@@ -290,7 +297,7 @@ local function startMove()
     end)
 end
 
--- ========== 4. БЫСТРЫЙ МАГНИТ (ОТКЛЮЧАЕТСЯ ПРИ ОСТРОВЕ) ==========
+-- ========== 4. МАГНИТ ==========
 local magnetBodyPos = nil
 local magnetBodyPosActive = false
 
@@ -342,7 +349,7 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. МОНИТОР ОСТРОВА (АКТИВАЦИЯ ЯЙЦА УДЕРЖАНИЕМ E) ==========
+-- ========== 5. ОСТРОВ (АКТИВАЦИЯ ЯЙЦА УДЕРЖАНИЕМ E) ==========
 local pendingReturn = false
 
 local function findIsland()
@@ -361,7 +368,6 @@ local PLAYER_EGG_RANK = {
 }
 local myRank = PLAYER_EGG_RANK[playerName]
 
--- Функция удержания E до исчезновения яйца
 local function holdEUntilEggGone(eggModel)
     local vim = game:GetService("VirtualInputManager")
     if not vim then return end
@@ -454,7 +460,7 @@ task.spawn(function()
             
             if eggTargetPos and myEggModel and myEggModel.Parent then
                 print("[ОСТРОВ] Плавное перемещение к яйцу...")
-                moveStep(eggTargetPos, 200, true)
+                moveStep(eggTargetPos, 200, true)  -- плавно, как к сиденью
                 
                 local char = player.Character
                 if char and myEggModel.Parent then
@@ -486,7 +492,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ОСНОВНОЙ ЦИКЛ (ВОЗВРАТ В ЛОДКУ С ПРИНУДИТЕЛЬНОЙ ПОСАДКОЙ) ==========
+-- ========== 6. ОСНОВНОЙ ЦИКЛ ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -547,7 +553,7 @@ task.spawn(function()
         if not boat or not boat.Parent then
             boat = findMyBoat()
             if not boat then
-                buyBoat()
+                buyBoatWithMove()
                 for i = 1, 20 do
                     boat = findMyBoat()
                     if boat then break end
@@ -621,4 +627,4 @@ task.spawn(function()
     fruitTracker()
 end)
 
-print("Скрипт полностью запущен. Версия 7.1: покупка с перемещением, ресет лодки, активация яйца удержанием E.")
+print("Скрипт полностью запущен. Версия 7.2: покупка с перемещением, ресет лодки, активация яйца удержанием E.")
