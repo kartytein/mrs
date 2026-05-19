@@ -100,13 +100,41 @@ local function forceSitOnSeat(targetSeat, maxAttempts)
     return false
 end
 
--- Перемещение к точке покупки
+-- Перемещение к точке покупки и ожидание достижения (с проверкой координат)
 local function moveToBuyPoint()
-    print("[ПОКУПКА] Перемещение к точке покупки лодки")
-    moveStep(BOAT_BUY_POS, 200, true)
+    print("[ПОКУПКА] Перемещение к точке покупки лодки...")
+    local targetPos = BOAT_BUY_POS
+    local char = player.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChild("Humanoid")
+    if not hrp or not hum then return false end
+    
+    local oldPlatform = hum.PlatformStand
+    hum.PlatformStand = true
+    
+    local step = 0.05
+    local speed = 200
+    local stepSize = speed * step
+    while true do
+        local current = hrp.Position
+        local dist = (targetPos - current).Magnitude
+        if dist < 2 then -- достигли нужной точки
+            break
+        end
+        local dir = (targetPos - current).Unit
+        local moveDist = math.min(stepSize, dist)
+        local newPos = current + dir * moveDist
+        hrp.CFrame = CFrame.new(newPos)
+        task.wait(step)
+    end
+    hrp.CFrame = CFrame.new(targetPos)
+    hum.PlatformStand = oldPlatform
+    print("[ПОКУПКА] Достигнута точка покупки, координаты:", hrp.Position)
+    return true
 end
 
--- Покупка лодки (без перемещения, только вызов)
+-- Покупка лодки (только удалённый вызов, без перемещения)
 local function buyBoatOnly()
     local rs = game:GetService("ReplicatedStorage")
     if not rs then return end
@@ -115,6 +143,118 @@ local function buyBoatOnly()
     local commF = remotes:FindFirstChild("CommF_")
     if commF then pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end) end
     print("[ПОКУПКА] Лодка заказана")
+end
+
+-- Полная процедура: перемещение (с проверкой) -> затем покупка
+local function buyBoatAtShop()
+    if moveToBuyPoint() then
+        task.wait(0.5)
+        buyBoatOnly()
+    else
+        warn("[ПОКУПКА] Не удалось достичь точки покупки")
+    end
+end
+
+-- Покупка лодки (без перемещения, только вызов)
+-- Перемещение к точке покупки и ожидание достижения (с проверкой координат)
+local function moveToBuyPoint()
+    print("[ПОКУПКА] Перемещение к точке покупки лодки...")
+    local targetPos = BOAT_BUY_POS
+    local char = player.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChild("Humanoid")
+    if not hrp or not hum then return false end
+    
+    local oldPlatform = hum.PlatformStand
+    hum.PlatformStand = true
+    
+    local step = 0.05
+    local speed = 200
+    local stepSize = speed * step
+    while true do
+        local current = hrp.Position
+        local dist = (targetPos - current).Magnitude
+        if dist < 2 then -- достигли нужной точки
+            break
+        end
+        local dir = (targetPos - current).Unit
+        local moveDist = math.min(stepSize, dist)
+        local newPos = current + dir * moveDist
+        hrp.CFrame = CFrame.new(newPos)
+        task.wait(step)
+    end
+    hrp.CFrame = CFrame.new(targetPos)
+    hum.PlatformStand = oldPlatform
+    print("[ПОКУПКА] Достигнута точка покупки, координаты:", hrp.Position)
+    return true
+end
+
+-- Покупка лодки (только удалённый вызов, без перемещения)
+local function buyBoatOnly()
+    local rs = game:GetService("ReplicatedStorage")
+    if not rs then return end
+    local remotes = rs:FindFirstChild("Remotes")
+    if not remotes then return end
+    local commF = remotes:FindFirstChild("CommF_")
+    if commF then pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end) end
+    print("[ПОКУПКА] Лодка заказана")
+end
+
+-- Полная процедура: перемещение (с проверкой) -> затем покупка
+-- Перемещение к точке покупки и ожидание достижения (с проверкой координат)
+local function moveToBuyPoint()
+    print("[ПОКУПКА] Перемещение к точке покупки лодки...")
+    local targetPos = BOAT_BUY_POS
+    local char = player.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChild("Humanoid")
+    if not hrp or not hum then return false end
+    
+    local oldPlatform = hum.PlatformStand
+    hum.PlatformStand = true
+    
+    local step = 0.05
+    local speed = 200
+    local stepSize = speed * step
+    while true do
+        local current = hrp.Position
+        local dist = (targetPos - current).Magnitude
+        if dist < 2 then -- достигли нужной точки
+            break
+        end
+        local dir = (targetPos - current).Unit
+        local moveDist = math.min(stepSize, dist)
+        local newPos = current + dir * moveDist
+        hrp.CFrame = CFrame.new(newPos)
+        task.wait(step)
+    end
+    hrp.CFrame = CFrame.new(targetPos)
+    hum.PlatformStand = oldPlatform
+    print("[ПОКУПКА] Достигнута точка покупки, координаты:", hrp.Position)
+    return true
+end
+
+-- Покупка лодки (только удалённый вызов, без перемещения)
+local function buyBoatOnly()
+    local rs = game:GetService("ReplicatedStorage")
+    if not rs then return end
+    local remotes = rs:FindFirstChild("Remotes")
+    if not remotes then return end
+    local commF = remotes:FindFirstChild("CommF_")
+    if commF then pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end) end
+    print("[ПОКУПКА] Лодка заказана")
+end
+
+-- Полная процедура: перемещение (с проверкой) -> затем покупка
+local function buyBoatAtShop()
+    if moveToBuyPoint() then
+        task.wait(0.5)
+        buyBoatOnly()
+    else
+        warn("[ПОКУПКА] Не удалось достичь точки покупки")
+    end
 end
 
 -- Полная процедура покупки: перемещение + покупка
