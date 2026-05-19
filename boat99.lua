@@ -1,7 +1,6 @@
--- ===== ПОЛНЫЙ ФИНАЛЬНЫЙ СКРИПТ (ВЕРСИЯ 6.3) =====
--- Исправлена покупка лодки: перемещение к точке, затем покупка.
--- Добавлен ресет при исчезновении лодки (повторное перемещение и покупка).
--- Активация яйца теперь повторяется до исчезновения модели.
+-- ===== ПОЛНЫЙ ФИНАЛЬНЫЙ СКРИПТ (ВЕРСИЯ 6.4) =====
+-- Исправлена ТОЛЬКО начальная покупка лодки: сначала перемещение к координатам (-16917, 9.1, 447), затем покупка.
+-- Остальные механики (остров, активация яйца с повторением, пересадка, ресет при исчезновении лодки) без изменений.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -70,7 +69,7 @@ local function moveWithBodyPosition(targetPos, duration)
     hrp.CFrame = CFrame.new(targetPos)
 end
 
--- Принудительная посадка на конкретное сиденье (с проверкой и пересадкой)
+-- Принудительная посадка на конкретное сиденье
 local function forceSitOnSeat(targetSeat, maxAttempts)
     maxAttempts = maxAttempts or 3
     for attempt = 1, maxAttempts do
@@ -97,19 +96,18 @@ local function forceSitOnSeat(targetSeat, maxAttempts)
             task.wait(0.5)
         end
     end
-    warn("[ПОСАДКА] Не удалось сесть на целевое сиденье после " .. maxAttempts .. " попыток")
+    warn("[ПОСАДКА] Не удалось сесть на целевое сиденье")
     return false
 end
 
--- Перемещение к точке покупки и покупка лодки
+-- Перемещение к точке покупки
 local function moveToBuyPoint()
     print("[ПОКУПКА] Перемещение к точке покупки лодки")
     moveStep(BOAT_BUY_POS, 200, true)
 end
 
-local function buyBoatAtShop()
-    moveToBuyPoint()
-    task.wait(1)
+-- Покупка лодки (без перемещения, только вызов)
+local function buyBoatOnly()
     local rs = game:GetService("ReplicatedStorage")
     if not rs then return end
     local remotes = rs:FindFirstChild("Remotes")
@@ -117,6 +115,13 @@ local function buyBoatAtShop()
     local commF = remotes:FindFirstChild("CommF_")
     if commF then pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end) end
     print("[ПОКУПКА] Лодка заказана")
+end
+
+-- Полная процедура покупки: перемещение + покупка
+local function buyBoatAtShop()
+    moveToBuyPoint()
+    task.wait(1)
+    buyBoatOnly()
 end
 
 -- Поиск своей лодки
@@ -166,7 +171,7 @@ local function fruitTracker()
     print("Детектор фруктов запущен")
 end
 
--- Анти-idle (камера + клавиша W)
+-- Анти-idle
 task.spawn(function()
     local cam = workspace.CurrentCamera
     local orig = cam.CFrame
@@ -191,7 +196,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 3. ДВИЖЕНИЕ ЛОДКИ (BodyVelocity на UpperTorso) ==========
+-- ========== 3. ДВИЖЕНИЕ ЛОДКИ ==========
 local boat = nil
 local seat = nil
 local root = nil
@@ -283,7 +288,7 @@ local function startMove()
     end)
 end
 
--- ========== 4. БЫСТРЫЙ МАГНИТ (ОТКЛЮЧАЕТСЯ ПРИ ОСТРОВЕ) ==========
+-- ========== 4. МАГНИТ ==========
 local magnetBodyPos = nil
 local magnetBodyPosActive = false
 
@@ -335,7 +340,7 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. МОНИТОР ОСТРОВА (АКТИВАЦИЯ ЯЙЦА – БЕСКОНЕЧНЫЕ ПОПЫТКИ) ==========
+-- ========== 5. ОСТРОВ (АКТИВАЦИЯ ЯЙЦА С БЕСКОНЕЧНЫМИ ПОПЫТКАМИ) ==========
 local pendingReturn = false
 
 local function findIsland()
@@ -347,7 +352,6 @@ local function findIsland()
     return nil
 end
 
--- Таблица рангов (уникальный номер для каждого аккаунта)
 local PLAYER_EGG_RANK = {
     ["Willow_hspt2015"] = 1,
     ["MichaelJohnson84562"] = 2,
@@ -463,7 +467,7 @@ task.spawn(function()
                 while myEggModel and myEggModel.Parent do
                     print("[ОСТРОВ] Попытка активации яйца...")
                     pressE()
-                    task.wait(1) -- пауза между попытками
+                    task.wait(1)
                     if not myEggModel.Parent then
                         activated = true
                         break
@@ -488,7 +492,8 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ОСНОВНОЙ ЦИКЛ (С ПЕРЕСАДКОЙ И ВОССТАНОВЛЕНИЕМ ЛОДКИ) ==========
+-- ========== 6. ОСНОВНОЙ ЦИКЛ ==========
+-- Выбор команды Marines (без покупки лодки здесь!)
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -499,6 +504,37 @@ if remotes then
     if ev then pcall(function() ev:FireServer() end) end
 end
 
+-- Первоначальное получение лодки: перемещение к магазину и покупка
+task.spawn(function()
+    print("[ИНИЦИАЛИЗАЦИЯ] Начинаем процедуру покупки лодки...")
+    buyBoatAtShop() -- перемещение + покупка
+    -- Ждём появления лодки
+    for i = 1, 30 do
+        boat = findMyBoat()
+        if boat then break end
+        task.wait(1)
+    end
+    if boat then
+        print("[ИНИЦИАЛИЗАЦИЯ] Лодка успешно куплена и найдена")
+        seat = boat:FindFirstChildWhichIsA("VehicleSeat")
+        root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
+        if seat and root then
+            for _, p in ipairs(boat:GetDescendants()) do
+                if p:IsA("BasePart") then p.CanCollide = false end
+            end
+            local nat = boat:FindFirstChild("Script")
+            if nat then nat.Disabled = true end
+            -- Первичная посадка
+            forceSitOnSeat(seat, 3)
+            startMove()
+            print("[ИНИЦИАЛИЗАЦИЯ] Посадка выполнена, движение запущено")
+        end
+    else
+        warn("[ИНИЦИАЛИЗАЦИЯ] Не удалось получить лодку после покупки")
+    end
+end)
+
+-- Основной цикл (поддержание лодки, пересадка, восстановление при исчезновении)
 task.spawn(function()
     while true do
         task.wait(0.05)
@@ -547,7 +583,7 @@ task.spawn(function()
             end
         end
         
-        -- Если лодка исчезла (уничтожена) – сбрасываем всё и покупаем заново
+        -- Если лодка исчезла (уничтожена) – выполняем ресет: перемещение к магазину и покупка
         if boat and not boat.Parent then
             print("[ГЛАВНЫЙ] Лодка исчезла, выполняем ресет")
             boat = nil
@@ -555,14 +591,35 @@ task.spawn(function()
             root = nil
             stopMove()
             stopMagnetBodyPos()
-            -- Не продолжаем, в следующей итерации купим новую
+            -- Покупаем новую лодку с перемещением
+            buyBoatAtShop()
+            for i = 1, 20 do
+                boat = findMyBoat()
+                if boat then break end
+                task.wait(0.5)
+            end
+            if boat then
+                seat = boat:FindFirstChildWhichIsA("VehicleSeat")
+                root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
+                if seat and root then
+                    for _, p in ipairs(boat:GetDescendants()) do
+                        if p:IsA("BasePart") then p.CanCollide = false end
+                    end
+                    local nat = boat:FindFirstChild("Script")
+                    if nat then nat.Disabled = true end
+                    forceSitOnSeat(seat, 3)
+                    startMove()
+                    print("[ГЛАВНЫЙ] Лодка восстановлена после ресета")
+                end
+            else
+                print("[ГЛАВНЫЙ] Не удалось купить лодку после ресета")
+            end
         end
         
-        -- Поиск/покупка лодки, если её нет
+        -- Если лодки нет (первый запуск или после ресета), пытаемся найти/купить
         if not boat or not boat.Parent then
             boat = findMyBoat()
             if not boat then
-                -- Перемещаемся к месту покупки и покупаем
                 buyBoatAtShop()
                 for i = 1, 20 do
                     boat = findMyBoat()
@@ -586,6 +643,8 @@ task.spawn(function()
             local nat = boat:FindFirstChild("Script")
             if nat then nat.Disabled = true end
             print("[ГЛАВНЫЙ] Лодка найдена: " .. boat.Name)
+            forceSitOnSeat(seat, 3)
+            startMove()
         end
         
         -- Обновляем ссылки на персонажа
@@ -621,19 +680,6 @@ task.spawn(function()
     end
 end)
 
--- Первичная посадка (один раз при старте)
-task.spawn(function()
-    while true do
-        task.wait(0.5)
-        if islandModeActive then continue end
-        if boat and seat and hum and not (hum.Sit and hum.SeatPart == seat) then
-            forceSitOnSeat(seat, 3)
-            print("[ПЕРВИЧНАЯ ПОСАДКА] Выполнена")
-        end
-        break
-    end
-end)
-
 -- Запуск детектора фруктов
 task.spawn(function()
     if not player.Character then player.CharacterAdded:Wait() end
@@ -641,4 +687,4 @@ task.spawn(function()
     fruitTracker()
 end)
 
-print("Скрипт версии 6.3 запущен. Покупка лодки с перемещением, ресет при исчезновении, бесконечная активация яйца.")
+print("Скрипт версии 6.4 запущен. Покупка лодки происходит только после перемещения к координатам (-16917, 9.1, 447).")
