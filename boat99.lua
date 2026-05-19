@@ -1,6 +1,6 @@
--- ===== ПОЛНЫЙ ФИНАЛЬНЫЙ СКРИПТ (ВЕРСИЯ 6.2) =====
--- Добавлена автоматическая пересадка с неправильного сиденья.
--- Если сел не туда -> прыжок + перемещение на главное сиденье, только потом движение.
+-- ===== ФИНАЛЬНЫЙ СКРИПТ (РАБОЧАЯ ВЕРСИЯ 7.1) =====
+-- Добавлено: покупка лодки с перемещением, мониторинг лодки (ресет + перепокупка),
+-- активация яйца удержанием E до исчезновения модели.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -67,7 +67,6 @@ local function moveWithBodyPosition(targetPos, duration)
     hrp.CFrame = CFrame.new(targetPos)
 end
 
--- Принудительная посадка на конкретное сиденье (с проверкой и пересадкой)
 local function forceSitOnSeat(targetSeat, maxAttempts)
     maxAttempts = maxAttempts or 3
     for attempt = 1, maxAttempts do
@@ -79,7 +78,6 @@ local function forceSitOnSeat(targetSeat, maxAttempts)
         
         local targetPos = targetSeat.Position + Vector3.new(0, 2.5, 0)
         moveStep(targetPos, 300, true)
-        
         hum.Sit = true
         task.wait(0.5)
         
@@ -98,7 +96,12 @@ local function forceSitOnSeat(targetSeat, maxAttempts)
     return false
 end
 
+-- Новая покупка с перемещением
 local function buyBoat()
+    local targetPos = Vector3.new(-16917.0, 9.1, 447.0)
+    print("[ПОКУПКА] Перемещение к месту покупки...")
+    moveStep(targetPos, 200, true)
+    task.wait(1)
     local rs = game:GetService("ReplicatedStorage")
     if not rs then return end
     local remotes = rs:FindFirstChild("Remotes")
@@ -119,6 +122,23 @@ local function findMyBoat()
     end
     return nil
 end
+
+-- Мониторинг лодки (ресет + перепокупка при пропаже)
+task.spawn(function()
+    while true do
+        task.wait(5)
+        if islandModeActive then continue end
+        local myBoat = findMyBoat()
+        if not myBoat and boat then
+            print("[ЛОДКА] Лодка потеряна! Ресет и перепокупка")
+            player:LoadCharacter()
+            task.wait(3)
+            buyBoat()
+            task.wait(5)
+            boat = nil
+        end
+    end
+end)
 
 -- Детектор фруктов (Discord)
 local sentFruits = {}
@@ -196,7 +216,7 @@ local moving = false
 local moveThread = nil
 local islandModeActive = false
 local waitingForDespawn = false
-local isReseating = false   -- флаг, чтобы избежать рекурсии
+local isReseating = false
 
 local function ensureBV()
     if islandModeActive then return end
@@ -322,7 +342,7 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. МОНИТОР ОСТРОВА (АКТИВАЦИЯ ЯЙЦА С ЗАЖАТИЕМ E) ==========
+-- ========== 5. МОНИТОР ОСТРОВА (АКТИВАЦИЯ ЯЙЦА УДЕРЖАНИЕМ E) ==========
 local pendingReturn = false
 
 local function findIsland()
@@ -334,7 +354,6 @@ local function findIsland()
     return nil
 end
 
--- Таблица рангов (уникальный номер для каждого аккаунта)
 local PLAYER_EGG_RANK = {
     ["Willow_hspt2015"] = 1,
     ["MichaelJohnson84562"] = 2,
@@ -342,14 +361,17 @@ local PLAYER_EGG_RANK = {
 }
 local myRank = PLAYER_EGG_RANK[playerName]
 
-local function pressE()
+-- Функция удержания E до исчезновения яйца
+local function holdEUntilEggGone(eggModel)
     local vim = game:GetService("VirtualInputManager")
     if not vim then return end
+    print("[АКТИВАЦИЯ] Удерживаю E до исчезновения яйца")
     vim:SendKeyEvent(true, "E", false, game)
-    task.wait(1.5)
+    while eggModel and eggModel.Parent do
+        task.wait(0.2)
+    end
     vim:SendKeyEvent(false, "E", false, game)
-    task.wait(0.3)
-    print("[ЯЙЦО] Клавиша E зажата")
+    print("[АКТИВАЦИЯ] Яйцо исчезло, активация завершена")
 end
 
 local function getEggsSortedByDistance()
@@ -431,8 +453,8 @@ task.spawn(function()
             end
             
             if eggTargetPos and myEggModel and myEggModel.Parent then
-                print("[ОСТРОВ] Перемещение к яйцу")
-                moveWithBodyPosition(eggTargetPos, 3)
+                print("[ОСТРОВ] Плавное перемещение к яйцу...")
+                moveStep(eggTargetPos, 200, true)
                 
                 local char = player.Character
                 if char and myEggModel.Parent then
@@ -448,12 +470,7 @@ task.spawn(function()
                 if not myEggModel.Parent then
                     print("[ОСТРОВ] Яйцо исчезло до активации")
                 else
-                    pressE()
-                    for _ = 1, 20 do
-                        if not myEggModel.Parent then break end
-                        task.wait(0.2)
-                    end
-                    print("[ОСТРОВ] Активация яйца завершена")
+                    holdEUntilEggGone(myEggModel)
                 end
             elseif not myRank then
                 print("[ОСТРОВ] Нет ранга для игрока", playerName)
@@ -469,7 +486,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ОСНОВНОЙ ЦИКЛ (С АВТОМАТИЧЕСКОЙ ПЕРЕСАДКОЙ) ==========
+-- ========== 6. ОСНОВНОЙ ЦИКЛ (ВОЗВРАТ В ЛОДКУ С ПРИНУДИТЕЛЬНОЙ ПОСАДКОЙ) ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -485,7 +502,6 @@ task.spawn(function()
         task.wait(0.05)
         if islandModeActive then continue end
         
-        -- Возврат после острова
         if pendingReturn then
             pendingReturn = false
             print("[ГЛАВНЫЙ] Возврат с острова, поиск лодки и посадка")
@@ -528,7 +544,6 @@ task.spawn(function()
             end
         end
         
-        -- Поиск/покупка лодки, если её нет
         if not boat or not boat.Parent then
             boat = findMyBoat()
             if not boat then
@@ -557,44 +572,36 @@ task.spawn(function()
             print("[ГЛАВНЫЙ] Лодка найдена: " .. boat.Name)
         end
         
-        -- Обновляем ссылки на персонажа
         local char = player.Character
         if char then
             hum = char:FindFirstChild("Humanoid")
             hrp = char:FindFirstChild("HumanoidRootPart")
         end
         
-        -- ========== НОВАЯ ЛОГИКА ПЕРЕСАДКИ ==========
         if hum and hum.Sit then
             if hum.SeatPart == seat then
-                -- На правильном сиденье -> запускаем движение, если нужно
                 if not moving and not islandModeActive then
                     startMove()
                 end
             else
-                -- Сидит на неправильном сиденье -> пересаживаем
                 if not isReseating then
                     isReseating = true
                     print("[ОСНОВНОЙ] Обнаружено неправильное сиденье, пересаживаюсь...")
                     if seat then
                         forceSitOnSeat(seat, 3)
-                    else
-                        print("[ОСНОВНОЙ] Целевое сиденье не определено")
                     end
                     isReseating = false
                 end
-                -- Останавливаем движение (если вдруг ехало)
                 if moving then stopMove() end
             end
         else
-            -- Не сидит -> останавливаем движение и включаем магнит
             if moving then stopMove() end
             fastMagnet()
         end
     end
 end)
 
--- Первичная посадка (один раз при старте)
+-- Первичная посадка
 task.spawn(function()
     while true do
         task.wait(0.5)
@@ -614,4 +621,4 @@ task.spawn(function()
     fruitTracker()
 end)
 
-print("Скрипт полностью запущен. Добавлена автоматическая пересадка с неправильного сиденья.")
+print("Скрипт полностью запущен. Версия 7.1: покупка с перемещением, ресет лодки, активация яйца удержанием E.")
