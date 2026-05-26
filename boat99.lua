@@ -1,6 +1,6 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 7.2) =====
--- Исправлено перемещение к точке покупки (через moveStep с принудительной фиксацией)
--- Все остальные функции работают: лодка, магнит, остров, фрукты (Discord + StoreFruit), анти-idle.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 8.0) =====
+-- Остров: каждый аккаунт активирует своё яйцо и остаётся на острове, пока не исчезнут все яйца.
+-- Затем возвращается в лодку.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -96,7 +96,7 @@ local function forceSitOnSeat(targetSeat, maxAttempts)
     return false
 end
 
--- Перемещение к точке покупки (полностью аналогично moveStep)
+-- Перемещение к точке покупки
 local function moveToBuyPoint()
     print("[ПОКУПКА] Перемещение к точке (-16917, 9.1, 447)...")
     return moveStep(BOAT_BUY_POS, 200, true)
@@ -294,7 +294,7 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. ОСТРОВ ==========
+-- ========== 5. ОСТРОВ (ЖДЁМ ИСЧЕЗНОВЕНИЯ ВСЕХ ЯИЦ) ==========
 local pendingReturn = false
 
 local function findIsland()
@@ -323,6 +323,25 @@ local function pressE()
     print("[ЯЙЦО] Клавиша E зажата")
 end
 
+local function getAllEggs()
+    local island = findIsland()
+    if not island then return {} end
+    local core = island:FindFirstChild("Core")
+    if not core then return {} end
+    local spawned = core:FindFirstChild("SpawnedDragonEggs")
+    if not spawned then return {} end
+    local eggs = {}
+    for _, child in ipairs(spawned:GetChildren()) do
+        if child:IsA("Model") and child.Name == "DragonEgg" then
+            local eggPart = child:FindFirstChild("EggCrust") or child:FindFirstChildWhichIsA("BasePart")
+            if eggPart and eggPart.Parent then
+                table.insert(eggs, {part = eggPart, model = child})
+            end
+        end
+    end
+    return eggs
+end
+
 local function getEggsSortedByDistance()
     local island = findIsland()
     if not island then return {} end
@@ -348,6 +367,28 @@ local function getEggsSortedByDistance()
     return eggs
 end
 
+local function activateEgg(eggModel, eggPart)
+    if not eggModel or not eggModel.Parent then return false end
+    print("[ОСТРОВ] Перемещение к яйцу")
+    moveWithBodyPosition(eggPart.Position + Vector3.new(0, 2, 0), 3)
+    local char = player.Character
+    if char and eggModel.Parent then
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp and eggPart then
+            local lookAt = (eggPart.Position - hrp.Position).Unit
+            hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookAt)
+            task.wait(0.3)
+        end
+    end
+    while eggModel and eggModel.Parent do
+        print("[ОСТРОВ] Попытка активации яйца...")
+        pressE()
+        task.wait(1)
+    end
+    print("[ОСТРОВ] Яйцо активировано и исчезло")
+    return true
+end
+
 task.spawn(function()
     while true do
         task.wait(1)
@@ -364,55 +405,59 @@ task.spawn(function()
             islandModeActive = true
             stopMove()
             stopMagnetBodyPos()
+            
             local char = player.Character
             if char then
                 local h = char:FindFirstChild("Humanoid")
                 if h and h.Sit then h.Sit = false end
             end
+            
             local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
             moveStep(target, 200, true)
-            local eggTargetPos = nil
-            local myEggModel = nil
-            local startTime = os.clock()
+            
+            local startWaitTime = os.clock()
+            local myEggActivated = false
+            
             while islandModeActive do
-                if os.clock() - startTime >= 600 then
-                    print("[ОСТРОВ] 10 минут истекло")
+                local allEggs = getAllEggs()
+                if #allEggs == 0 then
+                    print("[ОСТРОВ] Все яйца исчезли, выходим")
                     break
                 end
-                if not findIsland() then break end
-                local eggsSorted = getEggsSortedByDistance()
-                if #eggsSorted >= myRank and myRank then
-                    local candidate = eggsSorted[myRank]
-                    if candidate and candidate.part and candidate.part.Parent then
-                        myEggModel = candidate.model
-                        eggTargetPos = candidate.part.Position + Vector3.new(0, 2, 0)
-                        print(string.format("[ОСТРОВ] Выбрано яйцо ранга %d", myRank))
-                        break
+                
+                if not myEggActivated then
+                    local eggsSorted = getEggsSortedByDistance()
+                    if #eggsSorted >= myRank and myRank then
+                        local candidate = eggsSorted[myRank]
+                        if candidate and candidate.part and candidate.part.Parent then
+                            print(string.format("[ОСТРОВ] Выбрано яйцо ранга %d (расст. %.1f)", myRank, candidate.dist))
+                            if activateEgg(candidate.model, candidate.part) then
+                                myEggActivated = true
+                                print("[ОСТРОВ] Моё яйцо активировано, продолжаем ждать исчезновения остальных")
+                            end
+                        end
+                    else
+                        if #eggsSorted > 0 then
+                            local candidate = eggsSorted[1]
+                            print("[ОСТРОВ] Недостаточно яиц для ранга, берём ближайшее")
+                            if activateEgg(candidate.model, candidate.part) then
+                                myEggActivated = true
+                            end
+                        end
                     end
                 end
-                task.wait(0.5)
-            end
-            if eggTargetPos and myEggModel and myEggModel.Parent then
-                moveWithBodyPosition(eggTargetPos, 3)
-                local char = player.Character
-                if char and myEggModel.Parent then
-                    local hrp = char:FindFirstChild("HumanoidRootPart")
-                    local eggPart = myEggModel:FindFirstChild("EggCrust") or myEggModel:FindFirstChildWhichIsA("BasePart")
-                    if hrp and eggPart then
-                        local lookAt = (eggPart.Position - hrp.Position).Unit
-                        hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookAt)
-                        task.wait(0.3)
-                    end
+                
+                if os.clock() - startWaitTime >= 600 then
+                    print("[ОСТРОВ] 10 минут истекло, выходим")
+                    break
                 end
-                while myEggModel and myEggModel.Parent do
-                    pressE()
-                    task.wait(1)
-                end
-                print("[ОСТРОВ] Яйцо активировано")
+                task.wait(1)
             end
+            
             islandModeActive = false
             waitingForDespawn = true
             pendingReturn = true
+            print("[ОСТРОВ] Режим завершён, ждём исчезновения острова")
         end
     end
 end)
@@ -698,4 +743,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт версии 7.2 запущен. Перемещение к точке покупки работает через moveStep.")
+print("Скрипт версии 8.0 запущен. Остров: ждём исчезновения всех яиц.")
