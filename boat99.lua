@@ -1,6 +1,6 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 7.1) =====
--- Исправлено перемещение к точке покупки: теперь как moveStep (без падений)
--- Все остальные механики сохранены.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 7.2) =====
+-- Исправлено перемещение к точке покупки: теперь через moveStep (аналог посадки)
+-- Коллизии, лодка, магнит, остров, ресет, пересадка, фрукты (Discord + StoreFruit)
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -96,18 +96,35 @@ local function forceSitOnSeat(targetSeat, maxAttempts)
     return false
 end
 
--- НОВАЯ ФУНКЦИЯ ПЕРЕМЕЩЕНИЯ К ТОЧКЕ ПОКУПКИ (как moveStep, без падений)
+-- НАДЁЖНОЕ ПЕРЕМЕЩЕНИЕ К ТОЧКЕ ПОКУПКИ (аналог moveStep с фиксацией высоты)
 local function moveToBuyPoint()
-    print("[ПОКУПКА] Перемещение к точке покупки лодки...")
+    print("[ПОКУПКА] Перемещение к точке (-16917, 9.1, 447)...")
     local targetPos = BOAT_BUY_POS
-    -- Сначала поднимаемся/опускаемся на нужную высоту
-    local verticalTarget = Vector3.new(targetPos.X, targetPos.Y, targetPos.Z)
-    if math.abs(player.Character.HumanoidRootPart.Position.Y - targetPos.Y) > 1 then
+    local char = player.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChild("Humanoid")
+    if not hrp or not hum then return false end
+
+    -- Сначала поднимаемся/опускаемся до нужной высоты (Y)
+    local currentY = hrp.Position.Y
+    if math.abs(currentY - targetPos.Y) > 1 then
+        print("[ПОКУПКА] Корректируем высоту до", targetPos.Y)
+        local verticalTarget = Vector3.new(hrp.Position.X, targetPos.Y, hrp.Position.Z)
         moveStep(verticalTarget, 200, true)
+        task.wait(0.3)
     end
-    -- Затем горизонтальное перемещение (moveStep уже умеет двигать по X/Z с сохранением Y)
-    moveStep(verticalTarget, 300, true)
-    print("[ПОКУПКА] Достигнута точка покупки")
+
+    -- Затем горизонтальное перемещение на фиксированной высоте
+    print("[ПОКУПКА] Горизонтальное перемещение")
+    moveStep(targetPos, 200, true)
+
+    -- Финальная проверка
+    if (hrp.Position - targetPos).Magnitude > 2 then
+        warn("[ПОКУПКА] Не удалось точно достичь точки")
+        return false
+    end
+    print("[ПОКУПКА] Точка достигнута")
     return true
 end
 
@@ -129,7 +146,7 @@ local function buyBoatAfterMove()
         buyBoatOnly()
         return true
     else
-        warn("[ПОКУПКА] Не удалось достичь точки")
+        warn("[ПОКУПКА] Не удалось достичь точки, покупка отменена")
         return false
     end
 end
@@ -622,15 +639,13 @@ local function sellFruit(tool)
     processedFruits[fullName] = true
 
     print("[ФРУКТ] Найден:", fullName)
-
-    -- Отправка в Discord
     sendDiscordFruit(fullName)
 
     -- Преобразование "X Fruit" -> "X-X"
     local storeName = fullName:gsub(" Fruit", ""):gsub(" ", "-")
     print("[ФРУКТ] Сдаём как:", storeName)
 
-    -- Берём в руку (если не в руке)
+    -- Берём в руку
     task.wait(3)
     if tool.Parent ~= player.Character then
         tool.Parent = player.Character
@@ -643,7 +658,6 @@ local function sellFruit(tool)
         return
     end
 
-    -- Вызов StoreFruit
     local args = { "StoreFruit", storeName, tool }
     local success, err = pcall(function()
         commF:InvokeServer(unpack(args))
@@ -656,19 +670,16 @@ local function sellFruit(tool)
     end
 end
 
--- Мониторинг появления фруктов
 local function onToolAdded(tool)
     if tool:IsA("Tool") and tool.Name:find("Fruit") then
-        task.wait(3) -- стабилизация
+        task.wait(3)
         sellFruit(tool)
     end
 end
 
--- Подключаем мониторинг рюкзака
 local backpack = player:WaitForChild("Backpack")
 backpack.ChildAdded:Connect(onToolAdded)
 
--- Мониторинг персонажа (если фрукт появился в руке)
 local function onCharAdded(char)
     char.ChildAdded:Connect(onToolAdded)
 end
@@ -677,7 +688,6 @@ if player.Character then
 end
 player.CharacterAdded:Connect(onCharAdded)
 
--- Проверяем уже имеющиеся фрукты при старте
 task.wait(3)
 for _, tool in ipairs(backpack:GetChildren()) do
     if tool:IsA("Tool") and tool.Name:find("Fruit") then
@@ -721,4 +731,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт полностью запущен. Версия 7.1 – перемещение к точке покупки через moveStep (без падений).")
+print("Скрипт версии 7.2 запущен. Перемещение к точке покупки исправлено (moveStep).")
