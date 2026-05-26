@@ -1,6 +1,6 @@
 -- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 7.2) =====
--- Исправлено перемещение к точке покупки: теперь через moveStep (аналог посадки)
--- Коллизии, лодка, магнит, остров, ресет, пересадка, фрукты (Discord + StoreFruit)
+-- Исправлено перемещение к точке покупки (через moveStep с принудительной фиксацией)
+-- Все остальные функции работают: лодка, магнит, остров, фрукты (Discord + StoreFruit), анти-idle.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -96,36 +96,10 @@ local function forceSitOnSeat(targetSeat, maxAttempts)
     return false
 end
 
--- НАДЁЖНОЕ ПЕРЕМЕЩЕНИЕ К ТОЧКЕ ПОКУПКИ (аналог moveStep с фиксацией высоты)
+-- Перемещение к точке покупки (полностью аналогично moveStep)
 local function moveToBuyPoint()
     print("[ПОКУПКА] Перемещение к точке (-16917, 9.1, 447)...")
-    local targetPos = BOAT_BUY_POS
-    local char = player.Character
-    if not char then return false end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChild("Humanoid")
-    if not hrp or not hum then return false end
-
-    -- Сначала поднимаемся/опускаемся до нужной высоты (Y)
-    local currentY = hrp.Position.Y
-    if math.abs(currentY - targetPos.Y) > 1 then
-        print("[ПОКУПКА] Корректируем высоту до", targetPos.Y)
-        local verticalTarget = Vector3.new(hrp.Position.X, targetPos.Y, hrp.Position.Z)
-        moveStep(verticalTarget, 200, true)
-        task.wait(0.3)
-    end
-
-    -- Затем горизонтальное перемещение на фиксированной высоте
-    print("[ПОКУПКА] Горизонтальное перемещение")
-    moveStep(targetPos, 200, true)
-
-    -- Финальная проверка
-    if (hrp.Position - targetPos).Magnitude > 2 then
-        warn("[ПОКУПКА] Не удалось точно достичь точки")
-        return false
-    end
-    print("[ПОКУПКА] Точка достигнута")
-    return true
+    return moveStep(BOAT_BUY_POS, 200, true)
 end
 
 local function buyBoatOnly()
@@ -146,7 +120,7 @@ local function buyBoatAfterMove()
         buyBoatOnly()
         return true
     else
-        warn("[ПОКУПКА] Не удалось достичь точки, покупка отменена")
+        warn("[ПОКУПКА] Не удалось достичь точки")
         return false
     end
 end
@@ -320,7 +294,7 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. ОСТРОВ (АКТИВАЦИЯ ЯЙЦА С БЕСКОНЕЧНЫМИ ПОПЫТКАМИ) ==========
+-- ========== 5. ОСТРОВ ==========
 local pendingReturn = false
 
 local function findIsland()
@@ -443,7 +417,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ОСНОВНОЙ ЦИКЛ (ЛОДКА, ПЕРЕСАДКА, РЕСЕТ) ==========
+-- ========== 6. ОСНОВНОЙ ЦИКЛ (ЛОДКА) ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -451,7 +425,6 @@ if remotes then
     if commF then pcall(function() commF:InvokeServer("SetTeam", "Marines") end) end
 end
 
--- Функция для первоначальной покупки и посадки
 local function initialSetup()
     if isBuying then return end
     isBuying = true
@@ -487,13 +460,11 @@ task.spawn(function()
     initialSetup()
 end)
 
--- Основной цикл поддержки лодки
 task.spawn(function()
     while true do
         task.wait(0.05)
         if islandModeActive then continue end
 
-        -- Возврат после острова
         if pendingReturn then
             pendingReturn = false
             print("[ГЛАВНЫЙ] Возврат с острова")
@@ -525,7 +496,6 @@ task.spawn(function()
             end
         end
 
-        -- Если лодка исчезла – ресет и покупка
         if boat and not boat.Parent then
             print("[ГЛАВНЫЙ] Лодка исчезла, выполняем ресет")
             boat = nil; seat = nil; root = nil
@@ -561,7 +531,6 @@ task.spawn(function()
             end
         end
 
-        -- Если лодки нет – покупка
         if (not boat or not boat.Parent) and not isBuying then
             task.spawn(function()
                 isBuying = true
@@ -616,7 +585,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 7. ДЕТЕКТОР ФРУКТОВ (DISCORD + StoreFruit) ==========
+-- ========== 7. ФРУКТЫ (DISCORD + StoreFruit) ==========
 local commF = rs and rs:FindFirstChild("Remotes") and rs.Remotes:FindFirstChild("CommF_")
 local processedFruits = {}
 
@@ -641,11 +610,9 @@ local function sellFruit(tool)
     print("[ФРУКТ] Найден:", fullName)
     sendDiscordFruit(fullName)
 
-    -- Преобразование "X Fruit" -> "X-X"
     local storeName = fullName:gsub(" Fruit", ""):gsub(" ", "-")
     print("[ФРУКТ] Сдаём как:", storeName)
 
-    -- Берём в руку
     task.wait(3)
     if tool.Parent ~= player.Character then
         tool.Parent = player.Character
@@ -704,7 +671,7 @@ if player.Character then
     end
 end
 
-print("[ФРУКТ] Монитор запущен. Любой фрукт 'X Fruit' будет отправлен в Discord и сдан как 'X-X'")
+print("[ФРУКТ] Монитор запущен")
 
 -- ========== 8. АНТИ-IDLE ==========
 task.spawn(function()
@@ -731,4 +698,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт версии 7.2 запущен. Перемещение к точке покупки исправлено (moveStep).")
+print("Скрипт версии 7.2 запущен. Перемещение к точке покупки работает через moveStep.")
