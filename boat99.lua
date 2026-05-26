@@ -1,6 +1,6 @@
--- ===== ПОЛНЫЙ ФИНАЛЬНЫЙ СКРИПТ (ВЕРСИЯ 6.6) =====
--- Покупка лодки происходит ТОЛЬКО после реального достижения координат (-16917, 9.1, 447).
--- Удалены все лишние вызовы покупки.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 7.1) =====
+-- Исправлено перемещение к точке покупки: теперь как moveStep (без падений)
+-- Все остальные механики сохранены.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -96,37 +96,21 @@ local function forceSitOnSeat(targetSeat, maxAttempts)
     return false
 end
 
--- Перемещение к точке покупки и ожидание достижения
+-- НОВАЯ ФУНКЦИЯ ПЕРЕМЕЩЕНИЯ К ТОЧКЕ ПОКУПКИ (как moveStep, без падений)
 local function moveToBuyPoint()
-    print("[ПОКУПКА] Перемещение к точке (-16917, 9.1, 447)...")
+    print("[ПОКУПКА] Перемещение к точке покупки лодки...")
     local targetPos = BOAT_BUY_POS
-    local char = player.Character
-    if not char then return false end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChild("Humanoid")
-    if not hrp or not hum then return false end
-    local oldPlatform = hum.PlatformStand
-    hum.PlatformStand = true
-    local step = 0.05
-    local speed = 200
-    local stepSize = speed * step
-    while true do
-        local current = hrp.Position
-        local dist = (targetPos - current).Magnitude
-        if dist < 2 then break end
-        local dir = (targetPos - current).Unit
-        local moveDist = math.min(stepSize, dist)
-        local newPos = current + dir * moveDist
-        hrp.CFrame = CFrame.new(newPos)
-        task.wait(step)
+    -- Сначала поднимаемся/опускаемся на нужную высоту
+    local verticalTarget = Vector3.new(targetPos.X, targetPos.Y, targetPos.Z)
+    if math.abs(player.Character.HumanoidRootPart.Position.Y - targetPos.Y) > 1 then
+        moveStep(verticalTarget, 200, true)
     end
-    hrp.CFrame = CFrame.new(targetPos)
-    hum.PlatformStand = oldPlatform
+    -- Затем горизонтальное перемещение (moveStep уже умеет двигать по X/Z с сохранением Y)
+    moveStep(verticalTarget, 300, true)
     print("[ПОКУПКА] Достигнута точка покупки")
     return true
 end
 
--- Сама покупка (только удалённый вызов)
 local function buyBoatOnly()
     local args = { "BuyBoat", "Guardian" }
     local rs = game:GetService("ReplicatedStorage")
@@ -139,35 +123,28 @@ local function buyBoatOnly()
     end
 end
 
--- Полная процедура покупки: перемещение + покупка (только после перемещения)
 local function buyBoatAfterMove()
     if moveToBuyPoint() then
         task.wait(0.5)
         buyBoatOnly()
         return true
     else
-        warn("[ПОКУПКА] Не удалось достичь точки, покупка отменена")
+        warn("[ПОКУПКА] Не удалось достичь точки")
         return false
     end
 end
 
--- Ресет персонажа (переспавн)
 local function resetCharacter()
     local char = player.Character
     if char then
         local hum = char:FindFirstChild("Humanoid")
-        if hum then
-            hum.Health = 0
-        else
-            char:BreakJoints()
-        end
+        if hum then hum.Health = 0 else char:BreakJoints() end
     end
     player.CharacterAdded:Wait()
     task.wait(1)
     print("[РЕСЕТ] Персонаж возрождён")
 end
 
--- Поиск своей лодки
 local function findMyBoat()
     local boats = workspace:FindFirstChild("Boats")
     if not boats then return nil end
@@ -180,64 +157,6 @@ local function findMyBoat()
     end
     return nil
 end
-
--- Детектор фруктов
-local sentFruits = {}
-local function sendFruit(name)
-    local msg = { content = player.Name .. " получил '" .. name .. "'!", username = "Инвентарь" }
-    pcall(function()
-        HttpService:RequestAsync({
-            Url = DISCORD_WEBHOOK,
-            Method = "POST",
-            Headers = {["Content-Type"] = "application/json"},
-            Body = HttpService:JSONEncode(msg)
-        })
-    end)
-    print("[DISCORD] Отправлено:", name)
-end
-
-local function checkFruit(item)
-    if item:IsA("Tool") and item.Name:find("Fruit") then
-        if sentFruits[item.Name] then return end
-        sentFruits[item.Name] = true
-        sendFruit(item.Name)
-    end
-end
-
-local function fruitTracker()
-    local char = player.Character or player.CharacterAdded:Wait()
-    local bp = player:WaitForChild("Backpack")
-    bp.ChildAdded:Connect(function(it) task.wait(0.1); checkFruit(it) end)
-    char.ChildAdded:Connect(function(it) if it:IsA("Tool") then task.wait(0.1); checkFruit(it) end end)
-    for _, it in ipairs(bp:GetChildren()) do if it:IsA("Tool") and it.Name:find("Fruit") then sentFruits[it.Name] = true end end
-    for _, it in ipairs(char:GetChildren()) do if it:IsA("Tool") and it.Name:find("Fruit") then sentFruits[it.Name] = true end end
-    print("Детектор фруктов запущен")
-end
-
--- Анти-idle
-task.spawn(function()
-    local cam = workspace.CurrentCamera
-    local orig = cam.CFrame
-    while true do
-        task.wait(300)
-        cam.CFrame = cam.CFrame * CFrame.Angles(0, math.rad(1), 0)
-        task.wait(0.5)
-        cam.CFrame = orig
-    end
-end)
-task.spawn(function()
-    local vim = game:GetService("VirtualInputManager")
-    if vim then
-        while true do
-            task.wait(600)
-            pcall(function()
-                vim:SendKeyEvent(true, "W", false, game)
-                task.wait(0.1)
-                vim:SendKeyEvent(false, "W", false, game)
-            end)
-        end
-    end
-end)
 
 -- ========== 3. ДВИЖЕНИЕ ЛОДКИ ==========
 local boat = nil
@@ -258,7 +177,7 @@ local moveThread = nil
 local islandModeActive = false
 local waitingForDespawn = false
 local isReseating = false
-local isBuying = false  -- флаг для предотвращения повторной покупки
+local isBuying = false
 
 local function ensureBV()
     if islandModeActive then return end
@@ -384,7 +303,7 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. ОСТРОВ (АКТИВАЦИЯ ЯЙЦА) ==========
+-- ========== 5. ОСТРОВ (АКТИВАЦИЯ ЯЙЦА С БЕСКОНЕЧНЫМИ ПОПЫТКАМИ) ==========
 local pendingReturn = false
 
 local function findIsland()
@@ -507,8 +426,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ОСНОВНОЙ ЦИКЛ (ПОКУПКА ТОЛЬКО ПОСЛЕ ПЕРЕМЕЩЕНИЯ) ==========
--- Выбор команды Marines
+-- ========== 6. ОСНОВНОЙ ЦИКЛ (ЛОДКА, ПЕРЕСАДКА, РЕСЕТ) ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -516,13 +434,12 @@ if remotes then
     if commF then pcall(function() commF:InvokeServer("SetTeam", "Marines") end) end
 end
 
--- Функция для первоначальной покупки и посадки (запускается один раз)
+-- Функция для первоначальной покупки и посадки
 local function initialSetup()
     if isBuying then return end
     isBuying = true
     print("[ИНИЦИАЛИЗАЦИЯ] Начинаем процедуру покупки лодки...")
     if buyBoatAfterMove() then
-        -- Ждём появления лодки
         for i = 1, 30 do
             boat = findMyBoat()
             if boat then break end
@@ -548,13 +465,12 @@ local function initialSetup()
     isBuying = false
 end
 
--- Запуск инициализации через 1 секунду после старта (даём время на выбор команды)
 task.spawn(function()
     task.wait(1)
     initialSetup()
 end)
 
--- Основной цикл поддержки лодки и ресета
+-- Основной цикл поддержки лодки
 task.spawn(function()
     while true do
         task.wait(0.05)
@@ -592,7 +508,7 @@ task.spawn(function()
             end
         end
 
-        -- Если лодка исчезла (уничтожена) – ресет персонажа и покупка заново
+        -- Если лодка исчезла – ресет и покупка
         if boat and not boat.Parent then
             print("[ГЛАВНЫЙ] Лодка исчезла, выполняем ресет")
             boat = nil; seat = nil; root = nil
@@ -628,7 +544,7 @@ task.spawn(function()
             end
         end
 
-        -- Если лодки нет (первый запуск или после неудачи), пытаемся купить (с перемещением)
+        -- Если лодки нет – покупка
         if (not boat or not boat.Parent) and not isBuying then
             task.spawn(function()
                 isBuying = true
@@ -657,14 +573,12 @@ task.spawn(function()
             end)
         end
 
-        -- Обновляем ссылки
         local char = player.Character
         if char then
             hum = char:FindFirstChild("Humanoid")
             hrp = char:FindFirstChild("HumanoidRootPart")
         end
 
-        -- Логика пересадки и движения
         if hum and hum.Sit then
             if hum.SeatPart == seat then
                 if not moving and not islandModeActive then
@@ -673,9 +587,7 @@ task.spawn(function()
             else
                 if not isReseating then
                     isReseating = true
-                    if seat then
-                        forceSitOnSeat(seat, 3)
-                    end
+                    if seat then forceSitOnSeat(seat, 3) end
                     isReseating = false
                 end
                 if moving then stopMove() end
@@ -687,11 +599,126 @@ task.spawn(function()
     end
 end)
 
--- Запуск детектора фруктов
+-- ========== 7. ДЕТЕКТОР ФРУКТОВ (DISCORD + StoreFruit) ==========
+local commF = rs and rs:FindFirstChild("Remotes") and rs.Remotes:FindFirstChild("CommF_")
+local processedFruits = {}
+
+local function sendDiscordFruit(name)
+    local msg = { content = player.Name .. " получил '" .. name .. "'!", username = "Инвентарь" }
+    pcall(function()
+        HttpService:RequestAsync({
+            Url = DISCORD_WEBHOOK,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode(msg)
+        })
+    end)
+    print("[DISCORD] Отправлено:", name)
+end
+
+local function sellFruit(tool)
+    local fullName = tool.Name
+    if processedFruits[fullName] then return end
+    processedFruits[fullName] = true
+
+    print("[ФРУКТ] Найден:", fullName)
+
+    -- Отправка в Discord
+    sendDiscordFruit(fullName)
+
+    -- Преобразование "X Fruit" -> "X-X"
+    local storeName = fullName:gsub(" Fruit", ""):gsub(" ", "-")
+    print("[ФРУКТ] Сдаём как:", storeName)
+
+    -- Берём в руку (если не в руке)
+    task.wait(3)
+    if tool.Parent ~= player.Character then
+        tool.Parent = player.Character
+        task.wait(3)
+    end
+
+    if tool.Parent ~= player.Character then
+        warn("[ФРУКТ] Не удалось экипировать", fullName)
+        processedFruits[fullName] = nil
+        return
+    end
+
+    -- Вызов StoreFruit
+    local args = { "StoreFruit", storeName, tool }
+    local success, err = pcall(function()
+        commF:InvokeServer(unpack(args))
+    end)
+    if success then
+        print("[ФРУКТ] Сдан успешно:", storeName)
+    else
+        warn("[ФРУКТ] Ошибка сдачи:", err)
+        processedFruits[fullName] = nil
+    end
+end
+
+-- Мониторинг появления фруктов
+local function onToolAdded(tool)
+    if tool:IsA("Tool") and tool.Name:find("Fruit") then
+        task.wait(3) -- стабилизация
+        sellFruit(tool)
+    end
+end
+
+-- Подключаем мониторинг рюкзака
+local backpack = player:WaitForChild("Backpack")
+backpack.ChildAdded:Connect(onToolAdded)
+
+-- Мониторинг персонажа (если фрукт появился в руке)
+local function onCharAdded(char)
+    char.ChildAdded:Connect(onToolAdded)
+end
+if player.Character then
+    onCharAdded(player.Character)
+end
+player.CharacterAdded:Connect(onCharAdded)
+
+-- Проверяем уже имеющиеся фрукты при старте
+task.wait(3)
+for _, tool in ipairs(backpack:GetChildren()) do
+    if tool:IsA("Tool") and tool.Name:find("Fruit") then
+        sellFruit(tool)
+        break
+    end
+end
+if player.Character then
+    for _, tool in ipairs(player.Character:GetChildren()) do
+        if tool:IsA("Tool") and tool.Name:find("Fruit") then
+            sellFruit(tool)
+            break
+        end
+    end
+end
+
+print("[ФРУКТ] Монитор запущен. Любой фрукт 'X Fruit' будет отправлен в Discord и сдан как 'X-X'")
+
+-- ========== 8. АНТИ-IDLE ==========
 task.spawn(function()
-    if not player.Character then player.CharacterAdded:Wait() end
-    task.wait(2)
-    fruitTracker()
+    local cam = workspace.CurrentCamera
+    local orig = cam.CFrame
+    while true do
+        task.wait(300)
+        cam.CFrame = cam.CFrame * CFrame.Angles(0, math.rad(1), 0)
+        task.wait(0.5)
+        cam.CFrame = orig
+    end
+end)
+task.spawn(function()
+    local vim = game:GetService("VirtualInputManager")
+    if vim then
+        while true do
+            task.wait(600)
+            pcall(function()
+                vim:SendKeyEvent(true, "W", false, game)
+                task.wait(0.1)
+                vim:SendKeyEvent(false, "W", false, game)
+            end)
+        end
+    end
 end)
 
-print("Скрипт версии 6.6 запущен. Покупка лодки ТОЛЬКО после перемещения к координатам. Ресет при исчезновении лодки.")
+print("Скрипт полностью запущен. Версия 7.1 – перемещение к точке покупки через moveStep (без падений).")
