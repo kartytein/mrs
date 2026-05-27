@@ -1,6 +1,6 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 8.2) =====
--- Исправлено: скрипт активирует ВСЕ яйца на острове (одно за другим), пока они не исчезнут.
--- Никаких "оставшихся яиц" не будет. После исчезновения всех яиц возврат в лодку.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 8.3) =====
+-- Исправлено: активация яиц на высоте 4.5 над яйцом, принудительная фиксация CFrame, без проваливания под карту.
+-- Активируются ВСЕ яйца на острове (по очереди, ближайшее первым).
 -- Остальные механики: лодка, магнит, покупка с перемещением, ресет, пересадка, фрукты (Discord+StoreFruit), анти-idle.
 
 local player = game.Players.LocalPlayer
@@ -54,20 +54,6 @@ local function moveStep(targetPos, speed, keepY)
     hrp.CFrame = CFrame.new(targetPos)
     hum.PlatformStand = oldPlatform
     return true
-end
-
-local function moveWithBodyPosition(targetPos, duration)
-    local char = player.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    local bp = Instance.new("BodyPosition")
-    bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    bp.Parent = hrp
-    bp.Position = targetPos
-    task.wait(duration)
-    bp:Destroy()
-    hrp.CFrame = CFrame.new(targetPos)
 end
 
 local function forceSitOnSeat(targetSeat, maxAttempts)
@@ -293,7 +279,7 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. ОСТРОВ (АКТИВАЦИЯ ВСЕХ ЯИЦ) ==========
+-- ========== 5. ОСТРОВ (АКТИВАЦИЯ ВСЕХ ЯИЦ, БЕЗ ПРОВАЛИВАНИЯ) ==========
 local pendingReturn = false
 
 local function findIsland()
@@ -304,13 +290,6 @@ local function findIsland()
     end
     return nil
 end
-
-local PLAYER_EGG_RANK = {
-    ["Willow_hspt2015"] = 1,
-    ["MichaelJohnson84562"] = 2,
-    ["GigaGrimShade74"] = 3,
-}
-local myRank = PLAYER_EGG_RANK[playerName]
 
 local function pressE()
     local vim = game:GetService("VirtualInputManager")
@@ -342,26 +321,34 @@ local function getAllEggs()
     return eggs
 end
 
--- Активировать конкретное яйцо
+-- Активировать конкретное яйцо (исправленная версия, без проваливания)
 local function activateEgg(eggModel)
     if not eggModel or not eggModel.Parent then return false end
     local eggPart = eggModel:FindFirstChild("EggCrust") or eggModel:FindFirstChildWhichIsA("BasePart")
     if not eggPart then return false end
     
-    -- Перемещение к яйцу
-    local targetPos = eggPart.Position + Vector3.new(0, 2, 0)
-    moveWithBodyPosition(targetPos, 3)
+    -- Высокая точка над яйцом (4.5 юнитов)
+    local targetPos = eggPart.Position + Vector3.new(0, 4.5, 0)
+    print("[ЯЙЦО] Перемещение к яйцу на высоту", targetPos.Y)
     
-    -- Поворот к яйцу
+    -- Используем moveStep (плавное перемещение с фиксацией Y)
+    moveStep(targetPos, 200, true)
+    
+    -- Принудительная фиксация положения (подстраховка)
     local char = player.Character
     if char then
         local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp and math.abs(hrp.Position.Y - targetPos.Y) > 0.5 then
+            hrp.CFrame = CFrame.new(hrp.Position.X, targetPos.Y, hrp.Position.Z)
+            print("[ЯЙЦО] Фиксация высоты:", hrp.Position.Y)
+        end
+        -- Поворот к яйцу
         if hrp then
             local lookAt = (eggPart.Position - hrp.Position).Unit
             hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookAt)
-            task.wait(0.3)
         end
     end
+    task.wait(0.3)
     
     -- Бесконечные попытки нажатия E, пока яйцо не исчезнет
     while eggModel and eggModel.Parent do
@@ -423,7 +410,7 @@ task.spawn(function()
                 while #getAllEggs() > 0 do
                     local currentEggs = getAllEggs()
                     if #currentEggs == 0 then break end
-                    -- Сортируем по расстоянию (ближайшее в первую очередь)
+                    -- Сортируем по расстоянию (ближайшее первым)
                     local char = player.Character
                     if char and char:FindFirstChild("HumanoidRootPart") then
                         local hrp = char.HumanoidRootPart
@@ -436,12 +423,12 @@ task.spawn(function()
                         end
                         table.sort(currentEggs, function(a,b) return a.dist < b.dist end)
                     end
-                    local eggToActivate = currentEggs[1] -- ближайшее
+                    local eggToActivate = currentEggs[1]
                     if eggToActivate and eggToActivate.model and eggToActivate.model.Parent then
                         print("[ОСТРОВ] Активация яйца", activatedCount+1)
                         activateEgg(eggToActivate.model)
                         activatedCount = activatedCount + 1
-                        task.wait(1) -- пауза между активациями
+                        task.wait(1)
                     else
                         break
                     end
@@ -738,4 +725,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт версии 8.2 запущен. Активируются ВСЕ яйца на острове, пока не исчезнут.")
+print("Скрипт версии 8.3 запущен. Активация яиц на высоте 4.5, принудительная фиксация позиции.")
