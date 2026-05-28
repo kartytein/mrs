@@ -1,6 +1,6 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 8.6) =====
--- Исправлены: waitingForDespawn, магнит в вотчдоге, таймаут islandModeActive,
--- немедленное восстановление после острова без лодки, плавная камера, двойная блокировка восстановления.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 8.7) =====
+-- Все перемещения без лодки: шаговый телепорт + BodyVelocity(0,0,0).
+-- Полная автономия 24/7.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -23,54 +23,64 @@ end)
 -- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 local BOAT_BUY_POS = Vector3.new(-16917.0, 9.1, 447.0)
 
--- moveStep с таймаутом
-local function moveStep(targetPos, speed, keepY, timeout)
-	timeout = timeout or 15
+-- НОВЫЙ moveStep (шаговый телепорт + стабилизация BodyVelocity)
+local function moveStep(targetPos, speed, keepY)
+	-- speed игнорируется, скорость задана константой STEP
 	local char = player.Character
 	if not char then return false end
 	local hrp = char:FindFirstChild("HumanoidRootPart")
-	local hum = char:FindFirstChild("Humanoid")
-	if not hrp or not hum then return false end
-	local oldPlatform = hum.PlatformStand
-	hum.PlatformStand = true
+	if not hrp then return false end
 
-	local step = 0.02
-	local stepSize = speed * step
-	local startTime = tick()
-	local maxIterations = timeout / step
-
-	for i = 1, maxIterations do
-		if tick() - startTime > timeout then break end
-		local current = hrp.Position
-		local dx = targetPos.X - current.X
-		local dz = targetPos.Z - current.Z
-		local distXZ = math.sqrt(dx*dx + dz*dz)
-		if distXZ < 0.5 then break end
-		local dir = (targetPos - current).Unit
-		local moveDist = math.min(stepSize, (targetPos - current).Magnitude)
-		local newPos = current + dir * moveDist
-		if keepY then newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z) end
-		hrp.CFrame = CFrame.new(newPos)
-		task.wait(step)
+	-- Отключаем коллизии (на всякий случай)
+	for _, part in ipairs(char:GetDescendants()) do
+		if part:IsA("BasePart") then part.CanCollide = false end
 	end
-	hrp.CFrame = CFrame.new(targetPos)
-	hum.PlatformStand = oldPlatform
-	return (hrp.Position - targetPos).Magnitude < 1.0
+
+	-- Стабилизирующий BodyVelocity (убирает гравитацию и инерцию)
+	local bv = Instance.new("BodyVelocity")
+	bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+	bv.Velocity = Vector3.zero
+	bv.Parent = hrp
+
+	local STEP = 20          -- длина шага в студиях (можно 16-25)
+	local MAX_STEPS = 5000   -- аварийный ограничитель
+
+	for i = 1, MAX_STEPS do
+		local current = hrp.Position
+		local diff = targetPos - current
+		local dist = diff.Magnitude
+		if dist < 1 then break end   -- пришли
+
+		local dir = diff.Unit
+		local move = dir * math.min(STEP, dist)
+		local newPos = current + move
+
+		if keepY then
+			newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z)
+		end
+
+		hrp.CFrame = CFrame.new(newPos)
+		task.wait(0.015)  -- ~66 шагов/с -> скорость ~1320 studs/s при STEP=20
+	end
+
+	bv:Destroy()
+	local finalDist = (hrp.Position - targetPos).Magnitude
+	return finalDist < 2
 end
 
--- Безопасный moveStep с повторными попытками
+-- Обновлённый safeMoveStep (использует новый moveStep, но сохраняет повторы)
 local function safeMoveStep(targetPos, speed, keepY, maxAttempts, timeout)
 	maxAttempts = maxAttempts or 3
 	for attempt = 1, maxAttempts do
 		print("[MOVE] Попытка " .. attempt .. " достичь " .. tostring(targetPos))
-		if moveStep(targetPos, speed, keepY, timeout) then
+		if moveStep(targetPos, speed, keepY) then
 			return true
 		end
 		if attempt < maxAttempts then
 			local char = player.Character
 			if char and char:FindFirstChild("HumanoidRootPart") then
 				local hrp = char.HumanoidRootPart
-				hrp.CFrame = hrp.CFrame + Vector3.new(0, 5, 0) -- подпрыгиваем
+				hrp.CFrame = hrp.CFrame + Vector3.new(0, 5, 0)  -- подпрыгнуть
 				task.wait(0.5)
 			end
 			print("[MOVE] Не удалось, повторяем...")
@@ -79,7 +89,7 @@ local function safeMoveStep(targetPos, speed, keepY, maxAttempts, timeout)
 	return false
 end
 
--- Посадка на сиденье с повторами
+-- Посадка на сиденье с повторами (использует safeMoveStep)
 local function forceSitOnSeat(targetSeat, maxAttempts)
 	maxAttempts = maxAttempts or 3
 	for attempt = 1, maxAttempts do
@@ -174,7 +184,7 @@ local islandModeActive = false
 local waitingForDespawn = false
 local isReseating = false
 local isBuying = false
-local recoveryInProgress = false   -- дополнительный флаг, чтобы избежать двойного восстановления
+local recoveryInProgress = false
 
 local function ensureBV()
 	if islandModeActive then return end
@@ -356,6 +366,9 @@ local function activateEgg(eggModel)
 	if not char then return false end
 	local hrp = char:FindFirstChild("HumanoidRootPart")
 	if not hrp then return false end
+
+	-- Теперь, благодаря новому moveStep, персонаж уже находится у яйца.
+	-- Для удержания высоты можно использовать BodyPosition, но он уже не критичен.
 	local bodyPos = Instance.new("BodyPosition")
 	bodyPos.MaxForce = Vector3.new(0, math.huge, 0)
 	bodyPos.P = 10000
@@ -384,11 +397,10 @@ local function activateEgg(eggModel)
 end
 
 -- ========== 6. WATCHDOG (улучшен) ==========
-local islandModeEnterTime = 0   -- время входа в островной режим (для таймаута)
+local islandModeEnterTime = 0
 task.spawn(function()
 	while true do
 		task.wait(30)
-		-- Проверка зависшего островного режима (25 минут)
 		if islandModeActive and (tick() - islandModeEnterTime > 1500) then
 			print("[WATCHDOG] Островной режим висит >25 мин – принудительный сброс")
 			islandModeActive = false
@@ -413,7 +425,6 @@ task.spawn(function()
 						stopMagnetBodyPos()
 						if not moving then startMove() end
 					else
-						-- Если сесть не удалось, включаем магнит
 						print("[WATCHDOG] Посадка не удалась – включаем магнит")
 						fastMagnet()
 					end
@@ -469,7 +480,7 @@ task.spawn(function()
 		if present and not islandModeActive and not waitingForDespawn then
 			print("[ОСТРОВ] Обнаружен, входим в режим")
 			islandModeActive = true
-			islandModeEnterTime = tick()   -- запомнили время входа
+			islandModeEnterTime = tick()
 
 			stopMove()
 			stopMagnetBodyPos()
@@ -547,7 +558,6 @@ task.spawn(function()
 				pendingReturn = true
 				print("[ОСТРОВ] Режим завершён, ждём исчезновения острова")
 			else
-				-- Если вышли досрочно по таймауту/исчезновению
 				islandModeActive = false
 				waitingForDespawn = true
 				pendingReturn = true
@@ -564,7 +574,6 @@ if remotes then
 	if commF then pcall(function() commF:InvokeServer("SetTeam", "Marines") end) end
 end
 
--- Функция полной инициализации (используется при старте и при необходимости)
 local function fullRecovery()
 	if isBuying or recoveryInProgress then return end
 	recoveryInProgress = true
@@ -588,7 +597,7 @@ local function fullRecovery()
 				if nat then nat.Disabled = true end
 				forceSitOnSeat(seat, 3)
 				startMove()
-				waitingForDespawn = false   -- сбрасываем, чтобы можно было снова на остров
+				waitingForDespawn = false
 				print("[ВОССТАНОВЛЕНИЕ] Успешно, лодка готова")
 			end
 		else
@@ -601,7 +610,6 @@ local function fullRecovery()
 	recoveryInProgress = false
 end
 
--- Стартовая инициализация
 task.spawn(function()
 	task.wait(1)
 	fullRecovery()
@@ -612,7 +620,6 @@ task.spawn(function()
 		task.wait(0.05)
 		if islandModeActive then continue end
 
-		-- Возврат после острова
 		if pendingReturn then
 			pendingReturn = false
 			print("[ГЛАВНЫЙ] Возврат с острова")
@@ -635,19 +642,17 @@ task.spawn(function()
 							moving = false
 							if bv then bv:Destroy() bv = nil end
 							startMove()
-							waitingForDespawn = false   -- СБРОС ФЛАГА
+							waitingForDespawn = false
 							print("[ГЛАВНЫЙ] Посадка выполнена, waitingForDespawn сброшен")
 						end
 					end
 				end
 			else
-				-- Лодка не найдена – немедленное восстановление
 				print("[ГЛАВНЫЙ] Лодка не найдена после острова – запускаю восстановление")
 				task.spawn(fullRecovery)
 			end
 		end
 
-		-- Исчезновение лодки во время движения
 		if boat and not boat.Parent then
 			print("[ГЛАВНЫЙ] Лодка исчезла, восстановление")
 			boat = nil; seat = nil; root = nil
@@ -658,7 +663,6 @@ task.spawn(function()
 			end
 		end
 
-		-- Если лодки нет и не идёт покупка/восстановление
 		if (not boat or not boat.Parent) and not isBuying and not recoveryInProgress then
 			print("[ГЛАВНЫЙ] Лодка отсутствует – запускаю восстановление")
 			task.spawn(fullRecovery)
@@ -778,7 +782,7 @@ end
 
 print("[ФРУКТ] Монитор запущен")
 
--- ========== 10. АНТИ-IDLE (плавная камера) ==========
+-- ========== 10. АНТИ-IDLE ==========
 task.spawn(function()
 	local cam = workspace.CurrentCamera
 	while true do
@@ -786,7 +790,7 @@ task.spawn(function()
 		local current = cam.CFrame
 		cam.CFrame = current * CFrame.Angles(0, math.rad(1), 0)
 		task.wait(0.5)
-		cam.CFrame = current   -- возвращаем как было
+		cam.CFrame = current
 	end
 end)
 task.spawn(function()
@@ -803,4 +807,4 @@ task.spawn(function()
 	end
 end)
 
-print("Скрипт версии 8.6 запущен. Максимальная автономность, все известные уязвимости закрыты.")
+print("Скрипт версии 8.7 запущен. Все перемещения без лодки: шаговый телепорт + BV(0,0,0).")
