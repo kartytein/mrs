@@ -332,7 +332,7 @@ local function activateEgg(eggModel)
     print("[ЯЙЦО] Перемещение к яйцу на высоту", targetPos.Y)
     
     -- Используем moveStep (плавное перемещение с фиксацией Y)
-    moveStep(targetPos, 200, true)
+    moveStep(targetPos, 500, true)
     
     -- Принудительная фиксация положения (подстраховка)
     local char = player.Character
