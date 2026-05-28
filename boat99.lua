@@ -1,6 +1,6 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 8.3) =====
--- Исправлено: активация яиц на высоте 4.5 над яйцом, принудительная фиксация CFrame, без проваливания под карту.
--- Активируются ВСЕ яйца на острове (по очереди, ближайшее первым).
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 8.4) =====
+-- Ускорено перемещение к острову и яйцам (800/600)
+-- Добавлены таймауты на активацию яиц (30 сек) и защита от зависаний
 -- Остальные механики: лодка, магнит, покупка с перемещением, ресет, пересадка, фрукты (Discord+StoreFruit), анти-idle.
 
 local player = game.Players.LocalPlayer
@@ -84,7 +84,7 @@ local function forceSitOnSeat(targetSeat, maxAttempts)
 end
 
 local function moveToBuyPoint()
-    return moveStep(BOAT_BUY_POS, 200, true)
+    return moveStep(BOAT_BUY_POS, 500, true) -- ускорено до 500
 end
 
 local function buyBoatOnly()
@@ -279,7 +279,7 @@ local function fastMagnet()
     end
 end
 
--- ========== 5. ОСТРОВ (АКТИВАЦИЯ ВСЕХ ЯИЦ, БЕЗ ПРОВАЛИВАНИЯ) ==========
+-- ========== 5. ОСТРОВ (АКТИВАЦИЯ ВСЕХ ЯИЦ, УСКОРЕННО, С ТАЙМАУТАМИ) ==========
 local pendingReturn = false
 
 local function findIsland()
@@ -301,7 +301,6 @@ local function pressE()
     print("[ЯЙЦО] Клавиша E зажата")
 end
 
--- Получить список всех яиц (без сортировки)
 local function getAllEggs()
     local island = findIsland()
     if not island then return {} end
@@ -321,28 +320,22 @@ local function getAllEggs()
     return eggs
 end
 
--- Активировать конкретное яйцо (исправленная версия, без проваливания)
+-- Активация яйца с таймаутом 30 секунд
 local function activateEgg(eggModel)
     if not eggModel or not eggModel.Parent then return false end
     local eggPart = eggModel:FindFirstChild("EggCrust") or eggModel:FindFirstChildWhichIsA("BasePart")
     if not eggPart then return false end
     
-    -- Высокая точка над яйцом (4.5 юнитов)
     local targetPos = eggPart.Position + Vector3.new(0, 4.5, 0)
-    print("[ЯЙЦО] Перемещение к яйцу на высоту", targetPos.Y)
+    print("[ЯЙЦО] Перемещение к яйцу")
+    moveStep(targetPos, 600, true) -- ускорено до 600
     
-    -- Используем moveStep (плавное перемещение с фиксацией Y)
-    moveStep(targetPos, 200, true)
-    
-    -- Принудительная фиксация положения (подстраховка)
     local char = player.Character
     if char then
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if hrp and math.abs(hrp.Position.Y - targetPos.Y) > 0.5 then
             hrp.CFrame = CFrame.new(hrp.Position.X, targetPos.Y, hrp.Position.Z)
-            print("[ЯЙЦО] Фиксация высоты:", hrp.Position.Y)
         end
-        -- Поворот к яйцу
         if hrp then
             local lookAt = (eggPart.Position - hrp.Position).Unit
             hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookAt)
@@ -350,12 +343,16 @@ local function activateEgg(eggModel)
     end
     task.wait(0.3)
     
-    -- Бесконечные попытки нажатия E, пока яйцо не исчезнет
+    local startTime = os.clock()
     while eggModel and eggModel.Parent do
         pressE()
+        if os.clock() - startTime > 30 then
+            print("[ЯЙЦО] Таймаут 30 сек, яйцо не активировано")
+            break
+        end
         task.wait(1)
     end
-    return true
+    return not (eggModel and eggModel.Parent)
 end
 
 task.spawn(function()
@@ -373,20 +370,18 @@ task.spawn(function()
             print("[ОСТРОВ] Обнаружен, входим в режим")
             islandModeActive = true
             
-            -- Останавливаем лодку и магнит
             stopMove()
             stopMagnetBodyPos()
             
-            -- Выходим из сиденья
             local char = player.Character
             if char then
                 local h = char:FindFirstChild("Humanoid")
                 if h and h.Sit then h.Sit = false end
             end
             
-            -- Поднимаемся над островом
+            -- Подъём над островом (ускорено до 800)
             local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
-            moveStep(target, 200, true)
+            moveStep(target, 800, true)
             
             -- Ожидание появления яиц (до 10 минут)
             local startTime = os.clock()
@@ -405,29 +400,27 @@ task.spawn(function()
                 pendingReturn = true
             else
                 print("[ОСТРОВ] Найдено яиц:", #eggsList)
-                -- Активируем ВСЕ яйца, пока они не исчезнут
                 local activatedCount = 0
                 while #getAllEggs() > 0 do
                     local currentEggs = getAllEggs()
                     if #currentEggs == 0 then break end
-                    -- Сортируем по расстоянию (ближайшее первым)
+                    -- Сортировка по расстоянию
                     local char = player.Character
                     if char and char:FindFirstChild("HumanoidRootPart") then
                         local hrp = char.HumanoidRootPart
                         for _, egg in ipairs(currentEggs) do
-                            if egg.part then
-                                egg.dist = (hrp.Position - egg.part.Position).Magnitude
-                            else
-                                egg.dist = math.huge
-                            end
+                            egg.dist = (hrp.Position - egg.part.Position).Magnitude
                         end
                         table.sort(currentEggs, function(a,b) return a.dist < b.dist end)
                     end
                     local eggToActivate = currentEggs[1]
                     if eggToActivate and eggToActivate.model and eggToActivate.model.Parent then
                         print("[ОСТРОВ] Активация яйца", activatedCount+1)
-                        activateEgg(eggToActivate.model)
-                        activatedCount = activatedCount + 1
+                        if activateEgg(eggToActivate.model) then
+                            activatedCount = activatedCount + 1
+                        else
+                            print("[ОСТРОВ] Не удалось активировать, пробуем другое")
+                        end
                         task.wait(1)
                     else
                         break
@@ -725,4 +718,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт версии 8.3 запущен. Активация яиц на высоте 4.5, принудительная фиксация позиции.")
+print("Скрипт версии 8.4 запущен. Ускорено перемещение, таймаут активации яиц 30 сек.")
