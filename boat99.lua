@@ -1,6 +1,6 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 8.7) =====
--- Все перемещения без лодки: шаговый телепорт + BodyVelocity(0,0,0).
--- Полная автономия 24/7.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 8.9) =====
+-- Исправлены: таймаут + детектор зависания в moveStep, проверка подъёма над островом,
+-- убрана лишняя задержка в магните.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -23,44 +23,57 @@ end)
 -- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 local BOAT_BUY_POS = Vector3.new(-16917.0, 9.1, 447.0)
 
--- НОВЫЙ moveStep (шаговый телепорт + стабилизация BodyVelocity)
-local function moveStep(targetPos, speed, keepY)
-	-- speed игнорируется, скорость задана константой STEP
+-- moveStep с таймаутом и детектором зависания
+local function moveStep(targetPos, speed, keepY, timeout)
+	timeout = timeout or 30
 	local char = player.Character
 	if not char then return false end
 	local hrp = char:FindFirstChild("HumanoidRootPart")
 	if not hrp then return false end
 
-	-- Отключаем коллизии (на всякий случай)
 	for _, part in ipairs(char:GetDescendants()) do
 		if part:IsA("BasePart") then part.CanCollide = false end
 	end
 
-	-- Стабилизирующий BodyVelocity (убирает гравитацию и инерцию)
 	local bv = Instance.new("BodyVelocity")
 	bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
 	bv.Velocity = Vector3.zero
 	bv.Parent = hrp
 
-	local STEP = 20          -- длина шага в студиях (можно 16-25)
-	local MAX_STEPS = 5000   -- аварийный ограничитель
+	local STEP = 14
+	local MAX_STEPS = 5000
+	local startTime = tick()
+	local lastDist = math.huge
+	local stuckTime = 0
 
 	for i = 1, MAX_STEPS do
+		if tick() - startTime > timeout then break end
+
 		local current = hrp.Position
 		local diff = targetPos - current
 		local dist = diff.Magnitude
-		if dist < 1 then break end   -- пришли
+		if dist < 1 then break end
+
+		-- детектор зависания: если расстояние не уменьшается 3 секунды – выходим
+		if dist >= lastDist - 0.1 then
+			stuckTime = stuckTime + 0.02
+			if stuckTime > 3 then
+				warn("[MOVE] Застревание, прерываем")
+				break
+			end
+		else
+			stuckTime = 0
+		end
+		lastDist = dist
 
 		local dir = diff.Unit
 		local move = dir * math.min(STEP, dist)
 		local newPos = current + move
-
 		if keepY then
 			newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z)
 		end
-
 		hrp.CFrame = CFrame.new(newPos)
-		task.wait(0.015)  -- ~66 шагов/с -> скорость ~1320 studs/s при STEP=20
+		task.wait(0.02)
 	end
 
 	bv:Destroy()
@@ -68,19 +81,19 @@ local function moveStep(targetPos, speed, keepY)
 	return finalDist < 2
 end
 
--- Обновлённый safeMoveStep (использует новый moveStep, но сохраняет повторы)
+-- safeMoveStep с повторами
 local function safeMoveStep(targetPos, speed, keepY, maxAttempts, timeout)
 	maxAttempts = maxAttempts or 3
 	for attempt = 1, maxAttempts do
 		print("[MOVE] Попытка " .. attempt .. " достичь " .. tostring(targetPos))
-		if moveStep(targetPos, speed, keepY) then
+		if moveStep(targetPos, speed, keepY, timeout) then
 			return true
 		end
 		if attempt < maxAttempts then
 			local char = player.Character
 			if char and char:FindFirstChild("HumanoidRootPart") then
 				local hrp = char.HumanoidRootPart
-				hrp.CFrame = hrp.CFrame + Vector3.new(0, 5, 0)  -- подпрыгнуть
+				hrp.CFrame = hrp.CFrame + Vector3.new(0, 5, 0)
 				task.wait(0.5)
 			end
 			print("[MOVE] Не удалось, повторяем...")
@@ -89,7 +102,7 @@ local function safeMoveStep(targetPos, speed, keepY, maxAttempts, timeout)
 	return false
 end
 
--- Посадка на сиденье с повторами (использует safeMoveStep)
+-- Посадка на сиденье
 local function forceSitOnSeat(targetSeat, maxAttempts)
 	maxAttempts = maxAttempts or 3
 	for attempt = 1, maxAttempts do
@@ -254,7 +267,7 @@ local function startMove()
 	end)
 end
 
--- ========== 4. МАГНИТ ==========
+-- ========== 4. МАГНИТ (без лишних задержек) ==========
 local magnetBodyPos = nil
 local magnetBodyPosActive = false
 
@@ -297,7 +310,7 @@ local function fastMagnet()
 	local dist = (r.Position - targetPos).Magnitude
 	if dist > 0.3 then
 		local dirVec = (targetPos - r.Position).Unit
-		local step = math.min(300 * 0.02, dist)
+		local step = math.min(200 * 0.02, dist)
 		local newPos = r.Position + dirVec * step
 		newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z)
 		r.CFrame = CFrame.new(newPos)
@@ -367,8 +380,6 @@ local function activateEgg(eggModel)
 	local hrp = char:FindFirstChild("HumanoidRootPart")
 	if not hrp then return false end
 
-	-- Теперь, благодаря новому moveStep, персонаж уже находится у яйца.
-	-- Для удержания высоты можно использовать BodyPosition, но он уже не критичен.
 	local bodyPos = Instance.new("BodyPosition")
 	bodyPos.MaxForce = Vector3.new(0, math.huge, 0)
 	bodyPos.P = 10000
@@ -396,7 +407,7 @@ local function activateEgg(eggModel)
 	return true
 end
 
--- ========== 6. WATCHDOG (улучшен) ==========
+-- ========== 6. WATCHDOG ==========
 local islandModeEnterTime = 0
 task.spawn(function()
 	while true do
@@ -465,7 +476,7 @@ task.spawn(function()
 	end
 end)
 
--- ========== 7. ОСТРОВНОЙ ПОТОК ==========
+-- ========== 7. ОСТРОВНОЙ ПОТОК (с проверкой подъёма) ==========
 task.spawn(function()
 	while true do
 		task.wait(1)
@@ -492,7 +503,14 @@ task.spawn(function()
 			end
 
 			local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
-			safeMoveStep(target, 200, true, 3, 10)
+			local success = safeMoveStep(target, 200, true, 3, 10)
+			if not success then
+				print("[ОСТРОВ] Не удалось подняться к острову, выходим")
+				islandModeActive = false
+				waitingForDespawn = true
+				pendingReturn = true
+				continue   -- пропускаем ожидание яиц
+			end
 
 			local startTime = os.clock()
 			local eggsList = {}
@@ -807,4 +825,4 @@ task.spawn(function()
 	end
 end)
 
-print("Скрипт версии 8.7 запущен. Все перемещения без лодки: шаговый телепорт + BV(0,0,0).")
+print("Скрипт версии 8.9 запущен. Исправлены таймауты и проверка подъёма.")
