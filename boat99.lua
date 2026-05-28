@@ -1,6 +1,5 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 8.9) =====
--- Исправлены: таймаут + детектор зависания в moveStep, проверка подъёма над островом,
--- убрана лишняя задержка в магните.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 8.11) =====
+-- STEP = 10, таймаут острова 10 минут, подъём без проверки.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -40,7 +39,7 @@ local function moveStep(targetPos, speed, keepY, timeout)
 	bv.Velocity = Vector3.zero
 	bv.Parent = hrp
 
-	local STEP = 14
+	local STEP = 10           -- снижено до 10 студий
 	local MAX_STEPS = 5000
 	local startTime = tick()
 	local lastDist = math.huge
@@ -54,7 +53,6 @@ local function moveStep(targetPos, speed, keepY, timeout)
 		local dist = diff.Magnitude
 		if dist < 1 then break end
 
-		-- детектор зависания: если расстояние не уменьшается 3 секунды – выходим
 		if dist >= lastDist - 0.1 then
 			stuckTime = stuckTime + 0.02
 			if stuckTime > 3 then
@@ -267,7 +265,7 @@ local function startMove()
 	end)
 end
 
--- ========== 4. МАГНИТ (без лишних задержек) ==========
+-- ========== 4. МАГНИТ ==========
 local magnetBodyPos = nil
 local magnetBodyPosActive = false
 
@@ -476,7 +474,7 @@ task.spawn(function()
 	end
 end)
 
--- ========== 7. ОСТРОВНОЙ ПОТОК (с проверкой подъёма) ==========
+-- ========== 7. ОСТРОВНОЙ ПОТОК (10 минут) ==========
 task.spawn(function()
 	while true do
 		task.wait(1)
@@ -502,22 +500,16 @@ task.spawn(function()
 				if h and h.Sit then h.Sit = false end
 			end
 
+			-- Подъём над островом (без проверки успеха)
 			local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
-			local success = safeMoveStep(target, 200, true, 3, 10)
-			if not success then
-				print("[ОСТРОВ] Не удалось подняться к острову, выходим")
-				islandModeActive = false
-				waitingForDespawn = true
-				pendingReturn = true
-				continue   -- пропускаем ожидание яиц
-			end
+			safeMoveStep(target, 200, true, 3, 10)
 
+			print("[ОСТРОВ] Подъём завершён, ожидание яиц...")
 			local startTime = os.clock()
 			local eggsList = {}
-			print("[ОСТРОВ] Ожидание яиц...")
-			while os.clock() - startTime < 600 do
-				if tick() - islandModeEnterTime > 1200 then
-					print("[ОСТРОВ] Общий таймаут острова (20 мин)")
+			while os.clock() - startTime < 600 do   -- ждём яйца до 10 минут
+				if tick() - islandModeEnterTime > 600 then   -- общий таймаут 10 минут
+					print("[ОСТРОВ] Общий таймаут острова (10 мин)")
 					break
 				end
 				eggsList = getAllEggs()
@@ -536,7 +528,7 @@ task.spawn(function()
 					print("[ОСТРОВ] Найдено яиц:", #eggsList)
 					local activatedCount = 0
 					while islandModeActive do
-						if tick() - islandModeEnterTime > 1200 then
+						if tick() - islandModeEnterTime > 600 then   -- таймаут 10 минут
 							print("[ОСТРОВ] Таймаут, прерываем активацию")
 							break
 						end
@@ -825,4 +817,4 @@ task.spawn(function()
 	end
 end)
 
-print("Скрипт версии 8.9 запущен. Исправлены таймауты и проверка подъёма.")
+print("Скрипт версии 8.11 запущен. STEP=10, таймаут острова 10 мин.")
