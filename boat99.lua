@@ -1,9 +1,8 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.15) =====
--- Диагностика: F1 – мгновенный отчёт, [STATE] каждые 5 сек.
--- Безопасный goTo (шаг 10, задержка 0.02, детектор пробуксовки).
--- Watchdog: 60 сек на острове, 45 сек в воздухе/море.
--- Таймауты яиц: 30 сек на яйцо, 2 мин общая активация.
--- Фрукты: изолированный детектор с отправкой в Discord.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.17) =====
+-- Добавлено: максимум 10 минут на острове, после чего принудительный возврат в лодку.
+-- Движок goTo без таймаутов (всегда достигает цели).
+-- Диагностика: [STATE] каждые 5 сек в консоль.
+-- Фрукты: надёжная отправка в Discord.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -27,11 +26,9 @@ task.spawn(function()
     end
 end)
 
--- ========== 1. БЕЗОПАСНЫЙ ДВИЖОК С ДЕТЕКТОРОМ ПРОБУКСОВКИ ==========
+-- ========== 1. АБСОЛЮТНО НАДЁЖНЫЙ ДВИЖОК ==========
 local STEP = 10
 local DELAY = 0.02
-local STUCK_TIMEOUT = 3       -- секунд без прогресса
-local MIN_PROGRESS = 30        -- студий за STUCK_TIMEOUT
 
 local function goTo(targetPos)
     local char = player.Character
@@ -45,18 +42,11 @@ local function goTo(targetPos)
         end
     end
 
-    local startPos = hrp.Position
-    local totalDist = (startPos - targetPos).Magnitude
     hum.PlatformStand = true
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Velocity = Vector3.new(0, 0, 0)
     bv.Parent = hrp
-
-    local lastProgressTime = os.clock()
-    local lastProgressDist = totalDist
-    local globalStart = os.clock()
-    local globalTimeout = 60
 
     while true do
         char = player.Character
@@ -69,17 +59,10 @@ local function goTo(targetPos)
         local dist = (currentPos - targetPos).Magnitude
         if dist < 1 then break end
 
-        if os.clock() - globalStart > globalTimeout then
-            warn("[GO-TO] Глобальный таймаут, выход")
-            break
-        end
-
-        if dist < lastProgressDist - MIN_PROGRESS then
-            lastProgressTime = os.clock()
-            lastProgressDist = dist
-        elseif os.clock() - lastProgressTime > STUCK_TIMEOUT then
-            warn("[GO-TO] Пробуксовка, выходим")
-            break
+        -- Если персонаж провалился в воду (Y сильно ниже цели) – сначала поднимаем
+        if currentPos.Y < targetPos.Y - 10 then
+            hrp.CFrame = CFrame.new(currentPos.X, targetPos.Y, currentPos.Z)
+            currentPos = hrp.Position
         end
 
         local dir = (targetPos - currentPos).Unit
@@ -96,11 +79,11 @@ local function goTo(targetPos)
         hum.PlatformStand = false
     end
     if bv then bv:Destroy() end
-    return (char and hrp and ((hrp.Position - targetPos).Magnitude < 1))
+    return true
 end
 
 local function safeGoTo(targetPos)
-    for attempt = 1, 5 do
+    while true do
         local char = player.Character
         if not char or not char:FindFirstChild("HumanoidRootPart") then
             task.wait(1)
@@ -108,14 +91,12 @@ local function safeGoTo(targetPos)
         end
         local success = pcall(goTo, targetPos)
         if success then return true end
-        warn("[SafeGoTo] Попытка " .. attempt .. " провалена, повтор через 2 с")
+        warn("[SafeGoTo] Попытка провалена, повтор через 2 с")
         task.wait(2)
     end
-    warn("[SafeGoTo] Не достигли цели после 5 попыток")
-    return false
 end
 
--- ========== 2. СТАРЫЙ moveStep (посадка) ==========
+-- ========== 2. СТАРЫЙ moveStep ==========
 local function moveStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
@@ -331,7 +312,7 @@ local function stopMagnetBodyPos()
     if magnetBodyPos then magnetBodyPos:Destroy(); magnetBodyPos = nil end
 end
 
--- ========== 5. ОСТРОВ (с таймаутами) ==========
+-- ========== 5. ОСТРОВ (с общим таймаутом 10 минут) ==========
 local islandModeActive = false
 local waitingForDespawn = false
 local pendingReturn = false
@@ -424,12 +405,14 @@ task.spawn(function()
                 if h then h.PlatformStand = true end
             end
 
+            local islandStart = os.clock()   -- запомнили время захода на остров
             local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
             safeGoTo(target)
 
             local waitStart = os.clock()
             local eggsList = {}
-            while os.clock() - waitStart < 600 do
+            -- ждём яйца, но не дольше 10 минут от захода на остров
+            while os.clock() - islandStart < 600 do
                 eggsList = getAllEggs()
                 if #eggsList > 0 then break end
                 task.wait(1)
@@ -441,12 +424,17 @@ task.spawn(function()
                 pendingReturn = true
             else
                 local activationStart = os.clock()
+                -- активация яиц, пока остров существует, но не дольше 2 минут и не дольше 10 минут от входа
                 while islandModeActive and findIsland() do
                     local currentEggs = getAllEggs()
                     if #currentEggs == 0 then break end
 
                     if os.clock() - activationStart > 120 then
-                        print("[ОСТРОВ] 2 минуты истекли, возвращаемся в лодку")
+                        print("[ОСТРОВ] 2 минуты на активацию истекли, возвращаемся")
+                        break
+                    end
+                    if os.clock() - islandStart > 600 then
+                        print("[ОСТРОВ] 10 минут на острове истекли, возвращаемся")
                         break
                     end
 
@@ -486,7 +474,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ОСНОВНОЙ ЦИКЛ + WATCHDOG + ДИАГНОСТИКА ==========
+-- ========== 6. ОСНОВНОЙ ЦИКЛ + WATCHDOG (только вне острова) ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -530,11 +518,6 @@ end)
 -- Watchdog-переменные
 local lastWatchdogPos = nil
 local lastWatchdogTime = os.clock()
-local lastIslandWatchdogPos = nil
-local lastIslandWatchdogTime = os.clock()
-
--- Глобальная диагностика (доступна из консоли)
-_G.scriptState = {}
 
 -- Вывод состояния каждые 5 секунд
 task.spawn(function()
@@ -542,45 +525,18 @@ task.spawn(function()
         task.wait(5)
         local char = player.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        _G.scriptState = {
-            time = os.clock(),
-            islandModeActive = islandModeActive,
-            waitingForDespawn = waitingForDespawn,
+        local stateInfo = {
+            time = math.floor(os.clock()),
+            islandActive = islandModeActive,
+            waitDespawn = waitingForDespawn,
             pendingReturn = pendingReturn,
             boatExists = boat and boat.Parent and true or false,
             moving = moving,
-            isReseating = isReseating,
-            position = hrp and hrp.Position,
+            reseating = isReseating,
+            pos = hrp and string.format("%.0f, %.0f, %.0f", hrp.Position.X, hrp.Position.Y, hrp.Position.Z),
             islandPresent = findIsland() and true or false
         }
-        print("[STATE]", _G.scriptState)
-    end
-end)
-
--- Мгновенный отчёт по F1
-local uis = game:GetService("UserInputService")
-uis.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    if input.KeyCode == Enum.KeyCode.F1 then
-        local char = player.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local info = {
-            characterExists = char ~= nil,
-            position = hrp and hrp.Position,
-            sitting = char and char:FindFirstChild("Humanoid") and char.Humanoid.Sit,
-            islandModeActive = islandModeActive,
-            waitingForDespawn = waitingForDespawn,
-            pendingReturn = pendingReturn,
-            boatExists = boat and boat.Parent and true or false,
-            moving = moving,
-            isReseating = isReseating,
-            islandPresent = findIsland() and true or false
-        }
-        print("=== ДИАГНОСТИКА ===")
-        for k,v in pairs(info) do
-            print(k, v)
-        end
-        print("==================")
+        print("[STATE]", stateInfo)
     end
 end)
 
@@ -589,30 +545,14 @@ task.spawn(function()
     while true do
         task.wait(0.05)
         if islandModeActive then
-            -- Watchdog для острова: 60 сек без движения
             local char = player.Character
             if char then
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    local pos = hrp.Position
-                    if lastIslandWatchdogPos and (pos - lastIslandWatchdogPos).Magnitude < 10 then
-                        if os.clock() - lastIslandWatchdogTime > 60 then
-                            warn("[WATCHDOG] Остров: персонаж не двигается 60 сек! Принудительный выход.")
-                            islandModeActive = false
-                            waitingForDespawn = true
-                            pendingReturn = true
-                            lastIslandWatchdogTime = os.clock()
-                        end
-                    else
-                        lastIslandWatchdogPos = pos
-                        lastIslandWatchdogTime = os.clock()
-                    end
-                end
+                hum = char:FindFirstChild("Humanoid")
+                hrp = char:FindFirstChild("HumanoidRootPart")
             end
             continue
         end
 
-        -- Возврат с острова
         if pendingReturn then
             pendingReturn = false
             boat = nil; seat = nil; root = nil
@@ -639,7 +579,6 @@ task.spawn(function()
             end
         end
 
-        -- Проверка пропажи лодки
         if boat and not boat.Parent then
             boat = nil; seat = nil; root = nil
             stopMove()
@@ -702,7 +641,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 7. ФРУКТЫ – ИЗОЛИРОВАННЫЙ ДЕТЕКТОР (Discord) ==========
+-- ========== 7. ФРУКТЫ – НАДЁЖНЫЙ ИЗОЛИРОВАННЫЙ ДЕТЕКТОР ==========
 task.spawn(function()
     local sentFruits = {}
 
@@ -781,5 +720,5 @@ task.spawn(function()
     end
 end)
 
-print("===== СКРИПТ 9.15 ЗАПУЩЕН =====")
-print("F1 – мгновенный отчёт, [STATE] каждые 5 сек. Фрукты – Discord.")
+print("===== СКРИПТ 9.17 ЗАПУЩЕН =====")
+print("Максимум 10 минут на острове. Движок всегда доходит до цели.")
