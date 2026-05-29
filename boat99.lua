@@ -1,9 +1,9 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.14) =====
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.15) =====
 -- Диагностика: F1 – мгновенный отчёт, [STATE] каждые 5 сек.
--- Безопасный goTo (шаг 10, задержка 0.02, пробуксовка).
+-- Безопасный goTo (шаг 10, задержка 0.02, детектор пробуксовки).
 -- Watchdog: 60 сек на острове, 45 сек в воздухе/море.
 -- Таймауты яиц: 30 сек на яйцо, 2 мин общая активация.
--- Фрукты: надёжная отправка в Discord (проверено).
+-- Фрукты: изолированный детектор с отправкой в Discord.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -30,8 +30,8 @@ end)
 -- ========== 1. БЕЗОПАСНЫЙ ДВИЖОК С ДЕТЕКТОРОМ ПРОБУКСОВКИ ==========
 local STEP = 10
 local DELAY = 0.02
-local STUCK_TIMEOUT = 3
-local MIN_PROGRESS = 30
+local STUCK_TIMEOUT = 3       -- секунд без прогресса
+local MIN_PROGRESS = 30        -- студий за STUCK_TIMEOUT
 
 local function goTo(targetPos)
     local char = player.Character
@@ -115,7 +115,7 @@ local function safeGoTo(targetPos)
     return false
 end
 
--- ========== 2. СТАРЫЙ moveStep ==========
+-- ========== 2. СТАРЫЙ moveStep (посадка) ==========
 local function moveStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
@@ -533,7 +533,7 @@ local lastWatchdogTime = os.clock()
 local lastIslandWatchdogPos = nil
 local lastIslandWatchdogTime = os.clock()
 
--- Глобальная диагностика
+-- Глобальная диагностика (доступна из консоли)
 _G.scriptState = {}
 
 -- Вывод состояния каждые 5 секунд
@@ -702,9 +702,9 @@ task.spawn(function()
     end
 end)
 
--- ========== 7. ФРУКТЫ – НАДЁЖНЫЙ ИЗОЛИРОВАННЫЙ ДЕТЕКТОР ==========
+-- ========== 7. ФРУКТЫ – ИЗОЛИРОВАННЫЙ ДЕТЕКТОР (Discord) ==========
 task.spawn(function()
-    local sentFruits = {}  -- своя локальная таблица, не пересекается с другими
+    local sentFruits = {}
 
     local function sendToDiscord(name)
         local msg = {
@@ -725,17 +725,15 @@ task.spawn(function()
 
     local function checkItem(item)
         if not item:IsA("Tool") then return end
-        task.wait(0.3)  -- даём игре обновить имя
+        task.wait(0.3)
         if not item.Name or not item.Name:find("Fruit") then return end
         if sentFruits[item.Name] then return end
         sentFruits[item.Name] = true
         sendToDiscord(item.Name)
     end
 
-    -- Ждём, пока всё загрузится
     task.wait(2)
     local backpack = player:WaitForChild("Backpack")
-    -- Сканируем существующие
     for _, item in ipairs(backpack:GetChildren()) do
         if item:IsA("Tool") and item.Name:find("Fruit") then
             sentFruits[item.Name] = true
@@ -748,7 +746,6 @@ task.spawn(function()
             end
         end
     end
-    -- Подключаем события
     backpack.ChildAdded:Connect(checkItem)
     player.CharacterAdded:Connect(function(char)
         for _, existing in ipairs(char:GetChildren()) do
@@ -784,5 +781,5 @@ task.spawn(function()
     end
 end)
 
-print("===== СКРИПТ 9.14 ЗАПУЩЕН =====")
+print("===== СКРИПТ 9.15 ЗАПУЩЕН =====")
 print("F1 – мгновенный отчёт, [STATE] каждые 5 сек. Фрукты – Discord.")
