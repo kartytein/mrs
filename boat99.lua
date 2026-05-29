@@ -1,7 +1,9 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.11) =====
--- Убран быстрый режим (STEP=50), восстановлены безопасные шаг 10, задержка 0.02.
--- Добавлен детектор пробуксовки в goTo (3 сек без прогресса -> выход).
--- Watchdog в основном цикле.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.13) =====
+-- Диагностика: F1 – мгновенный отчёт, [STATE] каждые 5 сек.
+-- Безопасный goTo (шаг 10, задержка 0.02, пробуксовка).
+-- Watchdog: 60 сек на острове, 45 сек в воздухе/море.
+-- Таймауты яиц: 30 сек на яйцо, 2 мин общая активация.
+-- Фрукты: только уведомление в Discord (без сдачи).
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -37,7 +39,6 @@ local function goTo(targetPos)
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChild("Humanoid")
     if not hrp or not hum then return false end
-    -- очистка физики
     for _, v in ipairs(char:GetDescendants()) do
         if v:IsA("BodyVelocity") or v:IsA("BodyPosition") or v:IsA("BodyGyro") then
             v:Destroy()
@@ -66,24 +67,18 @@ local function goTo(targetPos)
 
         local currentPos = hrp.Position
         local dist = (currentPos - targetPos).Magnitude
-        if dist < 1 then
-            -- успешно
-            break
-        end
+        if dist < 1 then break end
 
-        -- глобальный таймаут
         if os.clock() - globalStart > globalTimeout then
             warn("[GO-TO] Глобальный таймаут, выход")
             break
         end
 
-        -- проверка пробуксовки: если за STUCK_TIMEOUT продвинулись меньше MIN_PROGRESS
         if dist < lastProgressDist - MIN_PROGRESS then
-            -- прогресс есть, сбрасываем
             lastProgressTime = os.clock()
             lastProgressDist = dist
         elseif os.clock() - lastProgressTime > STUCK_TIMEOUT then
-            warn("[GO-TO] Пробуксовка, дистанция почти не уменьшается, выходим")
+            warn("[GO-TO] Пробуксовка, выходим")
             break
         end
 
@@ -112,9 +107,7 @@ local function safeGoTo(targetPos)
             continue
         end
         local success = pcall(goTo, targetPos)
-        if success then
-            return true
-        end
+        if success then return true end
         warn("[SafeGoTo] Попытка " .. attempt .. " провалена, повтор через 2 с")
         task.wait(2)
     end
@@ -338,7 +331,7 @@ local function stopMagnetBodyPos()
     if magnetBodyPos then magnetBodyPos:Destroy(); magnetBodyPos = nil end
 end
 
--- ========== 5. ОСТРОВ (с таймаутами яиц) ==========
+-- ========== 5. ОСТРОВ (с таймаутами) ==========
 local islandModeActive = false
 local waitingForDespawn = false
 local pendingReturn = false
@@ -432,7 +425,7 @@ task.spawn(function()
             end
 
             local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
-            safeGoTo(target)   -- стандартный goTo, без быстрого режима
+            safeGoTo(target)
 
             local waitStart = os.clock()
             local eggsList = {}
@@ -493,7 +486,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ОСНОВНОЙ ЦИКЛ + WATCHDOG ==========
+-- ========== 6. ОСНОВНОЙ ЦИКЛ + WATCHDOG + ДИАГНОСТИКА ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -537,11 +530,87 @@ end)
 -- Watchdog-переменные
 local lastWatchdogPos = nil
 local lastWatchdogTime = os.clock()
+local lastIslandWatchdogPos = nil
+local lastIslandWatchdogTime = os.clock()
 
+-- Глобальная диагностика
+_G.scriptState = {}
+
+-- Вывод состояния каждые 5 секунд
+task.spawn(function()
+    while true do
+        task.wait(5)
+        local char = player.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        _G.scriptState = {
+            time = os.clock(),
+            islandModeActive = islandModeActive,
+            waitingForDespawn = waitingForDespawn,
+            pendingReturn = pendingReturn,
+            boatExists = boat and boat.Parent and true or false,
+            moving = moving,
+            isReseating = isReseating,
+            position = hrp and hrp.Position,
+            islandPresent = findIsland() and true or false
+        }
+        print("[STATE]", _G.scriptState)
+    end
+end)
+
+-- Мгновенный отчёт по F1
+local uis = game:GetService("UserInputService")
+uis.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.F1 then
+        local char = player.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local info = {
+            characterExists = char ~= nil,
+            position = hrp and hrp.Position,
+            sitting = char and char:FindFirstChild("Humanoid") and char.Humanoid.Sit,
+            islandModeActive = islandModeActive,
+            waitingForDespawn = waitingForDespawn,
+            pendingReturn = pendingReturn,
+            boatExists = boat and boat.Parent and true or false,
+            moving = moving,
+            isReseating = isReseating,
+            islandPresent = findIsland() and true or false
+        }
+        print("=== ДИАГНОСТИКА ===")
+        for k,v in pairs(info) do
+            print(k, v)
+        end
+        print("==================")
+    end
+end)
+
+-- Главный цикл
 task.spawn(function()
     while true do
         task.wait(0.05)
-        if islandModeActive then continue end
+        if islandModeActive then
+            -- Watchdog для острова: 60 сек без движения
+            local char = player.Character
+            if char then
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local pos = hrp.Position
+                    if lastIslandWatchdogPos and (pos - lastIslandWatchdogPos).Magnitude < 10 then
+                        if os.clock() - lastIslandWatchdogTime > 60 then
+                            warn("[WATCHDOG] Остров: персонаж не двигается 60 сек! Принудительный выход.")
+                            islandModeActive = false
+                            waitingForDespawn = true
+                            pendingReturn = true
+                            lastIslandWatchdogTime = os.clock()
+                        end
+                    else
+                        lastIslandWatchdogPos = pos
+                        lastIslandWatchdogTime = os.clock()
+                    end
+                end
+            end
+            continue
+        end
 
         -- Возврат с острова
         if pendingReturn then
@@ -595,12 +664,12 @@ task.spawn(function()
             hrp = char:FindFirstChild("HumanoidRootPart")
         end
 
-        -- Watchdog
+        -- Общий watchdog (вне острова)
         if hrp and not islandModeActive then
             local currentPos = hrp.Position
             if lastWatchdogPos and (currentPos - lastWatchdogPos).Magnitude < 10 then
                 if os.clock() - lastWatchdogTime > 45 and not isReseating and not moving then
-                    warn("[WATCHDOG] Персонаж завис! Принудительный возврат к лодке.")
+                    warn("[WATCHDOG] Зависание в воздухе/море! Принудительный возврат к лодке.")
                     stopMove()
                     stopMagnetBodyPos()
                     pendingReturn = true
@@ -633,69 +702,56 @@ task.spawn(function()
     end
 end)
 
--- ========== 7. ФРУКТЫ (DISCORD + StoreFruit) ==========
-local commF = rs and rs:FindFirstChild("Remotes") and rs.Remotes:FindFirstChild("CommF_")
-local processedFruits = {}
+-- ========== 7. ФРУКТЫ – ТОЛЬКО ОТПРАВКА В DISCORD ==========
+local sentFruits = {}
 
 local function sendDiscordFruit(name)
-    local msg = { content = player.Name .. " получил '" .. name .. "'!", username = "Инвентарь" }
+    local msg = {
+        content = playerName .. " получил '" .. name .. "'!",
+        username = "Инвентарь"
+    }
+    local body = HttpService:JSONEncode(msg)
     pcall(function()
         HttpService:RequestAsync({
             Url = DISCORD_WEBHOOK,
             Method = "POST",
             Headers = {["Content-Type"] = "application/json"},
-            Body = HttpService:JSONEncode(msg)
+            Body = body
         })
     end)
+    print("[DISCORD] Отправлено: " .. name)
 end
 
-local function sellFruit(tool)
-    local fullName = tool.Name
-    if processedFruits[fullName] then return end
-    processedFruits[fullName] = true
-
-    local storeName = fullName:gsub(" Fruit", ""):gsub(" ", "-")
-    task.wait(3)
-    if tool.Parent ~= player.Character then
-        tool.Parent = player.Character
-        task.wait(3)
-    end
-
-    if tool.Parent ~= player.Character then
-        processedFruits[fullName] = nil
-        return
-    end
-
-    local args = { "StoreFruit", storeName, tool }
-    pcall(function() commF:InvokeServer(unpack(args)) end)
-    processedFruits[fullName] = nil
-end
-
-local function onToolAdded(tool)
+local function onFruitAdded(tool)
     if tool:IsA("Tool") and tool.Name:find("Fruit") then
-        task.wait(3)
-        sellFruit(tool)
+        task.wait(0.5)
+        if not sentFruits[tool.Name] then
+            sentFruits[tool.Name] = true
+            sendDiscordFruit(tool.Name)
+        end
     end
 end
 
-local backpack = player:WaitForChild("Backpack")
-backpack.ChildAdded:Connect(onToolAdded)
-
-local function onCharAdded(char)
-    char.ChildAdded:Connect(onToolAdded)
-end
-if player.Character then onCharAdded(player.Character) end
-player.CharacterAdded:Connect(onCharAdded)
-
-task.wait(3)
-for _, tool in ipairs(backpack:GetChildren()) do
-    if tool:IsA("Tool") and tool.Name:find("Fruit") then sellFruit(tool) break end
-end
-if player.Character then
-    for _, tool in ipairs(player.Character:GetChildren()) do
-        if tool:IsA("Tool") and tool.Name:find("Fruit") then sellFruit(tool) break end
+player.Backpack.ChildAdded:Connect(onFruitAdded)
+player.CharacterAdded:Connect(function(char)
+    char.ChildAdded:Connect(onFruitAdded)
+    for _, tool in ipairs(char:GetChildren()) do
+        onFruitAdded(tool)
     end
-end
+end)
+
+-- Сканируем фрукты, которые уже есть при запуске
+task.spawn(function()
+    task.wait(3)
+    for _, tool in ipairs(player.Backpack:GetChildren()) do
+        onFruitAdded(tool)
+    end
+    if player.Character then
+        for _, tool in ipairs(player.Character:GetChildren()) do
+            onFruitAdded(tool)
+        end
+    end
+end)
 
 -- ========== 8. АНТИ-IDLE ==========
 task.spawn(function()
@@ -722,4 +778,5 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт версии 9.11 запущен. Шаг 10, детектор пробуксовки, watchdog 45 сек.")
+print("===== СКРИПТ 9.13 ЗАПУЩЕН =====")
+print("F1 – мгновенный отчёт, [STATE] каждые 5 сек. Фрукты – только Discord.")
