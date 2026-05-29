@@ -1,6 +1,7 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.10) =====
--- Добавлен watchdog: если персонаж завис в воздухе, принудительный возврат в лодку.
--- Таймауты яиц: 30 сек на яйцо, 2 мин общая активация.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.11) =====
+-- Убран быстрый режим (STEP=50), восстановлены безопасные шаг 10, задержка 0.02.
+-- Добавлен детектор пробуксовки в goTo (3 сек без прогресса -> выход).
+-- Watchdog в основном цикле.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -24,13 +25,19 @@ task.spawn(function()
     end
 end)
 
--- ========== 1. УЛУЧШЕННЫЙ ДВИЖОК ==========
-local function goTo(targetPos, noStuckDetection)
+-- ========== 1. БЕЗОПАСНЫЙ ДВИЖОК С ДЕТЕКТОРОМ ПРОБУКСОВКИ ==========
+local STEP = 10
+local DELAY = 0.02
+local STUCK_TIMEOUT = 3       -- секунд без прогресса
+local MIN_PROGRESS = 30        -- студий за STUCK_TIMEOUT
+
+local function goTo(targetPos)
     local char = player.Character
     if not char then return false end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChild("Humanoid")
     if not hrp or not hum then return false end
+    -- очистка физики
     for _, v in ipairs(char:GetDescendants()) do
         if v:IsA("BodyVelocity") or v:IsA("BodyPosition") or v:IsA("BodyGyro") then
             v:Destroy()
@@ -39,26 +46,16 @@ local function goTo(targetPos, noStuckDetection)
 
     local startPos = hrp.Position
     local totalDist = (startPos - targetPos).Magnitude
-
-    local STEP, DELAY
-    if totalDist > 1000 then
-        STEP = 50
-        DELAY = 0.005
-    else
-        STEP = 10
-        DELAY = 0.02
-    end
-
     hum.PlatformStand = true
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Velocity = Vector3.new(0, 0, 0)
     bv.Parent = hrp
 
-    local lastDist = totalDist
-    local stuckTimer = 0
-    local startTime = os.clock()
-    local timeout = 60
+    local lastProgressTime = os.clock()
+    local lastProgressDist = totalDist
+    local globalStart = os.clock()
+    local globalTimeout = 60
 
     while true do
         char = player.Character
@@ -69,10 +66,24 @@ local function goTo(targetPos, noStuckDetection)
 
         local currentPos = hrp.Position
         local dist = (currentPos - targetPos).Magnitude
-        if dist < 1 then break end
+        if dist < 1 then
+            -- успешно
+            break
+        end
 
-        if os.clock() - startTime > timeout then
-            warn("[GO-TO] Таймаут, выход из цикла")
+        -- глобальный таймаут
+        if os.clock() - globalStart > globalTimeout then
+            warn("[GO-TO] Глобальный таймаут, выход")
+            break
+        end
+
+        -- проверка пробуксовки: если за STUCK_TIMEOUT продвинулись меньше MIN_PROGRESS
+        if dist < lastProgressDist - MIN_PROGRESS then
+            -- прогресс есть, сбрасываем
+            lastProgressTime = os.clock()
+            lastProgressDist = dist
+        elseif os.clock() - lastProgressTime > STUCK_TIMEOUT then
+            warn("[GO-TO] Пробуксовка, дистанция почти не уменьшается, выходим")
             break
         end
 
@@ -82,19 +93,6 @@ local function goTo(targetPos, noStuckDetection)
         newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z)
 
         hrp.CFrame = CFrame.new(newPos)
-
-        if not noStuckDetection then
-            if dist >= lastDist - 0.1 then
-                stuckTimer = stuckTimer + DELAY
-                if stuckTimer >= 3 then
-                    hrp.CFrame = hrp.CFrame + Vector3.new(0, 5, 0)
-                    stuckTimer = 0
-                end
-            else
-                stuckTimer = 0
-                lastDist = dist
-            end
-        end
         task.wait(DELAY)
     end
 
@@ -103,20 +101,24 @@ local function goTo(targetPos, noStuckDetection)
         hum.PlatformStand = false
     end
     if bv then bv:Destroy() end
-    return true
+    return (char and hrp and ((hrp.Position - targetPos).Magnitude < 1))
 end
 
-local function safeGoTo(targetPos, noStuck)
+local function safeGoTo(targetPos)
     for attempt = 1, 5 do
         local char = player.Character
         if not char or not char:FindFirstChild("HumanoidRootPart") then
             task.wait(1)
             continue
         end
-        local success = pcall(goTo, targetPos, noStuck)
-        if success then return true end
+        local success = pcall(goTo, targetPos)
+        if success then
+            return true
+        end
+        warn("[SafeGoTo] Попытка " .. attempt .. " провалена, повтор через 2 с")
         task.wait(2)
     end
+    warn("[SafeGoTo] Не достигли цели после 5 попыток")
     return false
 end
 
@@ -168,7 +170,7 @@ end
 
 local function buyBoatAfterMove()
     for attempt = 1, 3 do
-        safeGoTo(BOAT_BUY_POS, true)
+        safeGoTo(BOAT_BUY_POS)
         local char = player.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         if hrp and (hrp.Position - BOAT_BUY_POS).Magnitude <= 5 then
@@ -336,7 +338,7 @@ local function stopMagnetBodyPos()
     if magnetBodyPos then magnetBodyPos:Destroy(); magnetBodyPos = nil end
 end
 
--- ========== 5. ОСТРОВ (с таймаутами) ==========
+-- ========== 5. ОСТРОВ (с таймаутами яиц) ==========
 local islandModeActive = false
 local waitingForDespawn = false
 local pendingReturn = false
@@ -382,7 +384,7 @@ local function activateEgg(eggModel)
     local eggPart = eggModel:FindFirstChild("EggCrust") or eggModel:FindFirstChildWhichIsA("BasePart")
     if not eggPart then return false end
     local targetPos = eggPart.Position + Vector3.new(0, 4.5, 0)
-    safeGoTo(targetPos, false)
+    safeGoTo(targetPos)
 
     local char = player.Character
     if char then
@@ -430,7 +432,7 @@ task.spawn(function()
             end
 
             local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
-            safeGoTo(target, true)
+            safeGoTo(target)   -- стандартный goTo, без быстрого режима
 
             local waitStart = os.clock()
             local eggsList = {}
@@ -593,7 +595,7 @@ task.spawn(function()
             hrp = char:FindFirstChild("HumanoidRootPart")
         end
 
-        -- Watchdog: если персонаж не двигается 45 секунд и не на острове
+        -- Watchdog
         if hrp and not islandModeActive then
             local currentPos = hrp.Position
             if lastWatchdogPos and (currentPos - lastWatchdogPos).Magnitude < 10 then
@@ -602,7 +604,6 @@ task.spawn(function()
                     stopMove()
                     stopMagnetBodyPos()
                     pendingReturn = true
-                    -- сбросим таймер, чтобы не спамить
                     lastWatchdogTime = os.clock()
                 end
             else
@@ -721,4 +722,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт версии 9.10 запущен. Watchdog активен (45 сек зависания -> возврат в лодку).")
+print("Скрипт версии 9.11 запущен. Шаг 10, детектор пробуксовки, watchdog 45 сек.")
