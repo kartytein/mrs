@@ -1,7 +1,7 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.17) =====
--- Добавлено: максимум 10 минут на острове, после чего принудительный возврат в лодку.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.18) =====
+-- Исправлен вывод [STATE] – теперь читаемая строка.
 -- Движок goTo без таймаутов (всегда достигает цели).
--- Диагностика: [STATE] каждые 5 сек в консоль.
+-- Максимум 10 минут на острове, после чего возврат в лодку.
 -- Фрукты: надёжная отправка в Discord.
 
 local player = game.Players.LocalPlayer
@@ -59,7 +59,6 @@ local function goTo(targetPos)
         local dist = (currentPos - targetPos).Magnitude
         if dist < 1 then break end
 
-        -- Если персонаж провалился в воду (Y сильно ниже цели) – сначала поднимаем
         if currentPos.Y < targetPos.Y - 10 then
             hrp.CFrame = CFrame.new(currentPos.X, targetPos.Y, currentPos.Z)
             currentPos = hrp.Position
@@ -405,13 +404,12 @@ task.spawn(function()
                 if h then h.PlatformStand = true end
             end
 
-            local islandStart = os.clock()   -- запомнили время захода на остров
+            local islandStart = os.clock()
             local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
             safeGoTo(target)
 
             local waitStart = os.clock()
             local eggsList = {}
-            -- ждём яйца, но не дольше 10 минут от захода на остров
             while os.clock() - islandStart < 600 do
                 eggsList = getAllEggs()
                 if #eggsList > 0 then break end
@@ -424,7 +422,6 @@ task.spawn(function()
                 pendingReturn = true
             else
                 local activationStart = os.clock()
-                -- активация яиц, пока остров существует, но не дольше 2 минут и не дольше 10 минут от входа
                 while islandModeActive and findIsland() do
                     local currentEggs = getAllEggs()
                     if #currentEggs == 0 then break end
@@ -519,24 +516,28 @@ end)
 local lastWatchdogPos = nil
 local lastWatchdogTime = os.clock()
 
--- Вывод состояния каждые 5 секунд
+-- Вывод состояния каждые 5 секунд (читаемая строка)
 task.spawn(function()
     while true do
         task.wait(5)
         local char = player.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local stateInfo = {
-            time = math.floor(os.clock()),
-            islandActive = islandModeActive,
-            waitDespawn = waitingForDespawn,
-            pendingReturn = pendingReturn,
-            boatExists = boat and boat.Parent and true or false,
-            moving = moving,
-            reseating = isReseating,
-            pos = hrp and string.format("%.0f, %.0f, %.0f", hrp.Position.X, hrp.Position.Y, hrp.Position.Z),
-            islandPresent = findIsland() and true or false
-        }
-        print("[STATE]", stateInfo)
+        local posStr = "нет"
+        if hrp then
+            posStr = string.format("%.0f, %.0f, %.0f", hrp.Position.X, hrp.Position.Y, hrp.Position.Z)
+        end
+        print(string.format(
+            "[STATE] time=%d | islandActive=%s | waitDespawn=%s | pendReturn=%s | boat=%s | moving=%s | reseating=%s | pos=%s | islandPresent=%s",
+            math.floor(os.clock()),
+            tostring(islandModeActive),
+            tostring(waitingForDespawn),
+            tostring(pendingReturn),
+            tostring(boat and boat.Parent),
+            tostring(moving),
+            tostring(isReseating),
+            posStr,
+            tostring(findIsland() ~= nil)
+        ))
     end
 end)
 
@@ -720,5 +721,5 @@ task.spawn(function()
     end
 end)
 
-print("===== СКРИПТ 9.17 ЗАПУЩЕН =====")
-print("Максимум 10 минут на острове. Движок всегда доходит до цели.")
+print("===== СКРИПТ 9.18 ЗАПУЩЕН =====")
+print("Читаемый [STATE] каждые 5 сек. Макс. 10 мин. на острове.")
