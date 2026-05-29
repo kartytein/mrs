@@ -114,26 +114,6 @@ local function selectPirates()
     print("Команда Pirates выбрана")
 end
 
--- ========== ЗАГРУЗКА ХАДА ==========
-local function loadHud()
-    loadstring(game:HttpGet("https://raw.githubusercontent.com/Huylovemy/Bearhudz/refs/heads/main/Bearhud.lua"))()
-end
-
--- ========== АВТОРЕЛОГ ПРИ РОСТЕ БЕЛИ ==========
-local function setupAutoRelog()
-    local beli = player:WaitForChild("Data", 10):WaitForChild("Beli", 10)
-    local timer = nil
-    local function resetTimer()
-        if timer then task.cancel(timer) end
-        timer = task.spawn(function()
-            task.wait(30)
-            TeleportService:Teleport(game.PlaceId, player)
-        end)
-    end
-    beli:GetPropertyChangedSignal("Value"):Connect(resetTimer)
-    resetTimer()
-end
-
 -- ========== ЗАПУСК ==========
 if player.Character then
     task.wait(2)
