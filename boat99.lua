@@ -1,6 +1,6 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.5) =====
--- Новый goTo ТОЛЬКО для: точка покупки, остров, яйца.
--- ВСЁ ОСТАЛЬНОЕ (посадка, магнит, движение лодки) – строго как в 8.3 (moveStep и старые функции).
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.7-DEBUG) =====
+-- Добавлена диагностика: каждый шаг логируется в консоль.
+-- Ищите сообщения [DEBUG], [ERROR], [STATE] – они покажут, где скрипт застревает.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -24,16 +24,38 @@ task.spawn(function()
     end
 end)
 
--- ========== 1. НОВЫЙ ДВИЖОК ДЛЯ ПОЛЁТОВ (goTo / safeGoTo) ==========
-local STEP = 10
-local DELAY = 0.02
-
-local function goTo(targetPos)
+-- ========== 1. ОЧИСТКА ФИЗИКИ ==========
+local function clearCharacterPhysics()
     local char = player.Character
-    if not char then return false end
+    if not char then return end
+    for _, v in ipairs(char:GetDescendants()) do
+        if v:IsA("BodyVelocity") or v:IsA("BodyPosition") or v:IsA("BodyGyro") then
+            v:Destroy()
+        end
+    end
+end
+
+-- ========== 2. ДВИЖОК ПЕРЕМЕЩЕНИЯ (с логом) ==========
+local function goTo(targetPos, noStuckDetection)
+    local STEP = 10
+    local DELAY = 0.02
+    clearCharacterPhysics()
+    local char = player.Character
+    if not char then
+        warn("[DEBUG] goTo: нет персонажа")
+        return false
+    end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChild("Humanoid")
-    if not hrp or not hum then return false end
+    if not hrp or not hum then
+        warn("[DEBUG] goTo: нет HRP или Humanoid")
+        return false
+    end
+
+    print(string.format("[DEBUG] goTo старт: (%.0f, %.0f, %.0f) -> (%.0f, %.0f, %.0f), noStuck=%s",
+        hrp.Position.X, hrp.Position.Y, hrp.Position.Z,
+        targetPos.X, targetPos.Y, targetPos.Z,
+        tostring(noStuckDetection)))
 
     hum.PlatformStand = true
     local bv = Instance.new("BodyVelocity")
@@ -43,6 +65,7 @@ local function goTo(targetPos)
 
     local lastDist = (hrp.Position - targetPos).Magnitude
     local stuckTimer = 0
+    local steps = 0
 
     while true do
         local currentPos = hrp.Position
@@ -55,16 +78,20 @@ local function goTo(targetPos)
         newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z)
 
         hrp.CFrame = CFrame.new(newPos)
+        steps = steps + 1
 
-        if dist >= lastDist - 0.1 then
-            stuckTimer = stuckTimer + DELAY
-            if stuckTimer >= 3 then
-                hrp.CFrame = hrp.CFrame + Vector3.new(0, 5, 0)
+        if not noStuckDetection then
+            if dist >= lastDist - 0.1 then
+                stuckTimer = stuckTimer + DELAY
+                if stuckTimer >= 3 then
+                    warn(string.format("[DEBUG] goTo: зависание! Рывок вверх. Шаг %d, dist=%.0f", steps, dist))
+                    hrp.CFrame = hrp.CFrame + Vector3.new(0, 5, 0)
+                    stuckTimer = 0
+                end
+            else
                 stuckTimer = 0
+                lastDist = dist
             end
-        else
-            stuckTimer = 0
-            lastDist = dist
         end
 
         task.wait(DELAY)
@@ -73,33 +100,44 @@ local function goTo(targetPos)
     hrp.CFrame = CFrame.new(targetPos)
     hum.PlatformStand = false
     if bv then bv:Destroy() end
+    print(string.format("[DEBUG] goTo финиш: шагов=%d, конечная позиция (%.0f, %.0f, %.0f)", steps, hrp.Position.X, hrp.Position.Y, hrp.Position.Z))
     return true
 end
 
-local function safeGoTo(targetPos)
+local function safeGoTo(targetPos, noStuck)
     for attempt = 1, 10 do
         local char = player.Character
         if not char or not char:FindFirstChild("HumanoidRootPart") then
+            warn("[DEBUG] safeGoTo: персонаж не готов, ожидание 1с")
             task.wait(1)
             continue
         end
-        local success = pcall(goTo, targetPos)
+        local success = pcall(goTo, targetPos, noStuck)
         if success then
             return true
         end
+        warn("[DEBUG] safeGoTo: попытка " .. attempt .. " провалена, ожидание 2с")
         task.wait(2)
     end
-    warn("[SafeGoTo] Не удалось достичь цели после 10 попыток")
+    warn("[DEBUG] safeGoTo: не удалось достичь цели после 10 попыток")
     return false
 end
 
--- ========== 2. СТАРЫЙ moveStep (только для посадки в лодку) ==========
+-- ========== 3. СТАРЫЙ moveStep (посадка в лодку) ==========
 local function moveStep(targetPos, speed, keepY)
+    clearCharacterPhysics()
     local char = player.Character
-    if not char then return false end
+    if not char then
+        warn("[DEBUG] moveStep: нет персонажа")
+        return false
+    end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChild("Humanoid")
-    if not hrp or not hum then return false end
+    if not hrp or not hum then
+        warn("[DEBUG] moveStep: нет HRP или Humanoid")
+        return false
+    end
+    print(string.format("[DEBUG] moveStep старт: к (%.0f, %.0f, %.0f)", targetPos.X, targetPos.Y, targetPos.Z))
     local oldPlatform = hum.PlatformStand
     hum.PlatformStand = true
     local step = 0.02
@@ -119,10 +157,11 @@ local function moveStep(targetPos, speed, keepY)
     end
     hrp.CFrame = CFrame.new(targetPos)
     hum.PlatformStand = oldPlatform
+    print("[DEBUG] moveStep финиш")
     return true
 end
 
--- ========== 3. ПОКУПКА ЛОДКИ (goTo до точки, потом вызов) ==========
+-- ========== 4. ПОКУПКА ЛОДКИ ==========
 local BOAT_BUY_POS = Vector3.new(-16917.0, 9.1, 447.0)
 local BUY_DISTANCE_THRESHOLD = 5
 
@@ -132,29 +171,30 @@ local function buyBoatOnly()
     local commF = rs and rs:FindFirstChild("Remotes") and rs.Remotes:FindFirstChild("CommF_")
     if commF then
         pcall(function() commF:InvokeServer(unpack(args)) end)
-        print("[ПОКУПКА] Лодка заказана")
+        print("[DEBUG] Покупка лодки: вызов отправлен")
     else
-        warn("[ПОКУПКА] CommF_ не найден")
+        warn("[DEBUG] CommF_ не найден")
     end
 end
 
 local function buyBoatAfterMove()
+    print("[DEBUG] buyBoatAfterMove: начинаем перемещение к точке покупки")
     for attempt = 1, 3 do
-        safeGoTo(BOAT_BUY_POS)   -- новый движок
+        safeGoTo(BOAT_BUY_POS, true)
         local char = player.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp and (hrp.Position - BOAT_BUY_POS).Magnitude <= BUY_DISTANCE_THRESHOLD then
+        local dist = hrp and (hrp.Position - BOAT_BUY_POS).Magnitude or -1
+        print(string.format("[DEBUG] buyBoatAfterMove: попытка %d, расстояние до точки: %.1f", attempt, dist))
+        if hrp and dist <= BUY_DISTANCE_THRESHOLD then
             task.wait(0.5)
             buyBoatOnly()
             return true
         end
-        warn(string.format("[ПОКУПКА] Не достигли точки покупки (попытка %d), расстояние: %.1f", attempt, hrp and (hrp.Position - BOAT_BUY_POS).Magnitude or -1))
     end
-    warn("[ПОКУПКА] Не удалось добраться до точки покупки, лодка не куплена")
+    warn("[DEBUG] Не удалось добраться до точки покупки, лодка не куплена")
     return false
 end
 
--- ========== 4. ПОСАДКА В ЛОДКУ (СТАРАЯ, с moveStep) ==========
 local function forceSitOnSeat(targetSeat, maxAttempts)
     maxAttempts = maxAttempts or 3
     for attempt = 1, maxAttempts do
@@ -164,21 +204,22 @@ local function forceSitOnSeat(targetSeat, maxAttempts)
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if not hum or not hrp then return false end
         local targetPos = targetSeat.Position + Vector3.new(0, 2.5, 0)
-        moveStep(targetPos, 300, true)   -- старый способ
+        print(string.format("[DEBUG] forceSitOnSeat: попытка %d, цель (%.0f, %.0f, %.0f)", attempt, targetPos.X, targetPos.Y, targetPos.Z))
+        moveStep(targetPos, 300, true)
         hum.Sit = true
         task.wait(0.5)
         if hum.Sit and hum.SeatPart == targetSeat then
-            print("[ПОСАДКА] Успешно сел на целевое сиденье")
+            print("[DEBUG] forceSitOnSeat: успешно сел")
             return true
         else
-            print("[ПОСАДКА] Попытка " .. attempt .. ": сел не на то сиденье, выпрыгиваем")
+            print("[DEBUG] forceSitOnSeat: сел не на то сиденье, выпрыгиваем")
             hum.Sit = false
             local jump = hum:FindFirstChild("Jump")
             if jump then pcall(function() jump:Fire() end) end
             task.wait(0.5)
         end
     end
-    warn("[ПОСАДКА] Не удалось сесть на целевое сиденье")
+    warn("[DEBUG] forceSitOnSeat: не удалось сесть после всех попыток")
     return false
 end
 
@@ -190,7 +231,7 @@ local function resetCharacter()
     end
     player.CharacterAdded:Wait()
     task.wait(1)
-    print("[РЕСЕТ] Персонаж возрождён")
+    print("[DEBUG] Персонаж возрождён")
 end
 
 local function findMyBoat()
@@ -206,7 +247,7 @@ local function findMyBoat()
     return nil
 end
 
--- ========== 5. ДВИЖЕНИЕ ЛОДКИ (СТАРОЕ) ==========
+-- ========== 5. ДВИЖЕНИЕ ЛОДКИ ==========
 local boat = nil
 local seat = nil
 local root = nil
@@ -245,11 +286,13 @@ local function stopMove()
     moving = false
     if moveThread then pcall(task.cancel, moveThread); moveThread = nil end
     if bv then bv:Destroy(); bv = nil end
+    print("[DEBUG] Движение лодки остановлено")
 end
 
 local function startMove()
     if moving then return end
     moving = true
+    print("[DEBUG] Запуск движения лодки")
     moveThread = task.spawn(function()
         local ch = player.Character
         if not ch then moving = false; return end
@@ -270,6 +313,7 @@ local function startMove()
         bv.Velocity = Vector3.new(sx, SPEED_Y, SPEED_Z)
         while moving do
             if not (hum and hum.Sit and hum.SeatPart == seat) then
+                print("[DEBUG] Лодка: персонаж не сидит на нужном сиденье, остановка")
                 stopMove()
                 break
             end
@@ -295,7 +339,7 @@ local function startMove()
     end)
 end
 
--- ========== 6. МАГНИТ (СТАРЫЙ) ==========
+-- ========== 6. МАГНИТ ==========
 local magnetBodyPos = nil
 local magnetBodyPosActive = false
 
@@ -346,7 +390,7 @@ local function fastMagnet()
     end
 end
 
--- ========== 7. ОСТРОВ (СТАРАЯ ЛОГИКА, НОВЫЙ goTo) ==========
+-- ========== 7. ОСТРОВ ==========
 local islandModeActive = false
 local waitingForDespawn = false
 local pendingReturn = false
@@ -367,7 +411,6 @@ local function pressE()
     task.wait(1.5)
     vim:SendKeyEvent(false, "E", false, game)
     task.wait(0.3)
-    print("[ЯЙЦО] Клавиша E зажата")
 end
 
 local function getAllEggs()
@@ -395,15 +438,14 @@ local function activateEgg(eggModel)
     if not eggPart then return false end
 
     local targetPos = eggPart.Position + Vector3.new(0, 4.5, 0)
-    safeGoTo(targetPos)   -- новый движок
+    print(string.format("[DEBUG] Активация яйца: летим к (%.0f, %.0f, %.0f)", targetPos.X, targetPos.Y, targetPos.Z))
+    safeGoTo(targetPos, false)
 
     local char = player.Character
     if char then
         local hrp = char:FindFirstChild("HumanoidRootPart")
-        if hrp and math.abs(hrp.Position.Y - targetPos.Y) > 0.5 then
-            hrp.CFrame = CFrame.new(hrp.Position.X, targetPos.Y, hrp.Position.Z)
-        end
         if hrp then
+            hrp.CFrame = CFrame.new(hrp.Position.X, targetPos.Y, hrp.Position.Z)
             local lookAt = (eggPart.Position - hrp.Position).Unit
             hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookAt)
         end
@@ -414,22 +456,28 @@ local function activateEgg(eggModel)
         pressE()
         task.wait(1)
     end
+    print("[DEBUG] Яйцо активировано (исчезло)")
     return true
 end
 
+-- Основной поток острова с диагностикой
 task.spawn(function()
     while true do
         task.wait(1)
         local island = findIsland()
         local present = island ~= nil
+        -- Выводим состояние флагов при каждом цикле
+        print(string.format("[STATE] Остров: present=%s, islandModeActive=%s, waitingForDespawn=%s, pendingReturn=%s, boat=%s, moving=%s",
+            tostring(present), tostring(islandModeActive), tostring(waitingForDespawn), tostring(pendingReturn),
+            boat and "есть" or "нет", tostring(moving)))
 
         if waitingForDespawn and not present then
             waitingForDespawn = false
-            print("[ОСТРОВ] Остров исчез, готов к новой активации")
+            print("[DEBUG] Остров исчез, сброс waitingForDespawn")
         end
 
         if present and not islandModeActive and not waitingForDespawn then
-            print("[ОСТРОВ] Обнаружен, входим в режим")
+            print("[DEBUG] Обнаружен новый остров, активируем islandMode")
             islandModeActive = true
 
             stopMove()
@@ -438,15 +486,20 @@ task.spawn(function()
             local char = player.Character
             if char then
                 local h = char:FindFirstChild("Humanoid")
-                if h and h.Sit then h.Sit = false end
+                if h and h.Sit then
+                    h.Sit = false
+                    print("[DEBUG] Вышли из сиденья лодки")
+                end
+                if h then h.PlatformStand = true end
             end
 
             local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
-            safeGoTo(target)   -- новый движок
+            print(string.format("[DEBUG] Летим к острову: (%.0f, %.0f, %.0f)", target.X, target.Y, target.Z))
+            safeGoTo(target, true)
 
             local startTime = os.clock()
             local eggsList = {}
-            print("[ОСТРОВ] Ожидание появления яиц...")
+            print("[DEBUG] Ожидание яиц (до 10 минут)")
             while os.clock() - startTime < 600 do
                 eggsList = getAllEggs()
                 if #eggsList > 0 then break end
@@ -454,12 +507,12 @@ task.spawn(function()
             end
 
             if #eggsList == 0 then
-                print("[ОСТРОВ] Яйца не появились за 10 минут, выход")
+                print("[DEBUG] Яйца не появились, выходим с острова")
                 islandModeActive = false
                 waitingForDespawn = true
                 pendingReturn = true
             else
-                print("[ОСТРОВ] Найдено яиц:", #eggsList)
+                print("[DEBUG] Найдено яиц: " .. #eggsList .. ", начинаем активацию")
                 local activatedCount = 0
                 while #getAllEggs() > 0 do
                     local currentEggs = getAllEggs()
@@ -478,7 +531,7 @@ task.spawn(function()
                     end
                     local eggToActivate = currentEggs[1]
                     if eggToActivate and eggToActivate.model and eggToActivate.model.Parent then
-                        print("[ОСТРОВ] Активация яйца", activatedCount+1)
+                        print(string.format("[DEBUG] Активация яйца #%d", activatedCount+1))
                         activateEgg(eggToActivate.model)
                         activatedCount = activatedCount + 1
                         task.wait(1)
@@ -486,16 +539,23 @@ task.spawn(function()
                         break
                     end
                 end
-                print("[ОСТРОВ] Все яйца активированы. Всего активировано:", activatedCount)
+                print("[DEBUG] Все яйца активированы, выходим")
                 islandModeActive = false
                 waitingForDespawn = true
                 pendingReturn = true
             end
+
+            local char2 = player.Character
+            if char2 then
+                local h2 = char2:FindFirstChild("Humanoid")
+                if h2 then h2.PlatformStand = false end
+            end
+            print("[DEBUG] Завершение обработки острова")
         end
     end
 end)
 
--- ========== 8. ОСНОВНОЙ ЦИКЛ (СТАРЫЙ) ==========
+-- ========== 8. ОСНОВНОЙ ЦИКЛ ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -508,7 +568,7 @@ local isBuying = false
 local function initialSetup()
     if isBuying then return end
     isBuying = true
-    print("[ИНИЦИАЛИЗАЦИЯ] Начинаем процедуру покупки лодки...")
+    print("[DEBUG] Инициализация: покупка лодки и посадка")
     if buyBoatAfterMove() then
         for i = 1, 30 do
             boat = findMyBoat()
@@ -526,10 +586,10 @@ local function initialSetup()
                 if nat then nat.Disabled = true end
                 forceSitOnSeat(seat, 3)
                 startMove()
-                print("[ИНИЦИАЛИЗАЦИЯ] Лодка готова, движение запущено")
+                print("[DEBUG] Инициализация завершена")
             end
         else
-            warn("[ИНИЦИАЛИЗАЦИЯ] Лодка не появилась")
+            warn("[DEBUG] Лодка не появилась")
         end
     end
     isBuying = false
@@ -545,9 +605,10 @@ task.spawn(function()
         task.wait(0.05)
         if islandModeActive then continue end
 
+        -- Возврат с острова
         if pendingReturn then
             pendingReturn = false
-            print("[ГЛАВНЫЙ] Возврат с острова")
+            print("[DEBUG] Возврат с острова: ищем лодку")
             boat = nil; seat = nil; root = nil
             boat = findMyBoat()
             if boat then
@@ -564,20 +625,22 @@ task.spawn(function()
                         local h = char:FindFirstChild("Humanoid")
                         if h and forceSitOnSeat(seat, 3) then
                             stopMove()
-                            moving = false
                             if bv then bv:Destroy() bv = nil end
                             startMove()
-                            print("[ГЛАВНЫЙ] Посадка после острова выполнена")
+                            print("[DEBUG] Возврат: сели в лодку и поехали")
+                        else
+                            print("[DEBUG] Возврат: не удалось сесть")
                         end
                     end
                 end
             else
-                print("[ГЛАВНЫЙ] Лодка не найдена после острова")
+                print("[DEBUG] Лодка не найдена при возврате")
             end
         end
 
+        -- Проверка пропажи лодки
         if boat and not boat.Parent then
-            print("[ГЛАВНЫЙ] Лодка исчезла, выполняем ресет")
+            print("[DEBUG] Лодка исчезла, ресет")
             boat = nil; seat = nil; root = nil
             stopMove()
             stopMagnetBodyPos()
@@ -585,6 +648,7 @@ task.spawn(function()
             if not isBuying then
                 task.spawn(function()
                     isBuying = true
+                    print("[DEBUG] Пересоздание лодки после пропажи")
                     if buyBoatAfterMove() then
                         for i = 1, 30 do
                             boat = findMyBoat()
@@ -602,7 +666,6 @@ task.spawn(function()
                                 if nat then nat.Disabled = true end
                                 forceSitOnSeat(seat, 3)
                                 startMove()
-                                print("[ГЛАВНЫЙ] Лодка восстановлена после ресета")
                             end
                         end
                     end
@@ -611,7 +674,9 @@ task.spawn(function()
             end
         end
 
+        -- Если лодки нет и не в процессе покупки
         if (not boat or not boat.Parent) and not isBuying then
+            print("[DEBUG] Лодка отсутствует, запускаем восстановление")
             task.spawn(function()
                 isBuying = true
                 if buyBoatAfterMove() then
@@ -631,7 +696,6 @@ task.spawn(function()
                             if nat then nat.Disabled = true end
                             forceSitOnSeat(seat, 3)
                             startMove()
-                            print("[ГЛАВНЫЙ] Лодка найдена и посажены")
                         end
                     end
                 end
@@ -648,12 +712,16 @@ task.spawn(function()
         if hum and hum.Sit then
             if hum.SeatPart == seat then
                 if not moving then
+                    print("[DEBUG] Сидим в лодке, но движение не запущено – запускаем")
                     startMove()
                 end
             else
                 if not isReseating then
                     isReseating = true
-                    if seat then forceSitOnSeat(seat, 3) end
+                    if seat then
+                        print("[DEBUG] Сидим не на том сиденье, пересаживаемся")
+                        forceSitOnSeat(seat, 3)
+                    end
                     isReseating = false
                 end
                 if moving then stopMove() end
@@ -665,7 +733,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 9. ФРУКТЫ (DISCORD + StoreFruit) ==========
+-- ========== 9. ФРУКТЫ ==========
 local commF = rs and rs:FindFirstChild("Remotes") and rs.Remotes:FindFirstChild("CommF_")
 local processedFruits = {}
 
@@ -778,4 +846,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт версии 9.5 запущен. Новый goTo для полётов, всё остальное – старая добрая классика.")
+print("===== СКРИПТ 9.7-DEBUG ЗАПУЩЕН =====")
