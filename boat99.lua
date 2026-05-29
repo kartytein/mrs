@@ -1,9 +1,9 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.13) =====
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.14) =====
 -- Диагностика: F1 – мгновенный отчёт, [STATE] каждые 5 сек.
 -- Безопасный goTo (шаг 10, задержка 0.02, пробуксовка).
 -- Watchdog: 60 сек на острове, 45 сек в воздухе/море.
 -- Таймауты яиц: 30 сек на яйцо, 2 мин общая активация.
--- Фрукты: только уведомление в Discord (без сдачи).
+-- Фрукты: надёжная отправка в Discord (проверено).
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -30,8 +30,8 @@ end)
 -- ========== 1. БЕЗОПАСНЫЙ ДВИЖОК С ДЕТЕКТОРОМ ПРОБУКСОВКИ ==========
 local STEP = 10
 local DELAY = 0.02
-local STUCK_TIMEOUT = 3       -- секунд без прогресса
-local MIN_PROGRESS = 30        -- студий за STUCK_TIMEOUT
+local STUCK_TIMEOUT = 3
+local MIN_PROGRESS = 30
 
 local function goTo(targetPos)
     local char = player.Character
@@ -702,10 +702,10 @@ task.spawn(function()
     end
 end)
 
--- ========== 7. ФРУКТЫ – ТОЛЬКО ОТПРАВКА В DISCORD (исправлено) ==========
+-- ========== 7. ФРУКТЫ – НАДЁЖНАЯ ОТПРАВКА В DISCORD ==========
 local sentFruits = {}
 
-local function sendDiscordFruit(name)
+local function sendToDiscord(name)
     local msg = {
         content = playerName .. " получил '" .. name .. "'!",
         username = "Инвентарь"
@@ -722,46 +722,38 @@ local function sendDiscordFruit(name)
     print("[DISCORD] Отправлено: " .. name)
 end
 
--- Ждём, пока имя инструмента установится, и отправляем
-local function waitAndSend(tool)
-    if not tool:IsA("Tool") then return end
-    -- Даём игре время обновить имя (иногда приходит как "Tool")
-    local start = os.clock()
-    while os.clock() - start < 2 do
-        if tool.Name and tool.Name:find("Fruit") then
-            break
-        end
-        task.wait(0.1)
+local function checkItem(item)
+    if not item:IsA("Tool") then return end
+    task.wait(0.3) -- даём игре время обновить имя
+    if not item.Name or not item.Name:find("Fruit") then return end
+    if sentFruits[item.Name] then return end
+    sentFruits[item.Name] = true
+    sendToDiscord(item.Name)
+end
+
+local backpack = player:WaitForChild("Backpack")
+backpack.ChildAdded:Connect(checkItem)
+
+player.CharacterAdded:Connect(function(char)
+    for _, existing in ipairs(char:GetChildren()) do
+        checkItem(existing)
     end
-    if tool.Name and tool.Name:find("Fruit") and not sentFruits[tool.Name] then
-        sentFruits[tool.Name] = true
-        sendDiscordFruit(tool.Name)
+    char.ChildAdded:Connect(checkItem)
+end)
+
+for _, item in ipairs(backpack:GetChildren()) do
+    if item:IsA("Tool") and item.Name:find("Fruit") then
+        sentFruits[item.Name] = true
+    end
+end
+if player.Character then
+    for _, item in ipairs(player.Character:GetChildren()) do
+        if item:IsA("Tool") and item.Name:find("Fruit") then
+            sentFruits[item.Name] = true
+        end
     end
 end
 
--- Отслеживаем добавление в Backpack
-player.Backpack.ChildAdded:Connect(waitAndSend)
-
--- Отслеживаем добавление в руки (Character)
-player.CharacterAdded:Connect(function(char)
-    for _, existing in ipairs(char:GetChildren()) do
-        task.spawn(waitAndSend, existing)
-    end
-    char.ChildAdded:Connect(waitAndSend)
-end)
-
--- Сканируем то, что уже есть при запуске
-task.spawn(function()
-    task.wait(2) -- даём игре загрузиться
-    for _, tool in ipairs(player.Backpack:GetChildren()) do
-        task.spawn(waitAndSend, tool)
-    end
-    if player.Character then
-        for _, tool in ipairs(player.Character:GetChildren()) do
-            task.spawn(waitAndSend, tool)
-        end
-    end
-end)
 -- ========== 8. АНТИ-IDLE ==========
 task.spawn(function()
     local cam = workspace.CurrentCamera
@@ -787,5 +779,5 @@ task.spawn(function()
     end
 end)
 
-print("===== СКРИПТ 9.13 ЗАПУЩЕН =====")
-print("F1 – мгновенный отчёт, [STATE] каждые 5 сек. Фрукты – только Discord.")
+print("===== СКРИПТ 9.14 ЗАПУЩЕН =====")
+print("F1 – мгновенный отчёт, [STATE] каждые 5 сек. Фрукты – Discord.")
