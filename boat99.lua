@@ -702,57 +702,62 @@ task.spawn(function()
     end
 end)
 
--- ========== 7. ФРУКТЫ – НАДЁЖНАЯ ОТПРАВКА В DISCORD ==========
-local sentFruits = {}
+-- ========== 7. ФРУКТЫ – НАДЁЖНЫЙ ИЗОЛИРОВАННЫЙ ДЕТЕКТОР ==========
+task.spawn(function()
+    local sentFruits = {}  -- своя локальная таблица, не пересекается с другими
 
-local function sendToDiscord(name)
-    local msg = {
-        content = playerName .. " получил '" .. name .. "'!",
-        username = "Инвентарь"
-    }
-    local body = HttpService:JSONEncode(msg)
-    pcall(function()
-        HttpService:RequestAsync({
-            Url = DISCORD_WEBHOOK,
-            Method = "POST",
-            Headers = {["Content-Type"] = "application/json"},
-            Body = body
-        })
-    end)
-    print("[DISCORD] Отправлено: " .. name)
-end
-
-local function checkItem(item)
-    if not item:IsA("Tool") then return end
-    task.wait(0.3) -- даём игре время обновить имя
-    if not item.Name or not item.Name:find("Fruit") then return end
-    if sentFruits[item.Name] then return end
-    sentFruits[item.Name] = true
-    sendToDiscord(item.Name)
-end
-
-local backpack = player:WaitForChild("Backpack")
-backpack.ChildAdded:Connect(checkItem)
-
-player.CharacterAdded:Connect(function(char)
-    for _, existing in ipairs(char:GetChildren()) do
-        checkItem(existing)
+    local function sendToDiscord(name)
+        local msg = {
+            content = playerName .. " получил '" .. name .. "'!",
+            username = "Инвентарь"
+        }
+        local body = HttpService:JSONEncode(msg)
+        pcall(function()
+            HttpService:RequestAsync({
+                Url = DISCORD_WEBHOOK,
+                Method = "POST",
+                Headers = {["Content-Type"] = "application/json"},
+                Body = body
+            })
+        end)
+        print("[DISCORD] Отправлено: " .. name)
     end
-    char.ChildAdded:Connect(checkItem)
-end)
 
-for _, item in ipairs(backpack:GetChildren()) do
-    if item:IsA("Tool") and item.Name:find("Fruit") then
+    local function checkItem(item)
+        if not item:IsA("Tool") then return end
+        task.wait(0.3)  -- даём игре обновить имя
+        if not item.Name or not item.Name:find("Fruit") then return end
+        if sentFruits[item.Name] then return end
         sentFruits[item.Name] = true
+        sendToDiscord(item.Name)
     end
-end
-if player.Character then
-    for _, item in ipairs(player.Character:GetChildren()) do
+
+    -- Ждём, пока всё загрузится
+    task.wait(2)
+    local backpack = player:WaitForChild("Backpack")
+    -- Сканируем существующие
+    for _, item in ipairs(backpack:GetChildren()) do
         if item:IsA("Tool") and item.Name:find("Fruit") then
             sentFruits[item.Name] = true
         end
     end
-end
+    if player.Character then
+        for _, item in ipairs(player.Character:GetChildren()) do
+            if item:IsA("Tool") and item.Name:find("Fruit") then
+                sentFruits[item.Name] = true
+            end
+        end
+    end
+    -- Подключаем события
+    backpack.ChildAdded:Connect(checkItem)
+    player.CharacterAdded:Connect(function(char)
+        for _, existing in ipairs(char:GetChildren()) do
+            checkItem(existing)
+        end
+        char.ChildAdded:Connect(checkItem)
+    end)
+    print("[ФРУКТ] Детектор запущен")
+end)
 
 -- ========== 8. АНТИ-IDLE ==========
 task.spawn(function()
