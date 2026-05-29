@@ -1,6 +1,6 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.9) =====
--- Исправлено: таймаут 30 сек на одно яйцо, общий таймаут 2 мин на активацию.
--- Динамический шаг для дальних перелётов, контроль жизни.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.10) =====
+-- Добавлен watchdog: если персонаж завис в воздухе, принудительный возврат в лодку.
+-- Таймауты яиц: 30 сек на яйцо, 2 мин общая активация.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -491,7 +491,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ОСНОВНОЙ ЦИКЛ ==========
+-- ========== 6. ОСНОВНОЙ ЦИКЛ + WATCHDOG ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -532,11 +532,16 @@ task.spawn(function()
     initialSetup()
 end)
 
+-- Watchdog-переменные
+local lastWatchdogPos = nil
+local lastWatchdogTime = os.clock()
+
 task.spawn(function()
     while true do
         task.wait(0.05)
         if islandModeActive then continue end
 
+        -- Возврат с острова
         if pendingReturn then
             pendingReturn = false
             boat = nil; seat = nil; root = nil
@@ -563,6 +568,7 @@ task.spawn(function()
             end
         end
 
+        -- Проверка пропажи лодки
         if boat and not boat.Parent then
             boat = nil; seat = nil; root = nil
             stopMove()
@@ -585,6 +591,27 @@ task.spawn(function()
         if char then
             hum = char:FindFirstChild("Humanoid")
             hrp = char:FindFirstChild("HumanoidRootPart")
+        end
+
+        -- Watchdog: если персонаж не двигается 45 секунд и не на острове
+        if hrp and not islandModeActive then
+            local currentPos = hrp.Position
+            if lastWatchdogPos and (currentPos - lastWatchdogPos).Magnitude < 10 then
+                if os.clock() - lastWatchdogTime > 45 and not isReseating and not moving then
+                    warn("[WATCHDOG] Персонаж завис! Принудительный возврат к лодке.")
+                    stopMove()
+                    stopMagnetBodyPos()
+                    pendingReturn = true
+                    -- сбросим таймер, чтобы не спамить
+                    lastWatchdogTime = os.clock()
+                end
+            else
+                lastWatchdogPos = currentPos
+                lastWatchdogTime = os.clock()
+            end
+        else
+            lastWatchdogPos = nil
+            lastWatchdogTime = os.clock()
         end
 
         if hum and hum.Sit then
@@ -694,4 +721,4 @@ task.spawn(function()
     end
 end)
 
-print("Скрипт версии 9.9 запущен. Таймаут яйца 30 сек, общий таймаут активации 2 мин.")
+print("Скрипт версии 9.10 запущен. Watchdog активен (45 сек зависания -> возврат в лодку).")
