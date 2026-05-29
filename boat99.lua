@@ -702,7 +702,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 7. ФРУКТЫ – ТОЛЬКО ОТПРАВКА В DISCORD ==========
+-- ========== 7. ФРУКТЫ – ТОЛЬКО ОТПРАВКА В DISCORD (исправлено) ==========
 local sentFruits = {}
 
 local function sendDiscordFruit(name)
@@ -722,37 +722,46 @@ local function sendDiscordFruit(name)
     print("[DISCORD] Отправлено: " .. name)
 end
 
-local function onFruitAdded(tool)
-    if tool:IsA("Tool") and tool.Name:find("Fruit") then
-        task.wait(0.5)
-        if not sentFruits[tool.Name] then
-            sentFruits[tool.Name] = true
-            sendDiscordFruit(tool.Name)
+-- Ждём, пока имя инструмента установится, и отправляем
+local function waitAndSend(tool)
+    if not tool:IsA("Tool") then return end
+    -- Даём игре время обновить имя (иногда приходит как "Tool")
+    local start = os.clock()
+    while os.clock() - start < 2 do
+        if tool.Name and tool.Name:find("Fruit") then
+            break
         end
+        task.wait(0.1)
+    end
+    if tool.Name and tool.Name:find("Fruit") and not sentFruits[tool.Name] then
+        sentFruits[tool.Name] = true
+        sendDiscordFruit(tool.Name)
     end
 end
 
-player.Backpack.ChildAdded:Connect(onFruitAdded)
+-- Отслеживаем добавление в Backpack
+player.Backpack.ChildAdded:Connect(waitAndSend)
+
+-- Отслеживаем добавление в руки (Character)
 player.CharacterAdded:Connect(function(char)
-    char.ChildAdded:Connect(onFruitAdded)
-    for _, tool in ipairs(char:GetChildren()) do
-        onFruitAdded(tool)
+    for _, existing in ipairs(char:GetChildren()) do
+        task.spawn(waitAndSend, existing)
     end
+    char.ChildAdded:Connect(waitAndSend)
 end)
 
--- Сканируем фрукты, которые уже есть при запуске
+-- Сканируем то, что уже есть при запуске
 task.spawn(function()
-    task.wait(3)
+    task.wait(2) -- даём игре загрузиться
     for _, tool in ipairs(player.Backpack:GetChildren()) do
-        onFruitAdded(tool)
+        task.spawn(waitAndSend, tool)
     end
     if player.Character then
         for _, tool in ipairs(player.Character:GetChildren()) do
-            onFruitAdded(tool)
+            task.spawn(waitAndSend, tool)
         end
     end
 end)
-
 -- ========== 8. АНТИ-IDLE ==========
 task.spawn(function()
     local cam = workspace.CurrentCamera
