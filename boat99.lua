@@ -1,6 +1,6 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.19) =====
--- Исправлено: при dist < 20 сразу телепорт на цель, убирает кружение.
--- Движок goTo без таймаутов (всегда достигает цели).
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.20) =====
+-- Все дальние перемещения заменены на moveStep (300 студий/с).
+-- Больше никакого медленного полёта или кружения вокруг цели.
 -- Максимум 10 минут на острове, после чего возврат в лодку.
 -- Фрукты: надёжная отправка в Discord.
 
@@ -26,88 +26,14 @@ task.spawn(function()
     end
 end)
 
--- ========== 1. АБСОЛЮТНО НАДЁЖНЫЙ ДВИЖОК ==========
-local STEP = 10
-local DELAY = 0.02
-
-local function goTo(targetPos)
-    local char = player.Character
-    if not char then return false end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChild("Humanoid")
-    if not hrp or not hum then return false end
-    for _, v in ipairs(char:GetDescendants()) do
-        if v:IsA("BodyVelocity") or v:IsA("BodyPosition") or v:IsA("BodyGyro") then
-            v:Destroy()
-        end
-    end
-
-    hum.PlatformStand = true
-    local bv = Instance.new("BodyVelocity")
-    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    bv.Velocity = Vector3.new(0, 0, 0)
-    bv.Parent = hrp
-
-    while true do
-        char = player.Character
-        if not char then break end
-        hrp = char:FindFirstChild("HumanoidRootPart")
-        hum = char:FindFirstChild("Humanoid")
-        if not hrp or not hum then break end
-
-        local currentPos = hrp.Position
-        local dist = (currentPos - targetPos).Magnitude
-        if dist < 1 then break end
-
-        -- Если осталось меньше 20 студий – мгновенно телепортируемся на цель
-        if dist < 20 then
-            hrp.CFrame = CFrame.new(targetPos)
-            break
-        end
-
-        if currentPos.Y < targetPos.Y - 10 then
-            hrp.CFrame = CFrame.new(currentPos.X, targetPos.Y, currentPos.Z)
-            currentPos = hrp.Position
-        end
-
-        local dir = (targetPos - currentPos).Unit
-        local moveDist = math.min(STEP, dist)
-        local newPos = currentPos + dir * moveDist
-        newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z)
-
-        hrp.CFrame = CFrame.new(newPos)
-        task.wait(DELAY)
-    end
-
-    if char and hrp and hum then
-        hrp.CFrame = CFrame.new(targetPos)
-        hum.PlatformStand = false
-    end
-    if bv then bv:Destroy() end
-    return true
-end
-
-local function safeGoTo(targetPos)
-    while true do
-        local char = player.Character
-        if not char or not char:FindFirstChild("HumanoidRootPart") then
-            task.wait(1)
-            continue
-        end
-        local success = pcall(goTo, targetPos)
-        if success then return true end
-        warn("[SafeGoTo] Попытка провалена, повтор через 2 с")
-        task.wait(2)
-    end
-end
-
--- ========== 2. СТАРЫЙ moveStep ==========
+-- ========== 1. ЕДИНСТВЕННЫЙ ДВИЖОК: moveStep (как при посадке в лодку) ==========
 local function moveStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChild("Humanoid")
     if not hrp or not hum then return false end
+    -- очистка физики
     for _, v in ipairs(char:GetDescendants()) do
         if v:IsA("BodyVelocity") or v:IsA("BodyPosition") or v:IsA("BodyGyro") then
             v:Destroy()
@@ -135,7 +61,19 @@ local function moveStep(targetPos, speed, keepY)
     return true
 end
 
--- ========== 3. ПОКУПКА / ПОСАДКА / ЛОДКА ==========
+-- Обёртка с повторами для надёжности
+local function safeMove(targetPos, speed, keepY)
+    for attempt = 1, 5 do
+        local success = pcall(moveStep, targetPos, speed, keepY)
+        if success then return true end
+        warn("[SafeMove] Попытка " .. attempt .. " провалена, повтор через 2 с")
+        task.wait(2)
+    end
+    warn("[SafeMove] Не удалось достичь цели")
+    return false
+end
+
+-- ========== 2. ПОКУПКА / ПОСАДКА / ЛОДКА ==========
 local BOAT_BUY_POS = Vector3.new(-16917.0, 9.1, 447.0)
 
 local function buyBoatOnly()
@@ -148,17 +86,10 @@ local function buyBoatOnly()
 end
 
 local function buyBoatAfterMove()
-    for attempt = 1, 3 do
-        safeGoTo(BOAT_BUY_POS)
-        local char = player.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp and (hrp.Position - BOAT_BUY_POS).Magnitude <= 5 then
-            task.wait(0.5)
-            buyBoatOnly()
-            return true
-        end
-    end
-    return false
+    safeMove(BOAT_BUY_POS, 300, true)   -- быстрое перемещение к точке покупки
+    task.wait(0.5)
+    buyBoatOnly()
+    return true
 end
 
 local function forceSitOnSeat(targetSeat, maxAttempts)
@@ -169,7 +100,7 @@ local function forceSitOnSeat(targetSeat, maxAttempts)
         local hum = char:FindFirstChild("Humanoid")
         if not hum then return false end
         local targetPos = targetSeat.Position + Vector3.new(0, 2.5, 0)
-        moveStep(targetPos, 300, true)
+        safeMove(targetPos, 300, true)   -- подлёт к сиденью
         hum.Sit = true
         task.wait(0.5)
         if hum.Sit and hum.SeatPart == targetSeat then
@@ -277,7 +208,7 @@ local function startMove()
     end)
 end
 
--- ========== 4. МАГНИТ ==========
+-- ========== 3. МАГНИТ ==========
 local magnetBodyPos = nil
 local magnetBodyPosActive = false
 
@@ -317,7 +248,7 @@ local function stopMagnetBodyPos()
     if magnetBodyPos then magnetBodyPos:Destroy(); magnetBodyPos = nil end
 end
 
--- ========== 5. ОСТРОВ (с общим таймаутом 10 минут) ==========
+-- ========== 4. ОСТРОВ (с общим таймаутом 10 минут) ==========
 local islandModeActive = false
 local waitingForDespawn = false
 local pendingReturn = false
@@ -363,7 +294,7 @@ local function activateEgg(eggModel)
     local eggPart = eggModel:FindFirstChild("EggCrust") or eggModel:FindFirstChildWhichIsA("BasePart")
     if not eggPart then return false end
     local targetPos = eggPart.Position + Vector3.new(0, 4.5, 0)
-    safeGoTo(targetPos)
+    safeMove(targetPos, 300, true)   -- быстрый подлёт к яйцу
 
     local char = player.Character
     if char then
@@ -412,7 +343,7 @@ task.spawn(function()
 
             local islandStart = os.clock()
             local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
-            safeGoTo(target)
+            safeMove(target, 300, true)   -- быстрый полёт к острову
 
             local eggsList = {}
             while os.clock() - islandStart < 600 do
@@ -476,7 +407,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ОСНОВНОЙ ЦИКЛ + WATCHDOG (только вне острова) ==========
+-- ========== 5. ОСНОВНОЙ ЦИКЛ + WATCHDOG (только вне острова) ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -647,7 +578,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 7. ФРУКТЫ – НАДЁЖНЫЙ ИЗОЛИРОВАННЫЙ ДЕТЕКТОР ==========
+-- ========== 6. ФРУКТЫ – НАДЁЖНЫЙ ИЗОЛИРОВАННЫЙ ДЕТЕКТОР ==========
 task.spawn(function()
     local sentFruits = {}
 
@@ -701,7 +632,7 @@ task.spawn(function()
     print("[ФРУКТ] Детектор запущен")
 end)
 
--- ========== 8. АНТИ-IDLE ==========
+-- ========== 7. АНТИ-IDLE ==========
 task.spawn(function()
     local cam = workspace.CurrentCamera
     local orig = cam.CFrame
@@ -726,5 +657,5 @@ task.spawn(function()
     end
 end)
 
-print("===== СКРИПТ 9.19 ЗАПУЩЕН =====")
-print("Убрано кружение вокруг острова. Макс. 10 мин. на острове.")
+print("===== СКРИПТ 9.20 ЗАПУЩЕН =====")
+print("Все полёты теперь через быстрый moveStep. Диагностика каждые 5 сек.")
