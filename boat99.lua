@@ -29,7 +29,8 @@ end)
 local STEP = 10
 local DELAY = 0.02
 
-local function goTo(targetPos)
+local function goTo(targetPos, timeout)
+    timeout = timeout or math.huge
     local char = player.Character
     if not char then return false end
     local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -37,38 +38,49 @@ local function goTo(targetPos)
     if not hrp or not hum then return false end
 
     hum.PlatformStand = true
+    local startTime = os.clock()
+
+    -- Сразу удаляем всё, что может мешать
+    local function clearForces()
+        for _, v in ipairs(hrp:GetChildren()) do
+            if v:IsA("BodyVelocity") or v:IsA("BodyPosition") or v:IsA("BodyGyro") or v:IsA("AlignPosition") or v:IsA("AlignOrientation") then
+                v:Destroy()
+            end
+        end
+    end
+    clearForces()
 
     while true do
+        if timeout ~= math.huge and os.clock() - startTime > timeout then break end
         char = player.Character
         if not char then break end
         hrp = char:FindFirstChild("HumanoidRootPart")
         hum = char:FindFirstChild("Humanoid")
         if not hrp or not hum then break end
 
-        local existingBV = hrp:FindFirstChildOfClass("BodyVelocity")
-        if existingBV then
-            existingBV.Velocity = Vector3.zero
-            existingBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        else
-            local bv = Instance.new("BodyVelocity")
-            bv.Velocity = Vector3.zero
-            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-            bv.Parent = hrp
-        end
-        for _, v in ipairs(hrp:GetChildren()) do
-            if v:IsA("BodyPosition") or v:IsA("BodyGyro") or v:IsA("AlignPosition") or v:IsA("AlignOrientation") then
-                v:Destroy()
-            end
-        end
-
         local currentPos = hrp.Position
         local dist = (currentPos - targetPos).Magnitude
         if dist < 1 then break end
 
-        if dist < 20 then
+        if dist < TELEPORT_DISTANCE then
+            -- Убираем все силы и телепортируемся
+            clearForces()
             hrp.CFrame = CFrame.new(targetPos)
-            break
+            task.wait(0.1)
+            local newDist = (hrp.Position - targetPos).Magnitude
+            if newDist < 1 then break end
+            hrp.CFrame = CFrame.new(targetPos)  -- повторный телепорт
+            task.wait(0.1)
+            if (hrp.Position - targetPos).Magnitude < 1 then break end
+            break   -- выходим, чтобы не зациклиться
         end
+
+        -- Удаляем старые мешающие объекты и создаём BodyVelocity только для движения
+        clearForces()
+        local bv = Instance.new("BodyVelocity")
+        bv.Velocity = Vector3.zero
+        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        bv.Parent = hrp
 
         if currentPos.Y < targetPos.Y - 10 then
             hrp.CFrame = CFrame.new(currentPos.X, targetPos.Y, currentPos.Z)
@@ -84,12 +96,8 @@ local function goTo(targetPos)
         task.wait(DELAY)
     end
 
-    if char and hrp and hum then
-        hrp.CFrame = CFrame.new(targetPos)
-        hum.PlatformStand = false
-        local bv = hrp:FindFirstChildOfClass("BodyVelocity")
-        if bv then bv:Destroy() end
-    end
+    clearForces()
+    if hum then hum.PlatformStand = false end
     return true
 end
 
