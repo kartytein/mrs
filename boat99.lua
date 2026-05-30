@@ -1,5 +1,5 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.18) =====
--- Исправлен вывод [STATE] – теперь читаемая строка.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.19) =====
+-- Исправлено: при dist < 20 сразу телепорт на цель, убирает кружение.
 -- Движок goTo без таймаутов (всегда достигает цели).
 -- Максимум 10 минут на острове, после чего возврат в лодку.
 -- Фрукты: надёжная отправка в Discord.
@@ -58,6 +58,12 @@ local function goTo(targetPos)
         local currentPos = hrp.Position
         local dist = (currentPos - targetPos).Magnitude
         if dist < 1 then break end
+
+        -- Если осталось меньше 20 студий – мгновенно телепортируемся на цель
+        if dist < 20 then
+            hrp.CFrame = CFrame.new(targetPos)
+            break
+        end
 
         if currentPos.Y < targetPos.Y - 10 then
             hrp.CFrame = CFrame.new(currentPos.X, targetPos.Y, currentPos.Z)
@@ -408,7 +414,6 @@ task.spawn(function()
             local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
             safeGoTo(target)
 
-            local waitStart = os.clock()
             local eggsList = {}
             while os.clock() - islandStart < 600 do
                 eggsList = getAllEggs()
@@ -516,7 +521,7 @@ end)
 local lastWatchdogPos = nil
 local lastWatchdogTime = os.clock()
 
--- Вывод состояния каждые 5 секунд (читаемая строка)
+-- Вывод состояния каждые 5 секунд
 task.spawn(function()
     while true do
         task.wait(5)
@@ -721,5 +726,5 @@ task.spawn(function()
     end
 end)
 
-print("===== СКРИПТ 9.18 ЗАПУЩЕН =====")
-print("Читаемый [STATE] каждые 5 сек. Макс. 10 мин. на острове.")
+print("===== СКРИПТ 9.19 ЗАПУЩЕН =====")
+print("Убрано кружение вокруг острова. Макс. 10 мин. на острове.")
