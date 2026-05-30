@@ -40,6 +40,8 @@ local function goTo(targetPos, timeout)
 
     hum.PlatformStand = true
     local startTime = os.clock()
+    local teleportAttempts = 0          -- счётчик телепортаций
+    local MAX_TELEPORT_ATTEMPTS = 3     -- после 3 попыток считаем точку достигнутой
 
     while true do
         if timeout ~= math.huge and os.clock() - startTime > timeout then
@@ -72,8 +74,12 @@ local function goTo(targetPos, timeout)
         if dist < 1 then break end
 
         if dist < TELEPORT_DISTANCE then
+            teleportAttempts = teleportAttempts + 1
+            if teleportAttempts > MAX_TELEPORT_ATTEMPTS then
+                break   -- выходим, если уже несколько раз телепортировались без успеха
+            end
             hrp.CFrame = CFrame.new(targetPos)
-            -- после телепорта может остаться небольшое расхождение, проверим
+            task.wait(DELAY)
             if (hrp.Position - targetPos).Magnitude < 1 then break end
         end
 
