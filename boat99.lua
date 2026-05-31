@@ -1,6 +1,7 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.27) =====
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.28) =====
 -- + safeGoTo с защитой от бесконечной телепортации (счётчик)
 -- + Зависание над островом через BodyVelocity(0,0,0)
+-- + Восстановление зависания после сбора яйца
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -388,6 +389,26 @@ local function activateEgg(eggModel)
         pressE()
         task.wait(1)
     end
+
+    -- Восстанавливаем зависание после активации яйца
+    if islandModeActive then
+        char = player.Character
+        if char then
+            local h = char:FindFirstChild("Humanoid")
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if h and hrp then
+                h.PlatformStand = true
+                for _, v in ipairs(hrp:GetChildren()) do
+                    if v:IsA("BodyVelocity") then v:Destroy() end
+                end
+                local hoverBV = Instance.new("BodyVelocity")
+                hoverBV.Velocity = Vector3.new(0, 0, 0)
+                hoverBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                hoverBV.Parent = hrp
+            end
+        end
+    end
+
     return true
 end
 
@@ -423,7 +444,6 @@ task.spawn(function()
                 local hrp = char:FindFirstChild("HumanoidRootPart")
                 if h and hrp then
                     h.PlatformStand = true
-                    -- удаляем старые BodyVelocity, которые мог оставить goTo
                     for _, v in ipairs(hrp:GetChildren()) do
                         if v:IsA("BodyVelocity") then v:Destroy() end
                     end
@@ -819,5 +839,5 @@ task.spawn(function()
     end
 end)
 
-print("===== СКРИПТ 9.27 ЗАПУЩЕН =====")
-print("Зависание над островом через BodyVelocity(0,0,0), защита от телепорт-петли, возврат с таймаутом 5 мин.")
+print("===== СКРИПТ 9.28 ЗАПУЩЕН =====")
+print("Зависание над островом с восстановлением после сбора яиц.")
