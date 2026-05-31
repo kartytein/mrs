@@ -1,5 +1,7 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.28) =====
--- Магнитная посадка + фикс движения после посадки.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.26) =====
+-- Исправлено: порог телепортации увеличен до 50 (убирает колебания вокруг точки).
+-- Проверка исчезновения острова во время полёта.
+-- Возврат в лодку: таймаут 5 минут, посадка через forceSitOnSeat.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -26,7 +28,7 @@ end)
 -- ========== 1. ДВИЖОК goTo (телепорт при dist < 50) ==========
 local STEP = 10
 local DELAY = 0.02
-local TELEPORT_DISTANCE = 50
+local TELEPORT_DISTANCE = 50   -- увеличено для гарантированного завершения
 
 local function goTo(targetPos, timeout)
     timeout = timeout or math.huge
@@ -38,11 +40,13 @@ local function goTo(targetPos, timeout)
 
     hum.PlatformStand = true
     local startTime = os.clock()
-    local teleportAttempts = 0
-    local MAX_TELEPORT_ATTEMPTS = 3
+    local teleportAttempts = 0          -- счётчик телепортаций
+    local MAX_TELEPORT_ATTEMPTS = 3     -- после 3 попыток считаем точку достигнутой
 
     while true do
-        if timeout ~= math.huge and os.clock() - startTime > timeout then break end
+        if timeout ~= math.huge and os.clock() - startTime > timeout then
+            break
+        end
         char = player.Character
         if not char then break end
         hrp = char:FindFirstChild("HumanoidRootPart")
@@ -71,7 +75,9 @@ local function goTo(targetPos, timeout)
 
         if dist < TELEPORT_DISTANCE then
             teleportAttempts = teleportAttempts + 1
-            if teleportAttempts > MAX_TELEPORT_ATTEMPTS then break end
+            if teleportAttempts > MAX_TELEPORT_ATTEMPTS then
+                break   -- выходим, если уже несколько раз телепортировались без успеха
+            end
             hrp.CFrame = CFrame.new(targetPos)
             task.wait(DELAY)
             if (hrp.Position - targetPos).Magnitude < 1 then break end
@@ -113,6 +119,34 @@ local function safeGoTo(targetPos)
     end
 end
 
+-- moveStep для посадки (оставлен для forceSitOnSeat)
+local function moveStep(targetPos, speed, keepY)
+    local char = player.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChild("Humanoid")
+    if not hrp or not hum then return false end
+    hum.PlatformStand = true
+    local step = 0.02
+    local stepSize = speed * step
+    while true do
+        local current = hrp.Position
+        local dx = targetPos.X - current.X
+        local dz = targetPos.Z - current.Z
+        local distXZ = math.sqrt(dx*dx + dz*dz)
+        if distXZ < 0.5 then break end
+        local dir = (targetPos - current).Unit
+        local moveDist = math.min(stepSize, (targetPos - current).Magnitude)
+        local newPos = current + dir * moveDist
+        if keepY then newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z) end
+        hrp.CFrame = CFrame.new(newPos)
+        task.wait(step)
+    end
+    hrp.CFrame = CFrame.new(targetPos)
+    hum.PlatformStand = false
+    return true
+end
+
 -- ========== 2. ПОКУПКА, ПОСАДКА, ЛОДКА ==========
 local BOAT_BUY_POS = Vector3.new(-16917.0, 9.1, 447.0)
 
@@ -137,43 +171,18 @@ local function buyBoatAfterMove()
     return false
 end
 
--- ★ МАГНИТНАЯ ПОСАДКА ★
 local function forceSitOnSeat(targetSeat, maxAttempts)
     maxAttempts = maxAttempts or 3
-    local targetPos = targetSeat.Position + Vector3.new(0, 2.5, 0)
-
     for attempt = 1, maxAttempts do
         local char = player.Character
         if not char then return false end
         local hum = char:FindFirstChild("Humanoid")
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        if not hum or not hrp then return false end
-
-        hrp.CFrame = CFrame.new(targetPos)
-
-        local bodyPos = Instance.new("BodyPosition")
-        bodyPos.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        bodyPos.Position = targetPos
-        bodyPos.Parent = hrp
-
-        local bodyGyro = Instance.new("BodyGyro")
-        bodyGyro.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        bodyGyro.CFrame = hrp.CFrame
-        bodyGyro.Parent = hrp
-
-        task.wait(0.2)
-
+        if not hum then return false end
+        local targetPos = targetSeat.Position + Vector3.new(0, 2.5, 0)
+        moveStep(targetPos, 300, true)
         hum.Sit = true
         task.wait(0.5)
-
-        if hum.Sit and hum.SeatPart == targetSeat then
-            bodyPos:Destroy()
-            bodyGyro:Destroy()
-            return true
-        end
-
-        bodyPos:Destroy()
-        bodyGyro:Destroy()
+        if hum.Sit and hum.SeatPart == targetSeat then return true end
         hum.Sit = false
         pcall(function() hum.Jump:Fire() end)
         task.wait(0.5)
@@ -275,7 +284,7 @@ local function startMove()
     end)
 end
 
--- ========== 3. ВСПОМОГАТЕЛЬНЫЙ МАГНИТ (не для посадки) ==========
+-- ========== 3. МАГНИТ ==========
 local magnetBodyPos = nil
 local magnetBodyPosActive = false
 
@@ -315,7 +324,7 @@ local function stopMagnetBodyPos()
     if magnetBodyPos then magnetBodyPos:Destroy(); magnetBodyPos = nil end
 end
 
--- ========== 4. ОСТРОВ ==========
+-- ========== 4. ОСТРОВ (проверка исчезновения во время полёта) ==========
 local islandModeActive = false
 local waitingForDespawn = false
 local pendingReturn = false
@@ -412,6 +421,7 @@ task.spawn(function()
             local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
             safeGoTo(target)
 
+            -- Проверка: не исчез ли остров, пока летели?
             if not findIsland() then
                 print("[ОСТРОВ] Остров исчез во время полёта, возврат")
                 islandModeActive = false
@@ -487,12 +497,12 @@ task.spawn(function()
     end
 end)
 
--- ========== 5. ВОЗВРАТ В ЛОДКУ ==========
+-- ========== 5. ВОЗВРАТ В ЛОДКУ (улучшен) ==========
 local function doReturnToBoat()
     recoveryMode = true
     stopMagnetBodyPos()
     local returnStart = os.clock()
-    local maxReturnTime = 300
+    local maxReturnTime = 300 -- 5 минут
 
     while true do
         local currentBoat = findMyBoat()
@@ -506,29 +516,28 @@ local function doReturnToBoat()
                 local nat = currentBoat:FindFirstChild("Script")
                 if nat then nat.Disabled = true end
 
+                -- Долетаем до точки над сиденьем с большим таймаутом
                 local targetPos = currentSeat.Position + Vector3.new(0, 2.5, 0)
-                goTo(targetPos, maxReturnTime)
+                goTo(targetPos, maxReturnTime)   -- даём до 5 минут на полёт
 
+                -- Пытаемся сесть (forceSitOnSeat включает доводку и магнит)
                 local char = player.Character
                 if char then
-                    local humLocal = char:FindFirstChild("Humanoid")
-                    if humLocal then
+                    local hum = char:FindFirstChild("Humanoid")
+                    if hum then
                         if forceSitOnSeat(currentSeat, 1) then
                             boat = currentBoat
                             seat = currentSeat
                             root = currentRoot
                             stopMove()
                             if bv then bv:Destroy() end
-                            -- ★ ОБНОВЛЯЕМ ГЛОБАЛЬНЫЕ hum и hrp ★
-                            hum = humLocal
-                            hrp = char:FindFirstChild("HumanoidRootPart")
                             startMove()
                             print("[ВОЗВРАТ] Успешно сели в лодку.")
                             recoveryMode = false
                             return
                         else
-                            humLocal.Sit = false
-                            pcall(function() humLocal.Jump:Fire() end)
+                            hum.Sit = false
+                            pcall(function() hum.Jump:Fire() end)
                         end
                     end
                 end
@@ -563,15 +572,8 @@ local function doReturnToBoat()
                 end
                 local nat = boat:FindFirstChild("Script")
                 if nat then nat.Disabled = true end
-                if forceSitOnSeat(seat, 3) then
-                    -- ★ ОБНОВЛЯЕМ ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ★
-                    local char = player.Character
-                    if char then
-                        hum = char:FindFirstChild("Humanoid")
-                        hrp = char:FindFirstChild("HumanoidRootPart")
-                    end
-                    startMove()
-                end
+                forceSitOnSeat(seat, 3)
+                startMove()
             end
         end
     end
@@ -604,15 +606,8 @@ task.spawn(function()
             end
             local nat = boat:FindFirstChild("Script")
             if nat then nat.Disabled = true end
-            if forceSitOnSeat(seat, 3) then
-                -- ★ ОБНОВЛЯЕМ ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ★
-                local char = player.Character
-                if char then
-                    hum = char:FindFirstChild("Humanoid")
-                    hrp = char:FindFirstChild("HumanoidRootPart")
-                end
-                startMove()
-            end
+            forceSitOnSeat(seat, 3)
+            startMove()
         end
     end
     recoveryMode = false
@@ -671,8 +666,8 @@ task.spawn(function()
             stopMagnetBodyPos()
             local char = player.Character
             if char then
-                local humLocal = char:FindFirstChild("Humanoid")
-                if humLocal then humLocal.Health = 0 end
+                local hum = char:FindFirstChild("Humanoid")
+                if hum then hum.Health = 0 end
             end
             player.CharacterAdded:Wait()
             task.wait(1)
@@ -801,4 +796,5 @@ task.spawn(function()
     end
 end)
 
-print("===== СКРИПТ 9.28 ЗАПУЩЕН (магнит + фикс движения) =====")
+print("===== СКРИПТ 9.26 ЗАПУЩЕН =====")
+print("Порог телепортации 50, проверка острова при полёте, возврат с 5-минутным таймаутом.")
