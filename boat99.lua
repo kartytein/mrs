@@ -722,12 +722,12 @@ task.spawn(function()
     end
 end)
 
--- ========== 7. ФРУКТЫ / ЦЕННЫЕ ПРЕДМЕТЫ (расширено) ==========
+-- ========== 7. ФРУКТЫ, WEST, EAST, DRAGON (кроме Talon) ==========
 task.spawn(function()
-    local sentItems = {}  -- теперь для всех предметов (фрукты, West, East, Dragon)
+    local sentItems = {}
 
     local function shouldSend(itemName)
-        -- Проверяем фрукты
+        -- Фрукты
         if itemName:find("Fruit") then return true end
         -- West / East
         if itemName:find("West") or itemName:find("East") then return true end
