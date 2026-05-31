@@ -1,5 +1,5 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.27) =====
--- Магнитная посадка: персонаж зависает над сиденьем и не падает, пока не сядет.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.28) =====
+-- Магнитная посадка + фикс движения после посадки.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -137,7 +137,7 @@ local function buyBoatAfterMove()
     return false
 end
 
--- ★ НОВАЯ ФУНКЦИЯ ПОСАДКИ С МАГНИТОМ ★
+-- ★ МАГНИТНАЯ ПОСАДКА ★
 local function forceSitOnSeat(targetSeat, maxAttempts)
     maxAttempts = maxAttempts or 3
     local targetPos = targetSeat.Position + Vector3.new(0, 2.5, 0)
@@ -149,10 +149,8 @@ local function forceSitOnSeat(targetSeat, maxAttempts)
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if not hum or not hrp then return false end
 
-        -- Телепорт прямо в точку над сиденьем
         hrp.CFrame = CFrame.new(targetPos)
 
-        -- Магнит: жесткая фиксация в воздухе
         local bodyPos = Instance.new("BodyPosition")
         bodyPos.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
         bodyPos.Position = targetPos
@@ -165,7 +163,6 @@ local function forceSitOnSeat(targetSeat, maxAttempts)
 
         task.wait(0.2)
 
-        -- Пробуем сесть
         hum.Sit = true
         task.wait(0.5)
 
@@ -175,7 +172,6 @@ local function forceSitOnSeat(targetSeat, maxAttempts)
             return true
         end
 
-        -- Очистка перед новой попыткой
         bodyPos:Destroy()
         bodyGyro:Destroy()
         hum.Sit = false
@@ -279,7 +275,7 @@ local function startMove()
     end)
 end
 
--- ========== 3. МАГНИТ ДЛЯ УДЕРЖАНИЯ (вспомогательный, не для посадки) ==========
+-- ========== 3. ВСПОМОГАТЕЛЬНЫЙ МАГНИТ (не для посадки) ==========
 local magnetBodyPos = nil
 local magnetBodyPosActive = false
 
@@ -515,21 +511,24 @@ local function doReturnToBoat()
 
                 local char = player.Character
                 if char then
-                    local hum = char:FindFirstChild("Humanoid")
-                    if hum then
+                    local humLocal = char:FindFirstChild("Humanoid")
+                    if humLocal then
                         if forceSitOnSeat(currentSeat, 1) then
                             boat = currentBoat
                             seat = currentSeat
                             root = currentRoot
                             stopMove()
                             if bv then bv:Destroy() end
+                            -- ★ ОБНОВЛЯЕМ ГЛОБАЛЬНЫЕ hum и hrp ★
+                            hum = humLocal
+                            hrp = char:FindFirstChild("HumanoidRootPart")
                             startMove()
                             print("[ВОЗВРАТ] Успешно сели в лодку.")
                             recoveryMode = false
                             return
                         else
-                            hum.Sit = false
-                            pcall(function() hum.Jump:Fire() end)
+                            humLocal.Sit = false
+                            pcall(function() humLocal.Jump:Fire() end)
                         end
                     end
                 end
@@ -564,8 +563,15 @@ local function doReturnToBoat()
                 end
                 local nat = boat:FindFirstChild("Script")
                 if nat then nat.Disabled = true end
-                forceSitOnSeat(seat, 3)
-                startMove()
+                if forceSitOnSeat(seat, 3) then
+                    -- ★ ОБНОВЛЯЕМ ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ★
+                    local char = player.Character
+                    if char then
+                        hum = char:FindFirstChild("Humanoid")
+                        hrp = char:FindFirstChild("HumanoidRootPart")
+                    end
+                    startMove()
+                end
             end
         end
     end
@@ -598,8 +604,15 @@ task.spawn(function()
             end
             local nat = boat:FindFirstChild("Script")
             if nat then nat.Disabled = true end
-            forceSitOnSeat(seat, 3)
-            startMove()
+            if forceSitOnSeat(seat, 3) then
+                -- ★ ОБНОВЛЯЕМ ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ★
+                local char = player.Character
+                if char then
+                    hum = char:FindFirstChild("Humanoid")
+                    hrp = char:FindFirstChild("HumanoidRootPart")
+                end
+                startMove()
+            end
         end
     end
     recoveryMode = false
@@ -658,8 +671,8 @@ task.spawn(function()
             stopMagnetBodyPos()
             local char = player.Character
             if char then
-                local hum = char:FindFirstChild("Humanoid")
-                if hum then hum.Health = 0 end
+                local humLocal = char:FindFirstChild("Humanoid")
+                if humLocal then humLocal.Health = 0 end
             end
             player.CharacterAdded:Wait()
             task.wait(1)
@@ -788,4 +801,4 @@ task.spawn(function()
     end
 end)
 
-print("===== СКРИПТ 9.27 ЗАПУЩЕН (магнитная посадка) =====")
+print("===== СКРИПТ 9.28 ЗАПУЩЕН (магнит + фикс движения) =====")
