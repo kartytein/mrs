@@ -1,6 +1,6 @@
 -- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.27) =====
--- Изменено: мгновенный телепорт над островом + зависание BodyVelocity(0,0,0)
--- Ожидание яйца начинается немедленно
+-- + safeGoTo с защитой от бесконечной телепортации (счётчик)
+-- + Зависание над островом через BodyVelocity(0,0,0)
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -24,7 +24,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 1. ДВИЖОК goTo (оставлен для возврата в лодку) ==========
+-- ========== 1. ДВИЖОК goTo (телепорт при dist < 50) ==========
 local STEP = 10
 local DELAY = 0.02
 local TELEPORT_DISTANCE = 50
@@ -87,6 +87,7 @@ local function goTo(targetPos, timeout)
         local moveDist = math.min(STEP, dist)
         local newPos = currentPos + dir * moveDist
         newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z)
+
         hrp.CFrame = CFrame.new(newPos)
         task.wait(DELAY)
     end
@@ -113,6 +114,7 @@ local function safeGoTo(targetPos)
     end
 end
 
+-- moveStep для посадки (оставлен для forceSitOnSeat)
 local function moveStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
@@ -317,12 +319,11 @@ local function stopMagnetBodyPos()
     if magnetBodyPos then magnetBodyPos:Destroy(); magnetBodyPos = nil end
 end
 
--- ========== 4. ОСТРОВ (зависание + немедленное ожидание яиц) ==========
+-- ========== 4. ОСТРОВ (зависание + проверка исчезновения) ==========
 local islandModeActive = false
 local waitingForDespawn = false
 local pendingReturn = false
 local recoveryMode = false
-local islandBv = nil   -- BodyVelocity для зависания над островом
 
 local function findIsland()
     for _, obj in ipairs(workspace:GetDescendants()) do
@@ -412,83 +413,111 @@ task.spawn(function()
                 if h then h.PlatformStand = true end
             end
 
-            -- Мгновенный телепорт к точке над островом
-            local target = island:GetPivot().Position + Vector3.new(0, 400, 0)
+            local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
+            safeGoTo(target)
+
+            -- === ЗАВИСАНИЕ НАД ОСТРОВОМ ===
             char = player.Character
             if char then
+                local h = char:FindFirstChild("Humanoid")
                 local hrp = char:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    hrp.CFrame = CFrame.new(target)
-                    -- Создаём BodyVelocity для зависания
-                    if islandBv then islandBv:Destroy() end
-                    islandBv = Instance.new("BodyVelocity")
-                    islandBv.Velocity = Vector3.new(0, 0, 0)
-                    islandBv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-                    islandBv.Parent = hrp
+                if h and hrp then
+                    h.PlatformStand = true
+                    -- удаляем старые BodyVelocity, которые мог оставить goTo
+                    for _, v in ipairs(hrp:GetChildren()) do
+                        if v:IsA("BodyVelocity") then v:Destroy() end
+                    end
+                    local hoverBV = Instance.new("BodyVelocity")
+                    hoverBV.Velocity = Vector3.new(0, 0, 0)
+                    hoverBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                    hoverBV.Parent = hrp
                 end
             end
 
-            -- Сразу начинаем работу с яйцами
-            local islandStart = os.clock()
-            local eggsList = {}
-            while os.clock() - islandStart < 600 do
-                eggsList = getAllEggs()
-                if #eggsList > 0 then break end
-                task.wait(1)
-            end
-
-            if #eggsList == 0 then
+            -- Проверка: не исчез ли остров, пока летели?
+            if not findIsland() then
+                print("[ОСТРОВ] Остров исчез во время полёта, возврат")
                 islandModeActive = false
                 waitingForDespawn = true
                 pendingReturn = true
-            else
-                local activationStart = os.clock()
-                while islandModeActive and findIsland() do
-                    local currentEggs = getAllEggs()
-                    if #currentEggs == 0 then break end
-
-                    if os.clock() - activationStart > 120 then
-                        print("[ОСТРОВ] 2 минуты на активацию истекли, возвращаемся")
-                        break
-                    end
-                    if os.clock() - islandStart > 600 then
-                        print("[ОСТРОВ] 10 минут на острове истекли, возвращаемся")
-                        break
-                    end
-
-                    local char = player.Character
-                    if char and char:FindFirstChild("HumanoidRootPart") then
-                        local hrp = char.HumanoidRootPart
-                        for _, egg in ipairs(currentEggs) do
-                            if egg.part then
-                                egg.dist = (hrp.Position - egg.part.Position).Magnitude
-                            else
-                                egg.dist = math.huge
-                            end
+                local char = player.Character
+                if char then
+                    local h = char:FindFirstChild("Humanoid")
+                    if h then h.PlatformStand = false end
+                    local hrp = char:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        for _, v in ipairs(hrp:GetChildren()) do
+                            if v:IsA("BodyVelocity") then v:Destroy() end
                         end
-                        table.sort(currentEggs, function(a,b) return a.dist < b.dist end)
-                    end
-
-                    local eggToActivate = currentEggs[1]
-                    if eggToActivate and eggToActivate.model and eggToActivate.model.Parent then
-                        activateEgg(eggToActivate.model)
-                        task.wait(1)
-                    else
-                        break
                     end
                 end
+            else
+                local islandStart = os.clock()
+                local eggsList = {}
+                while os.clock() - islandStart < 600 do
+                    eggsList = getAllEggs()
+                    if #eggsList > 0 then break end
+                    task.wait(1)
+                end
 
-                islandModeActive = false
-                waitingForDespawn = true
-                pendingReturn = true
+                if #eggsList == 0 then
+                    islandModeActive = false
+                    waitingForDespawn = true
+                    pendingReturn = true
+                else
+                    local activationStart = os.clock()
+                    while islandModeActive and findIsland() do
+                        local currentEggs = getAllEggs()
+                        if #currentEggs == 0 then break end
+
+                        if os.clock() - activationStart > 120 then
+                            print("[ОСТРОВ] 2 минуты на активацию истекли, возвращаемся")
+                            break
+                        end
+                        if os.clock() - islandStart > 600 then
+                            print("[ОСТРОВ] 10 минут на острове истекли, возвращаемся")
+                            break
+                        end
+
+                        local char = player.Character
+                        if char and char:FindFirstChild("HumanoidRootPart") then
+                            local hrp = char.HumanoidRootPart
+                            for _, egg in ipairs(currentEggs) do
+                                if egg.part then
+                                    egg.dist = (hrp.Position - egg.part.Position).Magnitude
+                                else
+                                    egg.dist = math.huge
+                                end
+                            end
+                            table.sort(currentEggs, function(a,b) return a.dist < b.dist end)
+                        end
+
+                        local eggToActivate = currentEggs[1]
+                        if eggToActivate and eggToActivate.model and eggToActivate.model.Parent then
+                            activateEgg(eggToActivate.model)
+                            task.wait(1)
+                        else
+                            break
+                        end
+                    end
+
+                    islandModeActive = false
+                    waitingForDespawn = true
+                    pendingReturn = true
+                end
             end
 
-            -- Удаляем зависание
-            if islandBv then islandBv:Destroy(); islandBv = nil end
+            -- Очистка зависания
             local char2 = player.Character
             if char2 then
                 local h2 = char2:FindFirstChild("Humanoid")
                 if h2 then h2.PlatformStand = false end
+                local hrp2 = char2:FindFirstChild("HumanoidRootPart")
+                if hrp2 then
+                    for _, v in ipairs(hrp2:GetChildren()) do
+                        if v:IsA("BodyVelocity") then v:Destroy() end
+                    end
+                end
             end
         end
     end
@@ -498,8 +527,6 @@ end)
 local function doReturnToBoat()
     recoveryMode = true
     stopMagnetBodyPos()
-    if islandBv then islandBv:Destroy(); islandBv = nil end   -- убираем зависание
-
     local returnStart = os.clock()
     local maxReturnTime = 300
 
@@ -660,7 +687,6 @@ task.spawn(function()
             boat = nil; seat = nil; root = nil
             stopMove()
             stopMagnetBodyPos()
-            if islandBv then islandBv:Destroy(); islandBv = nil end
             local char = player.Character
             if char then
                 local hum = char:FindFirstChild("Humanoid")
@@ -688,7 +714,6 @@ task.spawn(function()
                     warn("[WATCHDOG] Зависание, принудительный возврат.")
                     stopMove()
                     stopMagnetBodyPos()
-                    if islandBv then islandBv:Destroy(); islandBv = nil end
                     pendingReturn = true
                     lastWatchdogTime = os.clock()
                 end
@@ -795,4 +820,4 @@ task.spawn(function()
 end)
 
 print("===== СКРИПТ 9.27 ЗАПУЩЕН =====")
-print("Мгновенный телепорт + зависание над островом, немедленный сбор яиц.")
+print("Зависание над островом через BodyVelocity(0,0,0), защита от телепорт-петли, возврат с таймаутом 5 мин.")
