@@ -2,6 +2,7 @@
 -- Исправлено: порог телепортации увеличен до 50 (убирает колебания вокруг точки).
 -- Проверка исчезновения острова во время полёта.
 -- Возврат в лодку: таймаут 5 минут, посадка через forceSitOnSeat.
+-- + Отправка в Discord: фрукты, West, East, Dragon (исключая Dragon Talon)
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -721,9 +722,20 @@ task.spawn(function()
     end
 end)
 
--- ========== 7. ФРУКТЫ ==========
+-- ========== 7. ФРУКТЫ / ЦЕННЫЕ ПРЕДМЕТЫ (расширено) ==========
 task.spawn(function()
-    local sentFruits = {}
+    local sentItems = {}  -- теперь для всех предметов (фрукты, West, East, Dragon)
+
+    local function shouldSend(itemName)
+        -- Проверяем фрукты
+        if itemName:find("Fruit") then return true end
+        -- West / East
+        if itemName:find("West") or itemName:find("East") then return true end
+        -- Dragon, но не Dragon Talon
+        if itemName:find("Dragon") and not itemName:find("Talon") then return true end
+        return false
+    end
+
     local function sendToDiscord(name)
         local msg = {
             content = playerName .. " получил '" .. name .. "'!",
@@ -739,36 +751,46 @@ task.spawn(function()
         end)
         print("[DISCORD] Отправлено: " .. name)
     end
+
     local function checkItem(item)
         if not item:IsA("Tool") then return end
         task.wait(0.3)
-        if not item.Name or not item.Name:find("Fruit") then return end
-        if sentFruits[item.Name] then return end
-        sentFruits[item.Name] = true
+        if not item.Name then return end
+        if not shouldSend(item.Name) then return end
+        if sentItems[item.Name] then return end
+        sentItems[item.Name] = true
         sendToDiscord(item.Name)
     end
+
     task.wait(2)
+
+    -- Сканируем уже имеющиеся предметы при старте
     local backpack = player:WaitForChild("Backpack")
     for _, item in ipairs(backpack:GetChildren()) do
-        if item:IsA("Tool") and item.Name:find("Fruit") then
-            sentFruits[item.Name] = true
+        if item:IsA("Tool") and shouldSend(item.Name) then
+            sentItems[item.Name] = true
         end
     end
     if player.Character then
         for _, item in ipairs(player.Character:GetChildren()) do
-            if item:IsA("Tool") and item.Name:find("Fruit") then
-                sentFruits[item.Name] = true
+            if item:IsA("Tool") and shouldSend(item.Name) then
+                sentItems[item.Name] = true
             end
         end
     end
+
+    -- Отслеживаем новые предметы в рюкзаке
     backpack.ChildAdded:Connect(checkItem)
+
+    -- Отслеживаем предметы, которые появляются в руках (при поднятии или экипировке)
     player.CharacterAdded:Connect(function(char)
         for _, existing in ipairs(char:GetChildren()) do
             checkItem(existing)
         end
         char.ChildAdded:Connect(checkItem)
     end)
-    print("[ФРУКТ] Детектор запущен")
+
+    print("[ДЕТЕКТОР] Запущен (фрукты, West, East, Dragon без Talon)")
 end)
 
 -- ========== 8. АНТИ-IDLE ==========
@@ -798,3 +820,4 @@ end)
 
 print("===== СКРИПТ 9.26 ЗАПУЩЕН =====")
 print("Порог телепортации 50, проверка острова при полёте, возврат с 5-минутным таймаутом.")
+print("Discord уведомления: фрукты, West, East, Dragon (кроме Dragon Talon)")
