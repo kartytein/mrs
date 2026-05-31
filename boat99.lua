@@ -1,7 +1,6 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.26) =====
--- Исправлено: порог телепортации увеличен до 50 (убирает колебания вокруг точки).
--- Проверка исчезновения острова во время полёта.
--- Возврат в лодку: таймаут 5 минут, посадка через forceSitOnSeat.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.27) =====
+-- Изменено: мгновенный телепорт над островом + зависание BodyVelocity(0,0,0)
+-- Ожидание яйца начинается немедленно
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -25,10 +24,10 @@ task.spawn(function()
     end
 end)
 
--- ========== 1. ДВИЖОК goTo (телепорт при dist < 50) ==========
+-- ========== 1. ДВИЖОК goTo (оставлен для возврата в лодку) ==========
 local STEP = 10
 local DELAY = 0.02
-local TELEPORT_DISTANCE = 50   -- увеличено для гарантированного завершения
+local TELEPORT_DISTANCE = 50
 
 local function goTo(targetPos, timeout)
     timeout = timeout or math.huge
@@ -40,13 +39,11 @@ local function goTo(targetPos, timeout)
 
     hum.PlatformStand = true
     local startTime = os.clock()
-    local teleportAttempts = 0          -- счётчик телепортаций
-    local MAX_TELEPORT_ATTEMPTS = 3     -- после 3 попыток считаем точку достигнутой
+    local teleportAttempts = 0
+    local MAX_TELEPORT_ATTEMPTS = 3
 
     while true do
-        if timeout ~= math.huge and os.clock() - startTime > timeout then
-            break
-        end
+        if timeout ~= math.huge and os.clock() - startTime > timeout then break end
         char = player.Character
         if not char then break end
         hrp = char:FindFirstChild("HumanoidRootPart")
@@ -75,9 +72,7 @@ local function goTo(targetPos, timeout)
 
         if dist < TELEPORT_DISTANCE then
             teleportAttempts = teleportAttempts + 1
-            if teleportAttempts > MAX_TELEPORT_ATTEMPTS then
-                break   -- выходим, если уже несколько раз телепортировались без успеха
-            end
+            if teleportAttempts > MAX_TELEPORT_ATTEMPTS then break end
             hrp.CFrame = CFrame.new(targetPos)
             task.wait(DELAY)
             if (hrp.Position - targetPos).Magnitude < 1 then break end
@@ -92,7 +87,6 @@ local function goTo(targetPos, timeout)
         local moveDist = math.min(STEP, dist)
         local newPos = currentPos + dir * moveDist
         newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z)
-
         hrp.CFrame = CFrame.new(newPos)
         task.wait(DELAY)
     end
@@ -119,7 +113,6 @@ local function safeGoTo(targetPos)
     end
 end
 
--- moveStep для посадки (оставлен для forceSitOnSeat)
 local function moveStep(targetPos, speed, keepY)
     local char = player.Character
     if not char then return false end
@@ -324,11 +317,12 @@ local function stopMagnetBodyPos()
     if magnetBodyPos then magnetBodyPos:Destroy(); magnetBodyPos = nil end
 end
 
--- ========== 4. ОСТРОВ (проверка исчезновения во время полёта) ==========
+-- ========== 4. ОСТРОВ (зависание + немедленное ожидание яиц) ==========
 local islandModeActive = false
 local waitingForDespawn = false
 local pendingReturn = false
 local recoveryMode = false
+local islandBv = nil   -- BodyVelocity для зависания над островом
 
 local function findIsland()
     for _, obj in ipairs(workspace:GetDescendants()) do
@@ -418,76 +412,79 @@ task.spawn(function()
                 if h then h.PlatformStand = true end
             end
 
-            local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
-            safeGoTo(target)
-
-            -- Проверка: не исчез ли остров, пока летели?
-            if not findIsland() then
-                print("[ОСТРОВ] Остров исчез во время полёта, возврат")
-                islandModeActive = false
-                waitingForDespawn = true
-                pendingReturn = true
-                local char = player.Character
-                if char then
-                    local h = char:FindFirstChild("Humanoid")
-                    if h then h.PlatformStand = false end
-                end
-            else
-                local islandStart = os.clock()
-                local eggsList = {}
-                while os.clock() - islandStart < 600 do
-                    eggsList = getAllEggs()
-                    if #eggsList > 0 then break end
-                    task.wait(1)
-                end
-
-                if #eggsList == 0 then
-                    islandModeActive = false
-                    waitingForDespawn = true
-                    pendingReturn = true
-                else
-                    local activationStart = os.clock()
-                    while islandModeActive and findIsland() do
-                        local currentEggs = getAllEggs()
-                        if #currentEggs == 0 then break end
-
-                        if os.clock() - activationStart > 120 then
-                            print("[ОСТРОВ] 2 минуты на активацию истекли, возвращаемся")
-                            break
-                        end
-                        if os.clock() - islandStart > 600 then
-                            print("[ОСТРОВ] 10 минут на острове истекли, возвращаемся")
-                            break
-                        end
-
-                        local char = player.Character
-                        if char and char:FindFirstChild("HumanoidRootPart") then
-                            local hrp = char.HumanoidRootPart
-                            for _, egg in ipairs(currentEggs) do
-                                if egg.part then
-                                    egg.dist = (hrp.Position - egg.part.Position).Magnitude
-                                else
-                                    egg.dist = math.huge
-                                end
-                            end
-                            table.sort(currentEggs, function(a,b) return a.dist < b.dist end)
-                        end
-
-                        local eggToActivate = currentEggs[1]
-                        if eggToActivate and eggToActivate.model and eggToActivate.model.Parent then
-                            activateEgg(eggToActivate.model)
-                            task.wait(1)
-                        else
-                            break
-                        end
-                    end
-
-                    islandModeActive = false
-                    waitingForDespawn = true
-                    pendingReturn = true
+            -- Мгновенный телепорт к точке над островом
+            local target = island:GetPivot().Position + Vector3.new(0, 400, 0)
+            char = player.Character
+            if char then
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    hrp.CFrame = CFrame.new(target)
+                    -- Создаём BodyVelocity для зависания
+                    if islandBv then islandBv:Destroy() end
+                    islandBv = Instance.new("BodyVelocity")
+                    islandBv.Velocity = Vector3.new(0, 0, 0)
+                    islandBv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                    islandBv.Parent = hrp
                 end
             end
 
+            -- Сразу начинаем работу с яйцами
+            local islandStart = os.clock()
+            local eggsList = {}
+            while os.clock() - islandStart < 600 do
+                eggsList = getAllEggs()
+                if #eggsList > 0 then break end
+                task.wait(1)
+            end
+
+            if #eggsList == 0 then
+                islandModeActive = false
+                waitingForDespawn = true
+                pendingReturn = true
+            else
+                local activationStart = os.clock()
+                while islandModeActive and findIsland() do
+                    local currentEggs = getAllEggs()
+                    if #currentEggs == 0 then break end
+
+                    if os.clock() - activationStart > 120 then
+                        print("[ОСТРОВ] 2 минуты на активацию истекли, возвращаемся")
+                        break
+                    end
+                    if os.clock() - islandStart > 600 then
+                        print("[ОСТРОВ] 10 минут на острове истекли, возвращаемся")
+                        break
+                    end
+
+                    local char = player.Character
+                    if char and char:FindFirstChild("HumanoidRootPart") then
+                        local hrp = char.HumanoidRootPart
+                        for _, egg in ipairs(currentEggs) do
+                            if egg.part then
+                                egg.dist = (hrp.Position - egg.part.Position).Magnitude
+                            else
+                                egg.dist = math.huge
+                            end
+                        end
+                        table.sort(currentEggs, function(a,b) return a.dist < b.dist end)
+                    end
+
+                    local eggToActivate = currentEggs[1]
+                    if eggToActivate and eggToActivate.model and eggToActivate.model.Parent then
+                        activateEgg(eggToActivate.model)
+                        task.wait(1)
+                    else
+                        break
+                    end
+                end
+
+                islandModeActive = false
+                waitingForDespawn = true
+                pendingReturn = true
+            end
+
+            -- Удаляем зависание
+            if islandBv then islandBv:Destroy(); islandBv = nil end
             local char2 = player.Character
             if char2 then
                 local h2 = char2:FindFirstChild("Humanoid")
@@ -501,8 +498,10 @@ end)
 local function doReturnToBoat()
     recoveryMode = true
     stopMagnetBodyPos()
+    if islandBv then islandBv:Destroy(); islandBv = nil end   -- убираем зависание
+
     local returnStart = os.clock()
-    local maxReturnTime = 300 -- 5 минут
+    local maxReturnTime = 300
 
     while true do
         local currentBoat = findMyBoat()
@@ -516,11 +515,9 @@ local function doReturnToBoat()
                 local nat = currentBoat:FindFirstChild("Script")
                 if nat then nat.Disabled = true end
 
-                -- Долетаем до точки над сиденьем с большим таймаутом
                 local targetPos = currentSeat.Position + Vector3.new(0, 2.5, 0)
-                goTo(targetPos, maxReturnTime)   -- даём до 5 минут на полёт
+                goTo(targetPos, maxReturnTime)
 
-                -- Пытаемся сесть (forceSitOnSeat включает доводку и магнит)
                 local char = player.Character
                 if char then
                     local hum = char:FindFirstChild("Humanoid")
@@ -552,7 +549,6 @@ local function doReturnToBoat()
         end
     end
 
-    -- Перепокупка
     warn("[ВОЗВРАТ] Перепокупка лодки...")
     boat = nil; seat = nil; root = nil
     stopMove()
@@ -664,6 +660,7 @@ task.spawn(function()
             boat = nil; seat = nil; root = nil
             stopMove()
             stopMagnetBodyPos()
+            if islandBv then islandBv:Destroy(); islandBv = nil end
             local char = player.Character
             if char then
                 local hum = char:FindFirstChild("Humanoid")
@@ -691,6 +688,7 @@ task.spawn(function()
                     warn("[WATCHDOG] Зависание, принудительный возврат.")
                     stopMove()
                     stopMagnetBodyPos()
+                    if islandBv then islandBv:Destroy(); islandBv = nil end
                     pendingReturn = true
                     lastWatchdogTime = os.clock()
                 end
@@ -796,5 +794,5 @@ task.spawn(function()
     end
 end)
 
-print("===== СКРИПТ 9.26 ЗАПУЩЕН =====")
-print("Порог телепортации 50, проверка острова при полёте, возврат с 5-минутным таймаутом.")
+print("===== СКРИПТ 9.27 ЗАПУЩЕН =====")
+print("Мгновенный телепорт + зависание над островом, немедленный сбор яиц.")
