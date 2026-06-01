@@ -1,7 +1,5 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.27) =====
--- Исправлено: порог телепортации 50, проверка острова при полёте.
--- Возврат в лодку: ресет + быстрая покупка при пропаже лодки, иначе подлёт + быстрая посадка.
--- Новая быстрая посадка (как в эталонном скрипте): телепорт + BodyVelocity + Sit.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.28) =====
+-- Быстрая посадка (телепорт + Sit), ресет при перепокупке, остров, анти-idle.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -115,7 +113,7 @@ local function safeGoTo(targetPos)
     end
 end
 
--- ========== 2. НОВАЯ БЫСТРАЯ ПОСАДКА (как в эталоне) ==========
+-- ========== 2. БЫСТРАЯ ПОСАДКА (эталонный метод) ==========
 local function fastSitOnSeat(targetSeat, maxAttempts)
     maxAttempts = maxAttempts or 2
     for attempt = 1, maxAttempts do
@@ -160,7 +158,7 @@ local function fastSitOnSeat(targetSeat, maxAttempts)
     return false
 end
 
--- ========== 3. ПОКУПКА, ПОСАДКА, ЛОДКА ==========
+-- ========== 3. ПОКУПКА, ЛОДКА ==========
 local BOAT_BUY_POS = Vector3.new(-16917.0, 9.1, 447.0)
 
 local function buyBoatOnly()
@@ -278,7 +276,7 @@ local function startMove()
     end)
 end
 
--- ========== 4. МАГНИТ ==========
+-- ========== 4. МАГНИТ (если выпал из лодки) ==========
 local magnetBodyPos = nil
 local magnetBodyPosActive = false
 
@@ -490,12 +488,12 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ВОЗВРАТ В ЛОДКУ (с быстрой посадкой и подлётом) ==========
+-- ========== 6. ВОЗВРАТ В ЛОДКУ (с 5‑минутным таймаутом и ресетом при перепокупке) ==========
 local function doReturnToBoat()
     recoveryMode = true
     stopMagnetBodyPos()
     local returnStart = os.clock()
-    local maxReturnTime = 300
+    local maxReturnTime = 300 -- 5 минут
 
     while true do
         local currentBoat = findMyBoat()
@@ -509,11 +507,9 @@ local function doReturnToBoat()
                 local nat = currentBoat:FindFirstChild("Script")
                 if nat then nat.Disabled = true end
 
-                -- Подлетаем к сиденью (как к острову)
                 local targetPos = currentSeat.Position + Vector3.new(0, 3.5, 0)
                 goTo(targetPos, maxReturnTime)
 
-                -- Быстрая посадка
                 local char = player.Character
                 if char then
                     local hum = char:FindFirstChild("Humanoid")
@@ -545,10 +541,20 @@ local function doReturnToBoat()
         end
     end
 
-    -- Перепокупка
-    warn("[ВОЗВРАТ] Перепокупка лодки...")
+    -- Перепокупка с ресетом
+    warn("[ВОЗВРАТ] Перепокупка лодки с ресетом...")
     boat = nil; seat = nil; root = nil
     stopMove()
+    stopMagnetBodyPos()
+
+    local char = player.Character
+    if char then
+        local hum = char:FindFirstChild("Humanoid")
+        if hum then hum.Health = 0 end
+    end
+    player.CharacterAdded:Wait()
+    task.wait(1)
+
     local ok = buyBoatAfterMove()
     if ok then
         for i = 1, 30 do
@@ -565,7 +571,6 @@ local function doReturnToBoat()
                 end
                 local nat = boat:FindFirstChild("Script")
                 if nat then nat.Disabled = true end
-                -- Подлетаем и садимся
                 local targetPos = seat.Position + Vector3.new(0, 3.5, 0)
                 safeGoTo(targetPos)
                 fastSitOnSeat(seat, 3)
@@ -576,7 +581,7 @@ local function doReturnToBoat()
     recoveryMode = false
 end
 
--- ========== 7. БЫСТРАЯ ПЕРЕПОКУПКА (ресет + телепорт) ==========
+-- ========== 7. БЫСТРАЯ ПЕРЕПОКУПКА ПРИ ПРОПАЖЕ ЛОДКИ (ресет) ==========
 local function quickRebuy()
     recoveryMode = true
     stopMove()
@@ -587,7 +592,6 @@ local function quickRebuy()
         local hum = char:FindFirstChild("Humanoid")
         if hum then hum.Health = 0 end
     end
-
     player.CharacterAdded:Wait()
     task.wait(1)
 
@@ -758,7 +762,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 9. ФРУКТЫ, WEST, EAST, DRAGON (кроме Talon) ==========
+-- ========== 9. ФРУКТЫ И ЦЕННЫЕ ПРЕДМЕТЫ (Discord) ==========
 task.spawn(function()
     local sentItems = {}
 
@@ -847,5 +851,5 @@ task.spawn(function()
     end
 end)
 
-print("===== СКРИПТ 9.27 ЗАПУЩЕН =====")
-print("Быстрая посадка (телепорт + Sit), подлёт к лодке как к острову, ресет при пропаже.")
+print("===== СКРИПТ 9.28 ЗАПУЩЕН =====")
+print("Быстрая посадка, ресет при перепокупке, 5 мин таймаут, анти-idle, Discord.")
