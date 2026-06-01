@@ -207,7 +207,7 @@ local function findMyBoat()
     return nil
 end
 
--- ========== 4. ДИНАМИЧЕСКОЕ ПРИБЛИЖЕНИЕ К ДВИЖУЩЕЙСЯ ЛОДКЕ ==========
+-- ========== 4. ДИНАМИЧЕСКОЕ ПРИБЛИЖЕНИЕ К ДВИЖУЩЕЙСЯ ЛОДКЕ (БЕЗ ТЕЛЕПОРТА) ==========
 local function dynamicApproachToSeat(targetSeat, maxTime, updateInterval)
     updateInterval = updateInterval or 0.3
     maxTime = maxTime or 10
@@ -219,11 +219,13 @@ local function dynamicApproachToSeat(targetSeat, maxTime, updateInterval)
     if not hrp or not hum then return false end
 
     hum.PlatformStand = true
+    -- Удаляем старые BodyVelocity/BodyPosition
     local oldBV = hrp:FindFirstChildOfClass("BodyVelocity")
     if oldBV then oldBV:Destroy() end
     local oldBP = hrp:FindFirstChildOfClass("BodyPosition")
     if oldBP then oldBP:Destroy() end
 
+    -- Создаём BodyVelocity для плавного полёта
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Parent = hrp
@@ -240,13 +242,11 @@ local function dynamicApproachToSeat(targetSeat, maxTime, updateInterval)
             break 
         end
         
-        if dist > 50 then
-            hrp.CFrame = CFrame.new(targetPos)
-        else
-            local direction = (targetPos - currentPos).Unit
-            local speed = math.min(250, dist * 8)
-            bv.Velocity = direction * speed
-        end
+        -- Плавное движение (без телепортации)
+        local direction = (targetPos - currentPos).Unit
+        local speed = math.min(250, dist * 8)  -- скорость растёт с расстоянием, но не более 250
+        bv.Velocity = direction * speed
+        
         task.wait(updateInterval)
     end
     
