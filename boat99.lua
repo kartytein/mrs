@@ -207,7 +207,7 @@ local function findMyBoat()
     return nil
 end
 
--- ========== 4. ДИНАМИЧЕСКОЕ ПРИБЛИЖЕНИЕ К ДВИЖУЩЕЙСЯ ЛОДКЕ ==========
+-- ========== 4. ДИНАМИЧЕСКОЕ ПРИБЛИЖЕНИЕ К ДВИЖУЩЕЙСЯ ЛОДКЕ (БЕЗ ТЕЛЕПОРТА) ==========
 local function dynamicApproachToSeat(targetSeat, maxTime, updateInterval)
     updateInterval = updateInterval or 0.3
     maxTime = maxTime or 10
@@ -240,13 +240,11 @@ local function dynamicApproachToSeat(targetSeat, maxTime, updateInterval)
             break 
         end
         
-        if dist > 50 then
-            hrp.CFrame = CFrame.new(targetPos)
-        else
-            local direction = (targetPos - currentPos).Unit
-            local speed = math.min(250, dist * 8)
-            bv.Velocity = direction * speed
-        end
+        -- Только плавное движение, без телепортации
+        local direction = (targetPos - currentPos).Unit
+        local speed = math.min(250, dist * 8) -- скорость зависит от расстояния
+        bv.Velocity = direction * speed
+        
         task.wait(updateInterval)
     end
     
