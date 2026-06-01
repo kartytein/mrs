@@ -114,33 +114,35 @@ local function safeGoTo(targetPos)
     end
 end
 
--- ========== 2. БЫСТРАЯ ПОСАДКА С ПОВТОРНЫМИ ПОПЫТКАМИ (ДО УСПЕХА) ==========
+-- ========== 2. БЫСТРАЯ ПОСАДКА (ТОЛЬКО НА КОРОТКОЙ ДИСТАНЦИИ) ==========
 local function fastSitOnSeat(targetSeat, maxAttempts, attemptDelay)
-    maxAttempts = maxAttempts or 10      -- максимум 10 попыток
-    attemptDelay = attemptDelay or 0.3   -- задержка между попытками 0.3 сек
+    maxAttempts = maxAttempts or 10
+    attemptDelay = attemptDelay or 0.3
     local startTime = os.clock()
-    local maxDuration = 5                -- общий таймаут 5 секунд
+    local maxDuration = 5
 
     for attempt = 1, maxAttempts do
-        if os.clock() - startTime > maxDuration then
-            print("[ПОСАДКА] Таймаут 5 секунд, не удалось сесть")
-            break
-        end
-
+        if os.clock() - startTime > maxDuration then break end
         local char = player.Character
         if not char then return false end
         local hum = char:FindFirstChild("Humanoid")
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if not hum or not hrp then return false end
 
-        -- Уже сидим?
         if hum.Sit and hum.SeatPart == targetSeat then
-            print("[ПОСАДКА] Уже сидим, успех")
             return true
         end
 
-        hum.PlatformStand = true
+        -- Проверяем расстояние до сиденья
+        local distToSeat = (hrp.Position - targetSeat.Position).Magnitude
+        if distToSeat > 10 then
+            -- Ещё далеко, не телепортируем, просто ждём
+            task.wait(attemptDelay)
+            continue
+        end
 
+        -- Дистанция маленькая – телепортируем и садимся
+        hum.PlatformStand = true
         local bv = hrp:FindFirstChildOfClass("BodyVelocity")
         if not bv then
             bv = Instance.new("BodyVelocity")
@@ -159,7 +161,6 @@ local function fastSitOnSeat(targetSeat, maxAttempts, attemptDelay)
         if hum.Sit and hum.SeatPart == targetSeat then
             bv:Destroy()
             hum.PlatformStand = false
-            print("[ПОСАДКА] Успех с попытки " .. attempt)
             return true
         else
             bv:Destroy()
@@ -170,6 +171,7 @@ local function fastSitOnSeat(targetSeat, maxAttempts, attemptDelay)
     end
     return false
 end
+
 -- ========== 3. ПОКУПКА, ПОИСК ЛОДКИ ==========
 local BOAT_BUY_POS = Vector3.new(-16917.0, 9.1, 447.0)
 
