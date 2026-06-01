@@ -838,7 +838,6 @@ task.spawn(function()
     print("[ДЕТЕКТОР] Запущен. Отслеживается появление в рюкзаке и руках (фрукты, West, East, Dragon кроме Talon)")
 end)
 
-
 -- ========== 10. АНТИ-IDLE ==========
 task.spawn(function()
     local cam = workspace.CurrentCamera
