@@ -762,31 +762,29 @@ task.spawn(function()
     end
 end)
 
--- ========== 9. ФРУКТЫ И ЦЕННЫЕ ПРЕДМЕТЫ (Discord) – ОТПРАВКА ИЗ BACKPACK ==========
+-- ========== 9. ДЕТЕКТОР ПРЕДМЕТОВ (BACKPACK + CHARACTER) ==========
 task.spawn(function()
-    local sentItems = {}
+    local sentItems = {}   -- уже отправленные предметы
+    local lastBackpack = {} -- для отслеживания новых предметов в рюкзаке
+    local lastCharacter = {} -- для отслеживания новых предметов в руках
 
-    local function shouldSend(itemName)
-        if not itemName then return false end
-        local nameLower = string.lower(itemName)
-        if nameLower:find("fruit") or nameLower:find(" mi") or nameLower:find("mi ") or nameLower:find("no mi") then
-            return true
-        end
-        if nameLower:find("west") or nameLower:find("east") then
-            return true
-        end
-        if nameLower:find("dragon") and not nameLower:find("talon") then
-            return true
-        end
+    local function shouldSend(name)
+        if not name then return false end
+        local low = string.lower(name)
+        if low:find("fruit") or low:find(" mi") or low:find("mi ") or low:find("no mi") then return true end
+        if low:find("west") or low:find("east") then return true end
+        if low:find("dragon") and not low:find("talon") then return true end
         return false
     end
 
     local function sendToDiscord(name)
+        if sentItems[name] then return end
+        sentItems[name] = true
         local msg = {
-            content = playerName .. " получил '" .. name .. "'!",
+            content = player.Name .. " получил '" .. name .. "'!",
             username = "Инвентарь"
         }
-        pcall(function()
+        local success = pcall(function()
             HttpService:RequestAsync({
                 Url = DISCORD_WEBHOOK,
                 Method = "POST",
@@ -794,48 +792,61 @@ task.spawn(function()
                 Body = HttpService:JSONEncode(msg)
             })
         end)
-        print("[DISCORD] Отправлено: " .. name)
+        if success then
+            print("[DISCORD] Отправлено: " .. name)
+        else
+            warn("[DISCORD] Ошибка отправки: " .. name)
+        end
     end
 
-    local function checkItem(item)
-        if not (item:IsA("Tool") or item:IsA("Model")) then return end
-        local itemName = item.Name
-        if not itemName then return end
-        if not shouldSend(itemName) then return end
-        if sentItems[itemName] then return end
-        sentItems[itemName] = true
-        sendToDiscord(itemName)
-        print("[ДЕТЕКТОР] Найдено в рюкзаке: " .. itemName)
+    -- Сканируем Backpack и отправляем новые предметы
+    local function scanBackpack()
+        local backpack = player:FindFirstChild("Backpack")
+        if not backpack then return end
+        local current = {}
+        for _, item in ipairs(backpack:GetChildren()) do
+            if item:IsA("Tool") or item:IsA("Model") then
+                local name = item.Name
+                if shouldSend(name) then
+                    current[name] = true
+                    if not lastBackpack[name] then
+                        sendToDiscord(name)
+                        print("[ДЕТЕКТОР] Новое в Backpack: " .. name)
+                    end
+                end
+            end
+        end
+        lastBackpack = current
     end
 
-    -- Ждём рюкзак
-    local backpack = player:WaitForChild("Backpack")
-    
-    -- Проверяем уже имеющееся
-    for _, item in ipairs(backpack:GetChildren()) do
-        checkItem(item)
+    -- Сканируем Character (руки) и отправляем новые предметы
+    local function scanCharacter()
+        local char = player.Character
+        if not char then return end
+        local current = {}
+        for _, item in ipairs(char:GetChildren()) do
+            if (item:IsA("Tool") or item:IsA("Model")) and shouldSend(item.Name) then
+                local name = item.Name
+                current[name] = true
+                if not lastCharacter[name] then
+                    sendToDiscord(name)
+                    print("[ДЕТЕКТОР] Новое в руках: " .. name)
+                end
+            end
+        end
+        lastCharacter = current
     end
-    
-    -- Следим за новыми предметами в рюкзаке
-    backpack.ChildAdded:Connect(function(item)
-        task.wait(0.1) -- даём время на инициализацию
-        checkItem(item)
+
+    -- Запускаем циклы сканирования
+    task.spawn(function()
+        while true do
+            task.wait(0.5)  -- каждые 0.5 секунды
+            scanBackpack()
+            scanCharacter()
+        end
     end)
 
-    -- Дополнительно следим за руками (на случай если предмет сразу туда попал)
-    local function watchCharacter(char)
-        char.ChildAdded:Connect(function(item)
-            task.wait(0.1)
-            checkItem(item)
-        end)
-    end
-
-    if player.Character then
-        watchCharacter(player.Character)
-    end
-    player.CharacterAdded:Connect(watchCharacter)
-
-    print("[ДЕТЕКТОР] Запущен. Отслеживается появление в рюкзаке и руках (фрукты, West, East, Dragon кроме Talon)")
+    print("[ДЕТЕКТОР] Запущен. Отслеживается Backpack и Character (фрукты, West, East, Dragon без Talon)")
 end)
 
 -- ========== 10. АНТИ-IDLE ==========
