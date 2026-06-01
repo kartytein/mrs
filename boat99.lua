@@ -762,22 +762,19 @@ task.spawn(function()
     end
 end)
 
--- ========== 9. ФРУКТЫ И ЦЕННЫЕ ПРЕДМЕТЫ (Discord) – РАБОТАЕТ С BACKPACK И CHARACTER ==========
+-- ========== 9. ФРУКТЫ И ЦЕННЫЕ ПРЕДМЕТЫ (Discord) – ОТПРАВКА ИЗ BACKPACK ==========
 task.spawn(function()
     local sentItems = {}
 
     local function shouldSend(itemName)
         if not itemName then return false end
         local nameLower = string.lower(itemName)
-        -- Фрукты (любое упоминание fruit, mi, no mi)
         if nameLower:find("fruit") or nameLower:find(" mi") or nameLower:find("mi ") or nameLower:find("no mi") then
             return true
         end
-        -- West / East
         if nameLower:find("west") or nameLower:find("east") then
             return true
         end
-        -- Dragon, но не Dragon Talon
         if nameLower:find("dragon") and not nameLower:find("talon") then
             return true
         end
@@ -808,44 +805,40 @@ task.spawn(function()
         if sentItems[itemName] then return end
         sentItems[itemName] = true
         sendToDiscord(itemName)
-        print("[ДЕТЕКТОР] Пойман предмет: " .. itemName .. " в " .. (item.Parent == player.Character and "руках" or "рюкзаке"))
+        print("[ДЕТЕКТОР] Найдено в рюкзаке: " .. itemName)
     end
 
-    -- Сканирование контейнера
-    local function scan(container)
-        for _, item in ipairs(container:GetChildren()) do
+    -- Ждём рюкзак
+    local backpack = player:WaitForChild("Backpack")
+    
+    -- Проверяем уже имеющееся
+    for _, item in ipairs(backpack:GetChildren()) do
+        checkItem(item)
+    end
+    
+    -- Следим за новыми предметами в рюкзаке
+    backpack.ChildAdded:Connect(function(item)
+        task.wait(0.1) -- даём время на инициализацию
+        checkItem(item)
+    end)
+
+    -- Дополнительно следим за руками (на случай если предмет сразу туда попал)
+    local function watchCharacter(char)
+        char.ChildAdded:Connect(function(item)
+            task.wait(0.1)
             checkItem(item)
-        end
-    end
-
-    -- Мониторинг контейнера
-    local function watch(container)
-        container.ChildAdded:Connect(function(item)
-            task.defer(function() checkItem(item) end)
         end)
     end
 
-    task.wait(2)
-
-    local backpack = player:WaitForChild("Backpack")
-    local character = player.Character
-
-    scan(backpack)
-    watch(backpack)
-
-    if character then
-        scan(character)
-        watch(character)
+    if player.Character then
+        watchCharacter(player.Character)
     end
+    player.CharacterAdded:Connect(watchCharacter)
 
-    player.CharacterAdded:Connect(function(newChar)
-        task.wait(0.5)
-        scan(newChar)
-        watch(newChar)
-    end)
-
-    print("[ДЕТЕКТОР] Запущен. Отслеживаются рюкзак и персонаж (фрукты, West, East, Dragon кроме Talon)")
+    print("[ДЕТЕКТОР] Запущен. Отслеживается появление в рюкзаке и руках (фрукты, West, East, Dragon кроме Talon)")
 end)
+
+
 -- ========== 10. АНТИ-IDLE ==========
 task.spawn(function()
     local cam = workspace.CurrentCamera
