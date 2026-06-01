@@ -1,5 +1,6 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.28) =====
--- Быстрая посадка (телепорт + Sit), ресет при перепокупке, остров, анти-idle.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.29) =====
+-- Быстрая посадка, динамическое движение к лодке (обновление позиции 0.3с),
+-- ресет при перепокупке, детектор предметов с Backpack+Character, анти-idle.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -23,7 +24,7 @@ task.spawn(function()
     end
 end)
 
--- ========== 1. ДВИЖОК goTo (телепорт при dist < 50) ==========
+-- ========== 1. ДВИЖОК goTo (для статических целей, например острова) ==========
 local STEP = 10
 local DELAY = 0.02
 local TELEPORT_DISTANCE = 50
@@ -158,7 +159,7 @@ local function fastSitOnSeat(targetSeat, maxAttempts)
     return false
 end
 
--- ========== 3. ПОКУПКА, ЛОДКА ==========
+-- ========== 3. ПОКУПКА, ПОИСК ЛОДКИ ==========
 local BOAT_BUY_POS = Vector3.new(-16917.0, 9.1, 447.0)
 
 local function buyBoatOnly()
@@ -195,7 +196,55 @@ local function findMyBoat()
     return nil
 end
 
--- Движение лодки
+-- ========== 4. ДИНАМИЧЕСКОЕ ПРИБЛИЖЕНИЕ К ДВИЖУЩЕЙСЯ ЛОДКЕ ==========
+local function dynamicApproachToSeat(targetSeat, maxTime, updateInterval)
+    updateInterval = updateInterval or 0.3
+    maxTime = maxTime or 10
+    local startTime = os.clock()
+    local char = player.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChild("Humanoid")
+    if not hrp or not hum then return false end
+
+    hum.PlatformStand = true
+    local oldBV = hrp:FindFirstChildOfClass("BodyVelocity")
+    if oldBV then oldBV:Destroy() end
+    local oldBP = hrp:FindFirstChildOfClass("BodyPosition")
+    if oldBP then oldBP:Destroy() end
+
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bv.Parent = hrp
+
+    while true do
+        if os.clock() - startTime > maxTime then break end
+        if not targetSeat or not targetSeat.Parent or not player.Character then break end
+        
+        local targetPos = targetSeat.Position + Vector3.new(0, 3.5, 0)
+        local currentPos = hrp.Position
+        local dist = (currentPos - targetPos).Magnitude
+        
+        if dist < 3 then 
+            break 
+        end
+        
+        if dist > 50 then
+            hrp.CFrame = CFrame.new(targetPos)
+        else
+            local direction = (targetPos - currentPos).Unit
+            local speed = math.min(250, dist * 8)
+            bv.Velocity = direction * speed
+        end
+        task.wait(updateInterval)
+    end
+    
+    bv:Destroy()
+    hum.PlatformStand = false
+    return true
+end
+
+-- ========== 5. ДВИЖЕНИЕ ЛОДКИ (плавание) ==========
 local boat, seat, root, hum, hrp, bv = nil, nil, nil, nil, nil, nil
 local dir = -1
 local X_MIN, X_MAX = -77389.3, -47968.4
@@ -276,7 +325,7 @@ local function startMove()
     end)
 end
 
--- ========== 4. МАГНИТ (если выпал из лодки) ==========
+-- ========== 6. МАГНИТ (если выпал из лодки) ==========
 local magnetBodyPos = nil
 local magnetBodyPosActive = false
 
@@ -316,7 +365,7 @@ local function stopMagnetBodyPos()
     if magnetBodyPos then magnetBodyPos:Destroy(); magnetBodyPos = nil end
 end
 
--- ========== 5. ОСТРОВ (без изменений) ==========
+-- ========== 7. ОСТРОВ (без изменений) ==========
 local islandModeActive = false
 local waitingForDespawn = false
 local pendingReturn = false
@@ -488,12 +537,12 @@ task.spawn(function()
     end
 end)
 
--- ========== 6. ВОЗВРАТ В ЛОДКУ (с 5‑минутным таймаутом и ресетом при перепокупке) ==========
+-- ========== 8. ВОЗВРАТ В ЛОДКУ (динамическое движение + 5‑минутный таймаут) ==========
 local function doReturnToBoat()
     recoveryMode = true
     stopMagnetBodyPos()
     local returnStart = os.clock()
-    local maxReturnTime = 300 -- 5 минут
+    local maxReturnTime = 300
 
     while true do
         local currentBoat = findMyBoat()
@@ -507,8 +556,7 @@ local function doReturnToBoat()
                 local nat = currentBoat:FindFirstChild("Script")
                 if nat then nat.Disabled = true end
 
-                local targetPos = currentSeat.Position + Vector3.new(0, 3.5, 0)
-                goTo(targetPos, maxReturnTime)
+                dynamicApproachToSeat(currentSeat, 10, 0.3)   -- динамическое приближение
 
                 local char = player.Character
                 if char then
@@ -571,8 +619,7 @@ local function doReturnToBoat()
                 end
                 local nat = boat:FindFirstChild("Script")
                 if nat then nat.Disabled = true end
-                local targetPos = seat.Position + Vector3.new(0, 3.5, 0)
-                safeGoTo(targetPos)
+                dynamicApproachToSeat(seat, 10, 0.3)
                 fastSitOnSeat(seat, 3)
                 startMove()
             end
@@ -581,7 +628,7 @@ local function doReturnToBoat()
     recoveryMode = false
 end
 
--- ========== 7. БЫСТРАЯ ПЕРЕПОКУПКА ПРИ ПРОПАЖЕ ЛОДКИ (ресет) ==========
+-- ========== 9. БЫСТРАЯ ПЕРЕПОКУПКА ПРИ ПРОПАЖЕ ЛОДКИ (ресет) ==========
 local function quickRebuy()
     recoveryMode = true
     stopMove()
@@ -615,8 +662,7 @@ local function quickRebuy()
             end
             local nat = boat:FindFirstChild("Script")
             if nat then nat.Disabled = true end
-            local targetPos = seat.Position + Vector3.new(0, 3.5, 0)
-            safeGoTo(targetPos)
+            dynamicApproachToSeat(seat, 10, 0.3)
             fastSitOnSeat(seat, 3)
             startMove()
         end
@@ -624,7 +670,7 @@ local function quickRebuy()
     recoveryMode = false
 end
 
--- ========== 8. ОСНОВНОЙ ЦИКЛ ==========
+-- ========== 10. ОСНОВНОЙ ЦИКЛ ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -650,8 +696,7 @@ task.spawn(function()
             end
             local nat = boat:FindFirstChild("Script")
             if nat then nat.Disabled = true end
-            local targetPos = seat.Position + Vector3.new(0, 3.5, 0)
-            safeGoTo(targetPos)
+            dynamicApproachToSeat(seat, 10, 0.3)
             fastSitOnSeat(seat, 3)
             startMove()
         end
@@ -747,8 +792,7 @@ task.spawn(function()
                 if not isReseating then
                     isReseating = true
                     if seat then
-                        local targetPos = seat.Position + Vector3.new(0, 3.5, 0)
-                        safeGoTo(targetPos)
+                        dynamicApproachToSeat(seat, 10, 0.3)
                         fastSitOnSeat(seat, 3)
                     end
                     isReseating = false
@@ -762,11 +806,11 @@ task.spawn(function()
     end
 end)
 
--- ========== 9. ДЕТЕКТОР ПРЕДМЕТОВ (BACKPACK + CHARACTER) ==========
+-- ========== 11. ДЕТЕКТОР ПРЕДМЕТОВ (BACKPACK + CHARACTER, периодическое сканирование) ==========
 task.spawn(function()
-    local sentItems = {}   -- уже отправленные предметы
-    local lastBackpack = {} -- для отслеживания новых предметов в рюкзаке
-    local lastCharacter = {} -- для отслеживания новых предметов в руках
+    local sentItems = {}
+    local lastBackpack = {}
+    local lastCharacter = {}
 
     local function shouldSend(name)
         if not name then return false end
@@ -781,10 +825,10 @@ task.spawn(function()
         if sentItems[name] then return end
         sentItems[name] = true
         local msg = {
-            content = player.Name .. " получил '" .. name .. "'!",
+            content = playerName .. " получил '" .. name .. "'!",
             username = "Инвентарь"
         }
-        local success = pcall(function()
+        pcall(function()
             HttpService:RequestAsync({
                 Url = DISCORD_WEBHOOK,
                 Method = "POST",
@@ -792,14 +836,9 @@ task.spawn(function()
                 Body = HttpService:JSONEncode(msg)
             })
         end)
-        if success then
-            print("[DISCORD] Отправлено: " .. name)
-        else
-            warn("[DISCORD] Ошибка отправки: " .. name)
-        end
+        print("[DISCORD] Отправлено: " .. name)
     end
 
-    -- Сканируем Backpack и отправляем новые предметы
     local function scanBackpack()
         local backpack = player:FindFirstChild("Backpack")
         if not backpack then return end
@@ -819,7 +858,6 @@ task.spawn(function()
         lastBackpack = current
     end
 
-    -- Сканируем Character (руки) и отправляем новые предметы
     local function scanCharacter()
         local char = player.Character
         if not char then return end
@@ -837,19 +875,18 @@ task.spawn(function()
         lastCharacter = current
     end
 
-    -- Запускаем циклы сканирования
     task.spawn(function()
         while true do
-            task.wait(0.5)  -- каждые 0.5 секунды
+            task.wait(0.5)
             scanBackpack()
             scanCharacter()
         end
     end)
 
-    print("[ДЕТЕКТОР] Запущен. Отслеживается Backpack и Character (фрукты, West, East, Dragon без Talon)")
+    print("[ДЕТЕКТОР] Запущен. Отслеживаются Backpack и Character (каждые 0.5 сек)")
 end)
 
--- ========== 10. АНТИ-IDLE ==========
+-- ========== 12. АНТИ-IDLE ==========
 task.spawn(function()
     local cam = workspace.CurrentCamera
     local orig = cam.CFrame
@@ -874,5 +911,5 @@ task.spawn(function()
     end
 end)
 
-print("===== СКРИПТ 9.28 ЗАПУЩЕН =====")
-print("Быстрая посадка, ресет при перепокупке, 5 мин таймаут, анти-idle, Discord.")
+print("===== СКРИПТ 9.29 ЗАПУЩЕН =====")
+print("Динамическое движение к лодке (0.3с), быстрая посадка, ресет при перепокупке, детектор предметов (Backpack+Character).")
