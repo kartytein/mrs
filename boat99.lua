@@ -114,17 +114,28 @@ local function safeGoTo(targetPos)
     end
 end
 
--- ========== 2. БЫСТРАЯ ПОСАДКА (эталонный метод) ==========
-local function fastSitOnSeat(targetSeat, maxAttempts)
-    maxAttempts = maxAttempts or 2
+-- ========== 2. БЫСТРАЯ ПОСАДКА С ПОВТОРНЫМИ ПОПЫТКАМИ (ДО УСПЕХА) ==========
+local function fastSitOnSeat(targetSeat, maxAttempts, attemptDelay)
+    maxAttempts = maxAttempts or 10      -- максимум 10 попыток
+    attemptDelay = attemptDelay or 0.3   -- задержка между попытками 0.3 сек
+    local startTime = os.clock()
+    local maxDuration = 5                -- общий таймаут 5 секунд
+
     for attempt = 1, maxAttempts do
+        if os.clock() - startTime > maxDuration then
+            print("[ПОСАДКА] Таймаут 5 секунд, не удалось сесть")
+            break
+        end
+
         local char = player.Character
         if not char then return false end
         local hum = char:FindFirstChild("Humanoid")
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if not hum or not hrp then return false end
 
+        -- Уже сидим?
         if hum.Sit and hum.SeatPart == targetSeat then
+            print("[ПОСАДКА] Уже сидим, успех")
             return true
         end
 
@@ -148,17 +159,17 @@ local function fastSitOnSeat(targetSeat, maxAttempts)
         if hum.Sit and hum.SeatPart == targetSeat then
             bv:Destroy()
             hum.PlatformStand = false
+            print("[ПОСАДКА] Успех с попытки " .. attempt)
             return true
         else
             bv:Destroy()
             hum.Sit = false
             hum.PlatformStand = false
-            task.wait(0.2)
+            task.wait(attemptDelay)
         end
     end
     return false
 end
-
 -- ========== 3. ПОКУПКА, ПОИСК ЛОДКИ ==========
 local BOAT_BUY_POS = Vector3.new(-16917.0, 9.1, 447.0)
 
