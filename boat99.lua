@@ -762,14 +762,25 @@ task.spawn(function()
     end
 end)
 
--- ========== 9. ФРУКТЫ И ЦЕННЫЕ ПРЕДМЕТЫ (Discord) ==========
+-- ========== 9. ФРУКТЫ И ЦЕННЫЕ ПРЕДМЕТЫ (Discord) – РАБОТАЕТ С BACKPACK И CHARACTER ==========
 task.spawn(function()
     local sentItems = {}
 
     local function shouldSend(itemName)
-        if itemName:find("Fruit") then return true end
-        if itemName:find("West") or itemName:find("East") then return true end
-        if itemName:find("Dragon") and not itemName:find("Talon") then return true end
+        if not itemName then return false end
+        local nameLower = string.lower(itemName)
+        -- Фрукты (любое упоминание fruit, mi, no mi)
+        if nameLower:find("fruit") or nameLower:find(" mi") or nameLower:find("mi ") or nameLower:find("no mi") then
+            return true
+        end
+        -- West / East
+        if nameLower:find("west") or nameLower:find("east") then
+            return true
+        end
+        -- Dragon, но не Dragon Talon
+        if nameLower:find("dragon") and not nameLower:find("talon") then
+            return true
+        end
         return false
     end
 
@@ -790,42 +801,51 @@ task.spawn(function()
     end
 
     local function checkItem(item)
-        if not item:IsA("Tool") then return end
-        task.wait(0.3)
-        if not item.Name then return end
-        if not shouldSend(item.Name) then return end
-        if sentItems[item.Name] then return end
-        sentItems[item.Name] = true
-        sendToDiscord(item.Name)
+        if not (item:IsA("Tool") or item:IsA("Model")) then return end
+        local itemName = item.Name
+        if not itemName then return end
+        if not shouldSend(itemName) then return end
+        if sentItems[itemName] then return end
+        sentItems[itemName] = true
+        sendToDiscord(itemName)
+        print("[ДЕТЕКТОР] Пойман предмет: " .. itemName .. " в " .. (item.Parent == player.Character and "руках" or "рюкзаке"))
+    end
+
+    -- Сканирование контейнера
+    local function scan(container)
+        for _, item in ipairs(container:GetChildren()) do
+            checkItem(item)
+        end
+    end
+
+    -- Мониторинг контейнера
+    local function watch(container)
+        container.ChildAdded:Connect(function(item)
+            task.defer(function() checkItem(item) end)
+        end)
     end
 
     task.wait(2)
 
     local backpack = player:WaitForChild("Backpack")
-    for _, item in ipairs(backpack:GetChildren()) do
-        if item:IsA("Tool") and shouldSend(item.Name) then
-            sentItems[item.Name] = true
-        end
-    end
-    if player.Character then
-        for _, item in ipairs(player.Character:GetChildren()) do
-            if item:IsA("Tool") and shouldSend(item.Name) then
-                sentItems[item.Name] = true
-            end
-        end
+    local character = player.Character
+
+    scan(backpack)
+    watch(backpack)
+
+    if character then
+        scan(character)
+        watch(character)
     end
 
-    backpack.ChildAdded:Connect(checkItem)
-    player.CharacterAdded:Connect(function(char)
-        for _, existing in ipairs(char:GetChildren()) do
-            checkItem(existing)
-        end
-        char.ChildAdded:Connect(checkItem)
+    player.CharacterAdded:Connect(function(newChar)
+        task.wait(0.5)
+        scan(newChar)
+        watch(newChar)
     end)
 
-    print("[ДЕТЕКТОР] Запущен (фрукты, West, East, Dragon без Talon)")
+    print("[ДЕТЕКТОР] Запущен. Отслеживаются рюкзак и персонаж (фрукты, West, East, Dragon кроме Talon)")
 end)
-
 -- ========== 10. АНТИ-IDLE ==========
 task.spawn(function()
     local cam = workspace.CurrentCamera
