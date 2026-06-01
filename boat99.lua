@@ -1,6 +1,6 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.28 с таймаутами 3 мин и 10 мин) =====
--- Добавлено: 3 минуты на сбор яиц, 10 минут ожидания деспавна острова.
--- Остальное без изменений.
+-- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 9.35) =====
+-- Таймауты: ожидание яиц 10 мин, активация 2 мин, на яйцо 30 сек.
+-- Деспавн острова 10 мин, восстановление 5 мин, посадка 5 мин, watchdog 45 сек.
 
 local player = game.Players.LocalPlayer
 local playerName = player.Name
@@ -114,7 +114,7 @@ local function safeGoTo(targetPos)
     end
 end
 
--- ========== 2. БЫСТРАЯ ПОСАДКА (эталонный метод) ==========
+-- ========== 2. БЫСТРАЯ ПОСАДКА ==========
 local function fastSitOnSeat(targetSeat, maxAttempts)
     maxAttempts = maxAttempts or 2
     for attempt = 1, maxAttempts do
@@ -129,7 +129,6 @@ local function fastSitOnSeat(targetSeat, maxAttempts)
         end
 
         hum.PlatformStand = true
-
         local bv = hrp:FindFirstChildOfClass("BodyVelocity")
         if not bv then
             bv = Instance.new("BodyVelocity")
@@ -277,7 +276,7 @@ local function startMove()
     end)
 end
 
--- ========== 4. МАГНИТ (если выпал из лодки) ==========
+-- ========== 4. МАГНИТ ==========
 local magnetBodyPos = nil
 local magnetBodyPosActive = false
 
@@ -317,7 +316,7 @@ local function stopMagnetBodyPos()
     if magnetBodyPos then magnetBodyPos:Destroy(); magnetBodyPos = nil end
 end
 
--- ========== 5. ОСТРОВ (с таймаутами: сбор яиц 3 мин, ожидание деспавна 10 мин) ==========
+-- ========== 5. ОСТРОВ (таймауты) ==========
 local islandModeActive = false
 local waitingForDespawn = false
 local pendingReturn = false
@@ -425,10 +424,10 @@ task.spawn(function()
                     if h then h.PlatformStand = false end
                 end
             else
-                -- 3 минуты на сбор яиц (было 600 -> 180)
+                -- Ожидание появления яиц: до 10 минут
                 local islandStart = os.clock()
                 local eggsList = {}
-                while os.clock() - islandStart < 180 do
+                while os.clock() - islandStart < 600 do
                     eggsList = getAllEggs()
                     if #eggsList > 0 then break end
                     task.wait(1)
@@ -439,6 +438,7 @@ task.spawn(function()
                     waitingForDespawn = true
                     pendingReturn = true
                 else
+                    -- Активация яиц: не более 2 минут суммарно
                     local activationStart = os.clock()
                     while islandModeActive and findIsland() do
                         local currentEggs = getAllEggs()
@@ -448,8 +448,8 @@ task.spawn(function()
                             print("[ОСТРОВ] 2 минуты на активацию истекли, возвращаемся")
                             break
                         end
-                        if os.clock() - islandStart > 180 then
-                            print("[ОСТРОВ] 3 минуты на острове истекли, возвращаемся")
+                        if os.clock() - islandStart > 600 then
+                            print("[ОСТРОВ] 10 минут на острове истекли, возвращаемся")
                             break
                         end
 
@@ -626,7 +626,7 @@ local function quickRebuy()
     recoveryMode = false
 end
 
--- ========== 8. ОСНОВНОЙ ЦИКЛ (с таймаутом ожидания деспавна 10 минут) ==========
+-- ========== 8. ОСНОВНОЙ ЦИКЛ (с таймаутами waitingForDespawn и recovery) ==========
 local rs = game:GetService("ReplicatedStorage")
 local remotes = rs and rs:FindFirstChild("Remotes")
 if remotes then
@@ -664,31 +664,7 @@ end)
 local lastWatchdogPos = nil
 local lastWatchdogTime = os.clock()
 local waitDespawnStartTime = nil
-
-task.spawn(function()
-    while true do
-        task.wait(5)
-        local char = player.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local posStr = "нет"
-        if hrp then
-            posStr = string.format("%.0f, %.0f, %.0f", hrp.Position.X, hrp.Position.Y, hrp.Position.Z)
-        end
-        print(string.format(
-            "[STATE] time=%d | islandActive=%s | waitDespawn=%s | pendReturn=%s | boat=%s | moving=%s | reseating=%s | recovery=%s | pos=%s | islandPresent=%s",
-            math.floor(os.clock()),
-            tostring(islandModeActive),
-            tostring(waitingForDespawn),
-            tostring(pendingReturn),
-            tostring(boat and boat.Parent),
-            tostring(moving),
-            tostring(isReseating),
-            tostring(recoveryMode),
-            posStr,
-            tostring(findIsland() ~= nil)
-        ))
-    end
-end)
+local recoveryStartTime = nil
 
 task.spawn(function()
     while true do
@@ -699,7 +675,22 @@ task.spawn(function()
                 hum = char:FindFirstChild("Humanoid")
                 hrp = char:FindFirstChild("HumanoidRootPart")
             end
+            -- Таймаут восстановления: если нет лодки и режим восстановления активен 5 минут
+            if recoveryMode and not boat then
+                if not recoveryStartTime then
+                    recoveryStartTime = os.clock()
+                elseif os.clock() - recoveryStartTime > 300 then
+                    warn("[RECOVERY] Таймаут восстановления 5 минут. Принудительный ресет.")
+                    recoveryMode = false
+                    task.spawn(quickRebuy)
+                    recoveryStartTime = nil
+                end
+            else
+                recoveryStartTime = nil
+            end
             continue
+        else
+            recoveryStartTime = nil
         end
 
         -- Таймаут ожидания деспавна острова (10 минут)
@@ -884,5 +875,5 @@ task.spawn(function()
     end
 end)
 
-print("===== СКРИПТ 9.28 (таймауты 3 мин и 10 мин) ЗАПУЩЕН =====")
-print("Сбор яиц 3 мин, ожидание деспавна острова 10 мин, быстрая посадка, ресет при перепокупке.")
+print("===== СКРИПТ 9.35 ЗАПУЩЕН =====")
+print("Таймауты: ожидание яиц 10 мин, активация 2 мин, на яйцо 30 сек, деспавн 10 мин, восстановление 5 мин.")
