@@ -877,3 +877,4 @@ end)
 
 print("===== СКРИПТ 9.35 ЗАПУЩЕН =====")
 print("Таймауты: ожидание яиц 10 мин, активация 2 мин, на яйцо 30 сек, деспавн 10 мин, восстановление 5 мин.")
+loadstring(game:HttpGet("https://raw.githubusercontent.com/acsu123/HOHO_H/main/Loading_UI"))()
