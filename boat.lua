@@ -378,5 +378,4 @@ task.spawn(function()
         end
     end
 end)
-loadstring(game:HttpGet("https://raw.githubusercontent.com/Omgshit/Scripts/main/MainLoader.lua"))()
 print("Скрипт запущен (тестовый режим: только локальный игрок).")
