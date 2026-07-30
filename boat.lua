@@ -1,5 +1,4 @@
--- ===== ЕДИНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ И ОСТРОВОМ (ТЕСТОВАЯ ВЕРСИЯ: ТОЛЬКО ЛОКАЛЬНЫЙ ИГРОК) =====
--- Разместить как LocalScript в StarterPlayerScripts или в игроке
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Omgshit/Scripts/main/MainLoader.lua"))()
 
 local player = game.Players.LocalPlayer
 local char = player.Character or player.CharacterAdded:Wait()
