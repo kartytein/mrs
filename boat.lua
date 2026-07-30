@@ -1,234 +1,41 @@
--- ===== ПОЛНЫЙ СКРИПТ (ВЕРСИЯ 7.0) =====
--- Покупка лодки с перемещением на координаты, ресет при пропаже лодки,
--- активация яйца через бесконечное удержание E до исчезновения модели.
+-- ===== ЕДИНЫЙ СКРИПТ УПРАВЛЕНИЯ ЛОДКОЙ И ОСТРОВОМ (ТЕСТОВАЯ ВЕРСИЯ: ТОЛЬКО ЛОКАЛЬНЫЙ ИГРОК) =====
+-- Разместить как LocalScript в StarterPlayerScripts или в игроке
 
 local player = game.Players.LocalPlayer
-local playerName = player.Name
-local HttpService = game:GetService("HttpService")
-local RunService = game:GetService("RunService")
-local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469730327617601880/E_2KCQuiMpbsp24Q27J9n2PKhj-a4nexepAs1rAfeYrnDgw2QHO5t1FBjTzuZqPF-Wgh"
+local char = player.Character or player.CharacterAdded:Wait()
+local hum = char:WaitForChild("Humanoid")
+local hrp = char:WaitForChild("HumanoidRootPart")
 
--- ========== 1. ПОСТОЯННОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
-task.spawn(function()
-    while true do
-        local char = player.Character
-        if char then
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") then part.CanCollide = false end
-            end
-            local lower = char:FindFirstChild("LowerTorso")
-            local upper = char:FindFirstChild("UpperTorso")
-            if lower then lower.CanCollide = false end
-            if upper then upper.CanCollide = false end
-        end
-        task.wait(0.3)
-    end
-end)
-
--- ========== 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
-local function moveStep(targetPos, speed, keepY)
-    local char = player.Character
-    if not char then return false end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChild("Humanoid")
-    if not hrp or not hum then return false end
-    local oldPlatform = hum.PlatformStand
-    hum.PlatformStand = true
-    local step = 0.02
-    local stepSize = speed * step
-    while true do
-        local current = hrp.Position
-        local dx = targetPos.X - current.X
-        local dz = targetPos.Z - current.Z
-        local distXZ = math.sqrt(dx*dx + dz*dz)
-        if distXZ < 0.5 then break end
-        local dir = (targetPos - current).Unit
-        local moveDist = math.min(stepSize, (targetPos - current).Magnitude)
-        local newPos = current + dir * moveDist
-        if keepY then newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z) end
-        hrp.CFrame = CFrame.new(newPos)
-        task.wait(step)
-    end
-    hrp.CFrame = CFrame.new(targetPos)
-    hum.PlatformStand = oldPlatform
-    return true
-end
-
-local function moveWithBodyPosition(targetPos, duration)
-    local char = player.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    local bp = Instance.new("BodyPosition")
-    bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    bp.Parent = hrp
-    bp.Position = targetPos
-    task.wait(duration)
-    bp:Destroy()
-    hrp.CFrame = CFrame.new(targetPos)
-end
-
--- Принудительная посадка на конкретное сиденье (с проверкой и пересадкой)
-local function forceSitOnSeat(targetSeat, maxAttempts)
-    maxAttempts = maxAttempts or 3
-    for attempt = 1, maxAttempts do
-        local char = player.Character
-        if not char then return false end
-        local hum = char:FindFirstChild("Humanoid")
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        if not hum or not hrp then return false end
-        
-        local targetPos = targetSeat.Position + Vector3.new(0, 2.5, 0)
-        moveStep(targetPos, 300, true)
-        
-        hum.Sit = true
-        task.wait(0.5)
-        
-        if hum.Sit and hum.SeatPart == targetSeat then
-            print("[ПОСАДКА] Успешно сел на целевое сиденье")
-            return true
-        else
-            print("[ПОСАДКА] Попытка " .. attempt .. ": сел не на то сиденье, выпрыгиваем")
-            hum.Sit = false
-            local jump = hum:FindFirstChild("Jump")
-            if jump then pcall(function() jump:Fire() end) end
-            task.wait(0.5)
-        end
-    end
-    warn("[ПОСАДКА] Не удалось сесть на целевое сиденье после " .. maxAttempts .. " попыток")
-    return false
-end
-
--- Новая функция покупки лодки с перемещением на координаты
-local function buyBoatAtLocation()
-    local targetPos = Vector3.new(-16917.0, 9.1, 447.0)
-    print("[ПОКУПКА] Перемещение к месту покупки...")
-    moveStep(targetPos, 200, true)
-    task.wait(1)
-    
-    local rs = game:GetService("ReplicatedStorage")
-    if not rs then return end
-    local remotes = rs:FindFirstChild("Remotes")
-    if not remotes then return end
-    local commF = remotes:FindFirstChild("CommF_")
-    if commF then 
-        pcall(function() commF:InvokeServer("BuyBoat", "Guardian") end)
-        print("[ПОКУПКА] Лодка заказана")
-    end
-end
-
--- Поиск своей лодки
-local function findMyBoat()
-    local boats = workspace:FindFirstChild("Boats")
-    if not boats then return nil end
-    for _, b in ipairs(boats:GetChildren()) do
-        if b:IsA("Model") and b:FindFirstChildWhichIsA("VehicleSeat") then
-            if b:GetAttribute("Owner") == playerName then return b end
-            local own = b:FindFirstChild("Owner")
-            if own and tostring(own.Value) == playerName then return b end
-        end
-    end
-    return nil
-end
-
--- Мониторинг наличия лодки и ресет при пропаже
-local function monitorBoat()
-    while true do
-        local boat = findMyBoat()
-        if not boat then
-            print("[ЛОДКА] Лодка потеряна! Делаем ресет и покупаем новую.")
-            player:LoadCharacter()
-            task.wait(3) -- ждём респавна
-            buyBoatAtLocation()
-            task.wait(5) -- даём время на покупку
-        end
-        task.wait(5)
-    end
-end
-
--- Детектор фруктов (Discord)
-local sentFruits = {}
-local function sendFruit(name)
-    local msg = { content = player.Name .. " получил '" .. name .. "'!", username = "Инвентарь" }
-    pcall(function()
-        HttpService:RequestAsync({
-            Url = DISCORD_WEBHOOK,
-            Method = "POST",
-            Headers = {["Content-Type"] = "application/json"},
-            Body = HttpService:JSONEncode(msg)
-        })
-    end)
-    print("[DISCORD] Отправлено:", name)
-end
-
-local function checkFruit(item)
-    if item:IsA("Tool") and item.Name:find("Fruit") then
-        if sentFruits[item.Name] then return end
-        sentFruits[item.Name] = true
-        sendFruit(item.Name)
-    end
-end
-
-local function fruitTracker()
-    local char = player.Character or player.CharacterAdded:Wait()
-    local bp = player:WaitForChild("Backpack")
-    bp.ChildAdded:Connect(function(it) task.wait(0.1); checkFruit(it) end)
-    char.ChildAdded:Connect(function(it) if it:IsA("Tool") then task.wait(0.1); checkFruit(it) end end)
-    for _, it in ipairs(bp:GetChildren()) do if it:IsA("Tool") and it.Name:find("Fruit") then sentFruits[it.Name] = true end end
-    for _, it in ipairs(char:GetChildren()) do if it:IsA("Tool") and it.Name:find("Fruit") then sentFruits[it.Name] = true end end
-    print("Детектор фруктов запущен")
-end
-
--- Анти-idle
-task.spawn(function()
-    local cam = workspace.CurrentCamera
-    local orig = cam.CFrame
-    while true do
-        task.wait(300)
-        cam.CFrame = cam.CFrame * CFrame.Angles(0, math.rad(1), 0)
-        task.wait(0.5)
-        cam.CFrame = orig
-    end
-end)
-task.spawn(function()
-    local vim = game:GetService("VirtualInputManager")
-    if vim then
-        while true do
-            task.wait(600)
-            pcall(function()
-                vim:SendKeyEvent(true, "W", false, game)
-                task.wait(0.1)
-                vim:SendKeyEvent(false, "W", false, game)
-            end)
-        end
-    end
-end)
-
--- ========== 3. ДВИЖЕНИЕ ЛОДКИ (BodyVelocity на UpperTorso) ==========
-local boat = nil
-local seat = nil
-local root = nil
-local hum = nil
-local hrp = nil
-local bv = nil
-local dir = -1
+-- Параметры движения (можно менять)
 local X_MIN = -77389.3
 local X_MAX = -47968.4
 local SPEED_X = 250
 local SPEED_Y = -2
 local SPEED_Z = -2
 local TARGET_Y = 100
+local dir = -1
+
+-- Переменные лодки
+local boat = nil      -- модель лодки
+local seat = nil      -- сиденье
+local root = nil      -- PrimaryPart
+local bv = nil        -- BodyVelocity
 local moving = false
 local moveThread = nil
-local islandModeActive = false
-local waitingForDespawn = false
-local isReseating = false
 
+-- Состояние автомата
+-- "MOVING" – обычное движение, "IDLE" – ожидание, "ISLAND_PROCESSING" – обработка острова,
+-- "WAITING_DISAPPEAR" – ждём исчезновения острова
+local state = "MOVING"
+
+-- Блокировка сброса boat в основном цикле (используется при обработке острова)
+local allowBoatReset = true
+
+-- ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
+
+-- Обновление/создание BodyVelocity
 local function ensureBV()
-    if islandModeActive then return end
-    local ch = player.Character
-    if not ch then return end
-    local upper = ch:FindFirstChild("UpperTorso")
+    local upper = char:FindFirstChild("UpperTorso")
     if not upper then return end
     local sx = dir * SPEED_X
     if bv and bv.Parent then
@@ -242,35 +49,28 @@ local function ensureBV()
     end
 end
 
+-- Остановка движения
 local function stopMove()
     moving = false
-    if moveThread then pcall(task.cancel, moveThread); moveThread = nil end
+    if moveThread then task.cancel(moveThread); moveThread = nil end
     if bv then bv:Destroy(); bv = nil end
 end
 
+-- Запуск движения (не запускает, если уже движется)
 local function startMove()
-    if moving or islandModeActive then return end
+    if moving then return end
     moving = true
     moveThread = task.spawn(function()
-        local ch = player.Character
-        if not ch then moving = false; return end
-        local upper = ch:FindFirstChild("UpperTorso")
-        if not upper then moving = false; return end
-        if bv then bv:Destroy() end
-        bv = Instance.new("BodyVelocity")
-        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        bv.Parent = upper
-        bv.Velocity = Vector3.new(0, 0, 0)
-        if root then
-            local p = root.Position
-            if math.abs(p.Y - TARGET_Y) > 0.5 then
-                root.CFrame = CFrame.new(p.X, TARGET_Y, p.Z)
-            end
+        if not root then return end
+        -- Установка высоты
+        local p = root.Position
+        if math.abs(p.Y - TARGET_Y) > 0.5 then
+            root.CFrame = CFrame.new(p.X, TARGET_Y, p.Z)
         end
-        local sx = dir * SPEED_X
-        bv.Velocity = Vector3.new(sx, SPEED_Y, SPEED_Z)
-        while moving and not islandModeActive do
-            if not (hum and hum.Sit and hum.SeatPart == seat) then
+        ensureBV()
+        while moving do
+            -- Если перестали сидеть на этом сиденье – останавливаем
+            if not (hum.Sit and hum.SeatPart == seat) then
                 stopMove()
                 break
             end
@@ -279,6 +79,7 @@ local function startMove()
                 if math.abs(p.Y - TARGET_Y) > 0.5 then
                     root.CFrame = CFrame.new(p.X, TARGET_Y, p.Z)
                 end
+                -- Смена направления у границ
                 if p.X <= X_MIN and dir == -1 then
                     dir = 1
                     ensureBV()
@@ -287,6 +88,7 @@ local function startMove()
                     ensureBV()
                 end
             end
+            -- Поддержание скорости
             if bv and bv.Parent then
                 local v = bv.Velocity
                 bv.Velocity = Vector3.new(v.X, v.Y - 0.0001, v.Z - 0.0001)
@@ -296,365 +98,306 @@ local function startMove()
     end)
 end
 
--- ========== 4. БЫСТРЫЙ МАГНИТ ==========
-local magnetBodyPos = nil
-local magnetBodyPosActive = false
-
-local function updateMagnetBodyPos(targetY)
-    if not magnetBodyPosActive or islandModeActive then return end
-    local char = player.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    if not magnetBodyPos then
-        magnetBodyPos = Instance.new("BodyPosition")
-        magnetBodyPos.MaxForce = Vector3.new(0, math.huge, 0)
-        magnetBodyPos.Parent = hrp
+-- Выход из лодки (останавливает движение, но сохраняет boat для возврата)
+local function leaveBoat()
+    local ch = player.Character
+    if ch then
+        local h = ch:FindFirstChild("Humanoid")
+        if h then
+            h.Sit = false
+            h.SeatPart = nil
+        end
     end
-    magnetBodyPos.Position = Vector3.new(hrp.Position.X, targetY, hrp.Position.Z)
+    stopMove()
+    -- boat, seat, root не обнуляем, чтобы потом сесть обратно
 end
 
-local function stopMagnetBodyPos()
-    magnetBodyPosActive = false
-    if magnetBodyPos then magnetBodyPos:Destroy(); magnetBodyPos = nil end
+-- Посадка в лодку (телепорт на сиденье и установка сидения)
+local function sitInBoat(boatModel)
+    if not boatModel then return false end
+    local seatPart = boatModel:FindFirstChildWhichIsA("VehicleSeat")
+    if not seatPart then return false end
+    local ch = player.Character
+    if not ch then return false end
+    local h = ch:FindFirstChild("Humanoid")
+    local rootPart = ch:FindFirstChild("HumanoidRootPart")
+    if not h or not rootPart then return false end
+
+    -- Выходим из текущего сиденья, если сидим
+    if h.Sit then
+        h.Sit = false
+        h.SeatPart = nil
+        task.wait(0.1)
+    end
+
+    -- Телепортируем HRP на сиденье (с небольшим смещением вверх)
+    rootPart.CFrame = seatPart.CFrame * CFrame.new(0, 1.5, 0)
+    task.wait(0.1)
+
+    -- Садимся
+    h.SeatPart = seatPart
+    h.Sit = true
+
+    -- Обновляем глобальные переменные
+    boat = boatModel
+    seat = seatPart
+    root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
+
+    -- Отключаем коллизии у частей лодки
+    for _, part in ipairs(boat:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.CanCollide = false
+        end
+    end
+    -- Отключаем скрипты лодки (если есть)
+    local nat = boat:FindFirstChild("Script")
+    if nat then nat.Disabled = true end
+
+    return true
 end
 
-local function fastMagnet()
-    if islandModeActive then return end
-    if not seat then return end
-    local char = player.Character
-    if not char then return end
-    local h = char:FindFirstChild("Humanoid")
-    local r = char:FindFirstChild("HumanoidRootPart")
-    if not h or not r then return end
-    if h.Sit and h.SeatPart == seat then
-        stopMagnetBodyPos()
+-- Эмуляция клика мыши
+local vim = game:GetService("VirtualInputManager")
+local function click(x, y)
+    print("Клик по (" .. x .. ", " .. y .. ")")
+    vim:SendMouseButtonEvent(x, y, 0, true, game, 0)
+    task.wait(0.05)
+    vim:SendMouseButtonEvent(x, y, 0, false, game, 0)
+end
+
+-- ===== НОВАЯ ФУНКЦИЯ: ОЖИДАНИЕ, ПОКА ЛОКАЛЬНЫЙ ИГРОК НЕ ОКАЖЕТСЯ В ПРЕДЕЛАХ 100 ОТ ОСТРОВА =====
+local function waitForLocalPlayerNearIsland(islandPos)
+    print("Ожидание локального игрока около острова...")
+    while true do
+        local ch = player.Character
+        if ch then
+            local hrpPart = ch:FindFirstChild("HumanoidRootPart")
+            if hrpPart then
+                if (hrpPart.Position - islandPos).Magnitude <= 100 then
+                    print("Локальный игрок около острова.")
+                    break
+                end
+            end
+        end
+        task.wait(1)
+    end
+end
+
+-- Три последовательных клика с задержкой 1 секунда
+local function performThreeClicks()
+    local coords = {
+        {223, 244},
+        {586, 347},
+        {533, 484}
+    }
+    for i, coord in ipairs(coords) do
+        click(coord[1], coord[2])
+        if i < 3 then
+            task.wait(1)  -- задержка между кликами
+        end
+    end
+end
+
+-- Ожидание появления яйца (проверка существующих + событие)
+local function waitForEgg()
+    print("Ожидание появления DragonEgg...")
+    -- Проверяем уже существующие
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj.Name == "DragonEgg" then
+            print("Яйцо уже существует, продолжаем.")
+            return
+        end
+    end
+    -- Ждём событие
+    local event = workspace.DescendantAdded:Connect(function(desc)
+        if desc:IsA("Model") and desc.Name == "DragonEgg" then
+            print("Яйцо появилось!")
+            event:Disconnect()
+        end
+    end)
+    -- Также проверяем в цикле на случай пропуска события
+    while true do
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("Model") and obj.Name == "DragonEgg" then
+                print("Яйцо обнаружено в цикле.")
+                event:Disconnect()
+                return
+            end
+        end
+        task.wait(0.5)
+    end
+end
+
+-- ===== ОБРАБОТКА ПОЯВЛЕНИЯ ОСТРОВА =====
+local function processIsland()
+    -- Если уже обрабатываем, выходим
+    if state == "ISLAND_PROCESSING" then return end
+    state = "ISLAND_PROCESSING"
+    allowBoatReset = false
+
+    print("Остров появился, начинаем обработку.")
+
+    -- 1. Останавливаем лодку и выходим
+    stopMove()
+    leaveBoat()
+
+    -- 2. Находим остров
+    local island = workspace:FindFirstChild("PrehistoricIsland")
+    if not island then
+        print("Остров исчез до начала обработки.")
+        state = "MOVING"
+        allowBoatReset = true
         return
     end
-    if not magnetBodyPosActive then
-        magnetBodyPosActive = true
-    end
-    local targetPos = seat.Position + Vector3.new(0, 2.5, 0)
-    updateMagnetBodyPos(targetPos.Y)
-    local dist = (r.Position - targetPos).Magnitude
-    if dist > 0.3 then
-        local dirVec = (targetPos - r.Position).Unit
-        local step = math.min(300 * 0.02, dist)
-        local newPos = r.Position + dirVec * step
-        newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z)
-        r.CFrame = CFrame.new(newPos)
+
+    -- Определяем позицию острова
+    local islandPos
+    if island:IsA("Model") and island.PrimaryPart then
+        islandPos = island.PrimaryPart.Position
     else
-        r.CFrame = CFrame.new(targetPos)
-    end
-end
-
--- ========== 5. МОНИТОР ОСТРОВА (СТАБИЛЬНАЯ АКТИВАЦИЯ ЯЙЦА) ==========
-local pendingReturn = false
-
-local function findIsland()
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then
-            return obj
+        local part = island:FindFirstChildWhichIsA("BasePart")
+        if part then
+            islandPos = part.Position
+        else
+            print("Не удалось определить позицию острова, пропускаем.")
+            state = "MOVING"
+            allowBoatReset = true
+            return
         end
     end
-    return nil
-end
 
--- Таблица рангов (уникальный номер для каждого аккаунта)
-local PLAYER_EGG_RANK = {
-    ["Willow_hspt2015"] = 1,
-    ["MichaelJohnson84562"] = 2,
-    ["GigaGrimShade74"] = 3,
-}
-local myRank = PLAYER_EGG_RANK[playerName]
+    -- 3. Ждём локального игрока у острова (вместо всех игроков)
+    waitForLocalPlayerNearIsland(islandPos)
 
--- Функция удержания E (бесконечно, пока яйцо не исчезнет)
-local function holdEUntilEggGone(eggModel)
-    local vim = game:GetService("VirtualInputManager")
-    if not vim then return end
-    print("[АКТИВАЦИЯ] Начинаю удерживать E...")
-    -- Зажимаем E
-    vim:SendKeyEvent(true, "E", false, game)
-    -- Ждём исчезновения яйца (проверяем каждые 0.2 секунды)
-    local maxWait = 15 -- максимум 15 секунд
-    local waited = 0
-    while eggModel and eggModel.Parent and waited < maxWait do
-        task.wait(0.2)
-        waited = waited + 0.2
-    end
-    -- Отпускаем E
-    vim:SendKeyEvent(false, "E", false, game)
-    if not eggModel.Parent then
-        print("[АКТИВАЦИЯ] Яйцо исчезло, активация успешна")
+    -- 4. Три клика
+    performThreeClicks()
+
+    -- 5. Ждём появления яйца
+    waitForEgg()
+
+    -- 6. Клик по координатам 586, 347 (яйцо)
+    click(586, 347)
+
+    -- 7. Возвращаемся в лодку
+    if boat then
+        local success = sitInBoat(boat)
+        if success then
+            print("Сел обратно в лодку.")
+            startMove()
+            -- Переходим в состояние ожидания исчезновения острова
+            state = "WAITING_DISAPPEAR"
+            allowBoatReset = true  -- разрешаем сброс, но пока остров не исчез, цикл не сбросит boat, т.к. мы сидим
+        else
+            print("Не удалось сесть в лодку, продолжаем движение без посадки?")
+            state = "MOVING"
+            allowBoatReset = true
+        end
     else
-        print("[АКТИВАЦИЯ] Яйцо не исчезло за " .. maxWait .. " сек, возможно, активация не удалась")
+        print("Лодка потеряна, ищем другую...")
+        -- Можно попытаться найти лодку по имени или по VehicleSeat
+        -- Для простоты переходим в MOVING, но без лодки
+        state = "MOVING"
+        allowBoatReset = true
     end
 end
 
--- Получить яйца, отсортированные по расстоянию
-local function getEggsSortedByDistance()
-    local island = findIsland()
-    if not island then return {} end
-    local core = island:FindFirstChild("Core")
-    if not core then return {} end
-    local spawned = core:FindFirstChild("SpawnedDragonEggs")
-    if not spawned then return {} end
-    local char = player.Character
-    if not char then return {} end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return {} end
-    local eggs = {}
-    for _, child in ipairs(spawned:GetChildren()) do
-        if child:IsA("Model") and child.Name == "DragonEgg" then
-            local eggPart = child:FindFirstChild("EggCrust") or child:FindFirstChildWhichIsA("BasePart")
-            if eggPart and eggPart.Parent then
-                local dist = (hrp.Position - eggPart.Position).Magnitude
-                table.insert(eggs, {part = eggPart, model = child, dist = dist})
-            end
-        end
-    end
-    table.sort(eggs, function(a,b) return a.dist < b.dist end)
-    return eggs
-end
+-- ===== СОБЫТИЯ ПОЯВЛЕНИЯ / ИСЧЕЗНОВЕНИЯ ОСТРОВА =====
 
-task.spawn(function()
-    while true do
-        task.wait(1)
-        local island = findIsland()
-        local present = island ~= nil
-
-        if waitingForDespawn and not present then
-            waitingForDespawn = false
-            print("[ОСТРОВ] Остров исчез, готов к новой активации")
-        end
-
-        if present and not islandModeActive and not waitingForDespawn then
-            print("[ОСТРОВ] Обнаружен, входим в режим")
-            islandModeActive = true
-            
-            -- Останавливаем лодку и магнит
-            stopMove()
-            stopMagnetBodyPos()
-            
-            -- Выходим из сиденья
-            local char = player.Character
-            if char then
-                local h = char:FindFirstChild("Humanoid")
-                if h and h.Sit then h.Sit = false end
-            end
-            
-            -- Поднимаемся над островом
-            local target = island:GetPivot().Position + Vector3.new(0, 330, 0)
-            moveStep(target, 200, true)
-            
-            -- Ожидание яиц (до 10 минут) и выбор по рангу
-            local eggTargetPos = nil
-            local myEggModel = nil
-            local startTime = os.clock()
-            
-            while islandModeActive do
-                if os.clock() - startTime >= 600 then
-                    print("[ОСТРОВ] 10 минут истекло, яйца не появились")
-                    break
-                end
-                if not findIsland() then
-                    print("[ОСТРОВ] Остров исчез во время ожидания")
-                    break
-                end
-                local eggsSorted = getEggsSortedByDistance()
-                if #eggsSorted >= myRank and myRank then
-                    local candidate = eggsSorted[myRank]
-                    if candidate and candidate.part and candidate.part.Parent then
-                        myEggModel = candidate.model
-                        eggTargetPos = candidate.part.Position + Vector3.new(0, 2, 0)
-                        print(string.format("[ОСТРОВ] Выбрано яйцо ранга %d (расст. %.1f)", myRank, candidate.dist))
-                        break
-                    end
-                end
-                task.wait(0.5)
-            end
-            
-            -- Перемещение к яйцу и активация
-            if eggTargetPos and myEggModel and myEggModel.Parent then
-                print("[ОСТРОВ] Плавное перемещение к яйцу...")
-                moveStep(eggTargetPos, 200, true)  -- плавно, как к сиденью
-                
-                -- Поворачиваем персонажа лицом к яйцу
-                local char = player.Character
-                if char and myEggModel.Parent then
-                    local hrp = char:FindFirstChild("HumanoidRootPart")
-                    local eggPart = myEggModel:FindFirstChild("EggCrust") or myEggModel:FindFirstChildWhichIsA("BasePart")
-                    if hrp and eggPart then
-                        local lookAt = (eggPart.Position - hrp.Position).Unit
-                        hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookAt)
-                        task.wait(0.3)
-                    end
-                end
-                
-                if not myEggModel.Parent then
-                    print("[ОСТРОВ] Яйцо исчезло до активации")
-                else
-                    -- Зажимаем E, пока яйцо не исчезнет
-                    holdEUntilEggGone(myEggModel)
-                end
-            elseif not myRank then
-                print("[ОСТРОВ] Нет ранга для игрока", playerName)
-            else
-                print("[ОСТРОВ] Не найдено яйцо для ранга", myRank)
-            end
-            
-            islandModeActive = false
-            waitingForDespawn = true
-            pendingReturn = true
-            print("[ОСТРОВ] Режим завершён, ждём исчезновения острова")
+workspace.ChildAdded:Connect(function(child)
+    if child.Name == "PrehistoricIsland" then
+        -- Если мы в движении или ожидании, запускаем обработку
+        if state == "MOVING" or state == "IDLE" then
+            task.spawn(processIsland)
         end
     end
 end)
 
--- ========== 6. ОСНОВНОЙ ЦИКЛ (С ПРИНУДИТЕЛЬНОЙ ПОСАДКОЙ И МОНИТОРИНГОМ ЛОДКИ) ==========
--- Выбор команды Marines
-local rs = game:GetService("ReplicatedStorage")
-local remotes = rs and rs:FindFirstChild("Remotes")
-if remotes then
-    local commF = remotes:FindFirstChild("CommF_")
-    if commF then pcall(function() commF:InvokeServer("SetTeam", "Marines") end) end
-    local mods = rs:FindFirstChild("Modules")
-    local ev = mods and mods:FindFirstChild("RE/OnEventServiceActivity")
-    if ev then pcall(function() ev:FireServer() end) end
-end
+workspace.ChildRemoved:Connect(function(child)
+    if child.Name == "PrehistoricIsland" then
+        print("Остров исчез.")
+        if state == "WAITING_DISAPPEAR" then
+            -- Мы уже в лодке и движемся, делаем клик по 533,484
+            click(533, 484)
+            state = "MOVING"
+            allowBoatReset = true
+        elseif state == "ISLAND_PROCESSING" then
+            -- Остров исчез во время обработки – прерываем, делаем клик и возвращаемся в MOVING
+            print("Остров исчез во время обработки, прерываем.")
+            state = "MOVING"
+            allowBoatReset = true
+            -- Если нужно кликнуть, можно здесь, но по условию клик делается только после возврата в лодку
+            -- Поэтому пропускаем, чтобы не нарушить порядок
+        end
+    end
+end)
 
--- Запускаем мониторинг лодки (ресет и перепокупка)
-task.spawn(monitorBoat)
-
--- Основной цикл управления лодкой и посадкой
+-- ===== ОСНОВНОЙ ЦИКЛ УПРАВЛЕНИЯ ЛОДКОЙ (с изменением) =====
 task.spawn(function()
     while true do
-        task.wait(0.05)
-        if islandModeActive then continue end
-        
-        -- Возврат после острова
-        if pendingReturn then
-            pendingReturn = false
-            print("[ГЛАВНЫЙ] Возврат с острова, поиск лодки и посадка")
+        task.wait(0.1)
+        char = player.Character
+        if not char then
+            player.CharacterAdded:Wait()
+            char = player.Character
+            hum = char:WaitForChild("Humanoid")
+            hrp = char:WaitForChild("HumanoidRootPart")
+            -- Сброс лодки при перезагрузке
+            stopMove()
             boat = nil; seat = nil; root = nil
-            boat = findMyBoat()
-            if boat then
-                seat = boat:FindFirstChildWhichIsA("VehicleSeat")
-                root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
-                if seat and root then
-                    for _, p in ipairs(boat:GetDescendants()) do
-                        if p:IsA("BasePart") then p.CanCollide = false end
-                    end
-                    local nat = boat:FindFirstChild("Script")
-                    if nat then nat.Disabled = true end
-                    local char = player.Character
-                    if char then
-                        local h = char:FindFirstChild("Humanoid")
-                        if h then
-                            if forceSitOnSeat(seat, 3) then
-                                boat = findMyBoat()
-                                if boat then
-                                    seat = boat:FindFirstChildWhichIsA("VehicleSeat")
-                                    root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
-                                end
-                                stopMove()
-                                moving = false
-                                if bv then bv:Destroy() bv = nil end
-                                startMove()
-                                print("[ГЛАВНЫЙ] Посадка после острова выполнена, движение запущено")
-                            else
-                                print("[ГЛАВНЫЙ] Не удалось сесть на сиденье")
-                            end
+            state = "MOVING"
+            allowBoatReset = true
+            continue
+        end
+
+        -- Если мы в режиме обработки острова, не трогаем управление лодкой
+        if state == "ISLAND_PROCESSING" then
+            -- Пропускаем обновление, чтобы не сбросить boat
+            continue
+        end
+
+        -- Если мы сидим на сиденье
+        if hum.Sit and hum.SeatPart then
+            local currentSeat = hum.SeatPart
+            local currentBoat = currentSeat:FindFirstAncestorOfClass("Model")
+            if currentBoat and currentBoat:IsA("Model") and currentBoat:FindFirstChildWhichIsA("VehicleSeat") then
+                if boat ~= currentBoat then
+                    -- Пересели в другую лодку
+                    stopMove()
+                    -- Отключаем коллизии у новой лодки
+                    for _, part in ipairs(currentBoat:GetDescendants()) do
+                        if part:IsA("BasePart") then
+                            part.CanCollide = false
                         end
                     end
-                else
-                    print("[ГЛАВНЫЙ] Лодка найдена, но нет сиденья/части")
+                    local nat = currentBoat:FindFirstChild("Script")
+                    if nat then nat.Disabled = true end
+
+                    boat = currentBoat
+                    seat = currentSeat
+                    root = currentBoat.PrimaryPart or currentBoat:FindFirstChildWhichIsA("BasePart")
+                    print("Сел в лодку:", boat.Name)
                 end
-            else
-                print("[ГЛАВНЫЙ] Лодка не найдена, будет куплена позже")
-            end
-        end
-        
-        -- Поиск/покупка лодки, если её нет
-        if not boat or not boat.Parent then
-            boat = findMyBoat()
-            if not boat then
-                buyBoatAtLocation()
-                for i = 1, 20 do
-                    boat = findMyBoat()
-                    if boat then break end
-                    task.wait(0.5)
-                end
-                if not boat then
-                    task.wait(5)
-                    continue
-                end
-            end
-            seat = boat:FindFirstChildWhichIsA("VehicleSeat")
-            root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
-            if not seat or not root then
-                boat = nil
-                continue
-            end
-            for _, p in ipairs(boat:GetDescendants()) do
-                if p:IsA("BasePart") then p.CanCollide = false end
-            end
-            local nat = boat:FindFirstChild("Script")
-            if nat then nat.Disabled = true end
-            print("[ГЛАВНЫЙ] Лодка найдена: " .. boat.Name)
-        end
-        
-        -- Обновляем ссылки на персонажа
-        local char = player.Character
-        if char then
-            hum = char:FindFirstChild("Humanoid")
-            hrp = char:FindFirstChild("HumanoidRootPart")
-        end
-        
-        -- Логика пересадки и движения
-        if hum and hum.Sit then
-            if hum.SeatPart == seat then
-                if not moving and not islandModeActive then
+                -- Запускаем движение, если сидим именно на этом сиденье
+                if hum.SeatPart == seat then
                     startMove()
+                else
+                    stopMove()
                 end
             else
-                if not isReseating then
-                    isReseating = true
-                    print("[ОСНОВНОЙ] Обнаружено неправильное сиденье, пересаживаюсь...")
-                    if seat then
-                        forceSitOnSeat(seat, 3)
-                    else
-                        print("[ОСНОВНОЙ] Целевое сиденье не определено")
-                    end
-                    isReseating = false
+                -- Сидим не на лодке – останавливаем и сбрасываем
+                if boat then
+                    stopMove()
+                    boat = nil; seat = nil; root = nil
                 end
-                if moving then stopMove() end
             end
         else
-            if moving then stopMove() end
-            fastMagnet()
+            -- Не сидим – сбрасываем, но только если разрешено
+            if boat and allowBoatReset then
+                stopMove()
+                boat = nil; seat = nil; root = nil
+            end
         end
     end
 end)
 
--- Первичная посадка (один раз при старте)
-task.spawn(function()
-    while true do
-        task.wait(0.5)
-        if islandModeActive then continue end
-        if boat and seat and hum and not (hum.Sit and hum.SeatPart == seat) then
-            forceSitOnSeat(seat, 3)
-            print("[ПЕРВИЧНАЯ ПОСАДКА] Выполнена")
-        end
-        break
-    end
-end)
-
--- Запуск детектора фруктов
-task.spawn(function()
-    if not player.Character then player.CharacterAdded:Wait() end
-    task.wait(2)
-    fruitTracker()
-end)
-
-print("Скрипт полностью запущен. Покупка лодки с перемещением, ресет при пропаже, стабильная активация яйца.")
+print("Скрипт движения и обработки острова запущен (тестовый режим: только локальный игрок).")
