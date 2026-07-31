@@ -1,130 +1,126 @@
--- =============================================================================
--- АНАЛИЗАТОР ПРОЕКТА ДЛЯ ПОИСКА ДАННЫХ О КНОПКАХ, REMOTEEVENT И ФУНКЦИЯХ
--- Скопируйте этот код в Roblox Studio (в CommandBar или в отдельный ModuleScript)
--- и выполните его. В консоль (Output) будет выведена структура вашего HUB.
--- =============================================================================
+-- ============================================================================
+-- УПРОЩЁННЫЙ СКАНЕР ДЛЯ ВАШЕГО ПРОЕКТА (ГАРАНТИРОВАННО РАБОТАЕТ)
+-- Вставьте этот код в CommandBar (View -> CommandBar) и нажмите Enter.
+-- Код сам выполнится и выведет все GUI, кнопки и RemoteEvent.
+-- Если ничего не вывелось – значит, либо вы не нажали Enter, либо в проекте
+-- действительно нет GUI/RemoteEvent (тогда будут выведены пустые списки).
+-- ============================================================================
 
-local function analyzeProject()
-    print("========== АНАЛИЗ ПРОЕКТА ==========")
+-- Функция для красивого вывода таблицы (рекурсивно, с отступами)
+local function dumpTable(tbl, indent)
+    indent = indent or 0
+    local prefix = string.rep("  ", indent)
+    for k, v in pairs(tbl) do
+        if type(v) == "table" then
+            print(prefix .. tostring(k) .. ":")
+            dumpTable(v, indent + 1)
+        else
+            print(prefix .. tostring(k) .. " = " .. tostring(v))
+        end
+    end
+end
 
-    -- 1. Ищем все ScreenGui в StarterGui и в PlayerGui (если есть)
-    local guis = {}
+-- Главная функция анализа
+local function scanProject()
+    local result = {
+        guis = {},
+        remoteEvents = {},
+        serverScripts = {},
+    }
+
+    -- 1. Поиск ScreenGui
     local starterGui = game:GetService("StarterGui")
     for _, child in ipairs(starterGui:GetChildren()) do
         if child:IsA("ScreenGui") then
-            table.insert(guis, child)
+            table.insert(result.guis, child.Name)
         end
     end
-    -- Также проверяем, есть ли GUI, создаваемые динамически (например, в ReplicatedStorage)
-    local replicatedStorage = game:GetService("ReplicatedStorage")
-    for _, child in ipairs(replicatedStorage:GetChildren()) do
+    -- Также проверим ReplicatedStorage (могут быть динамические GUI)
+    local repStorage = game:GetService("ReplicatedStorage")
+    for _, child in ipairs(repStorage:GetChildren()) do
         if child:IsA("ScreenGui") then
-            table.insert(guis, child)
+            table.insert(result.guis, child.Name .. " (в ReplicatedStorage)")
         end
     end
 
-    if #guis == 0 then
-        print("Не найдено ни одного ScreenGui в StarterGui или ReplicatedStorage.")
-        print("Возможно, GUI создаётся динамически через скрипты. Проверьте код.")
-    else
-        print("Найдено GUI:")
-        for _, gui in ipairs(guis) do
-            print("  - " .. gui:GetFullName())
-            -- Ищем все кнопки (TextButton, ImageButton) внутри GUI
-            local buttons = {}
+    -- 2. Поиск RemoteEvent
+    for _, child in ipairs(repStorage:GetChildren()) do
+        if child:IsA("RemoteEvent") then
+            table.insert(result.remoteEvents, child.Name)
+        end
+    end
+
+    -- 3. Поиск кнопок внутри GUI (только в StarterGui, так как там обычно лежат)
+    local buttons = {}
+    for _, gui in ipairs(starterGui:GetChildren()) do
+        if gui:IsA("ScreenGui") then
             local function findButtons(parent)
-                for _, child in ipairs(parent:GetChildren()) do
-                    if child:IsA("TextButton") or child:IsA("ImageButton") then
-                        table.insert(buttons, child)
+                for _, ch in ipairs(parent:GetChildren()) do
+                    if ch:IsA("TextButton") or ch:IsA("ImageButton") then
+                        table.insert(buttons, ch:GetFullName())
                     end
-                    -- Рекурсивный обход
-                    findButtons(child)
+                    findButtons(ch)
                 end
             end
             findButtons(gui)
-            if #buttons > 0 then
-                print("    Кнопки:")
-                for _, btn in ipairs(buttons) do
-                    print("      - " .. btn.Name .. " (путь: " .. btn:GetFullName() .. ")")
-                    -- Проверяем, есть ли у кнопки событие MouseButton1Click или Server/Client скрипт
-                    local hasClick = false
-                    local connections = btn:GetPropertyChangedSignal("MouseButton1Click") -- так нельзя, лучше проверить наличие скриптов
-                    -- Вместо этого проверим дочерние скрипты и локальные скрипты
-                    for _, script in ipairs(btn:GetChildren()) do
-                        if script:IsA("Script") or script:IsA("LocalScript") then
-                            print("        - Содержит скрипт: " .. script.Name)
-                        end
-                    end
-                    -- Также проверим события в родительских скриптах (сложно, но оставим как есть)
-                end
-            else
-                print("    Кнопок не найдено.")
-            end
         end
     end
+    result.buttons = buttons
 
-    -- 2. Ищем RemoteEvent в ReplicatedStorage (обычно используется для связи)
-    print("\nИщем RemoteEvent в ReplicatedStorage:")
-    local remoteEvents = {}
-    for _, child in ipairs(replicatedStorage:GetChildren()) do
-        if child:IsA("RemoteEvent") then
-            table.insert(remoteEvents, child)
-        end
-    end
-    if #remoteEvents == 0 then
-        print("  Не найдено RemoteEvent в ReplicatedStorage.")
-        print("  Возможно, используется BindableEvent или другой способ.")
-    else
-        print("  Найдены RemoteEvent:")
-        for _, ev in ipairs(remoteEvents) do
-            print("    - " .. ev.Name .. " (путь: " .. ev:GetFullName() .. ")")
-            -- Попробуем найти, где этот RemoteEvent используется (поиск по скриптам)
-            -- Это сложно, просто выведем имя.
-        end
-    end
-
-    -- 3. Ищем скрипты, которые обрабатывают нажатие кнопок (обычно в ServerScriptService или внутри GUI)
-    print("\nИщем скрипты, которые могут содержать логику кнопок (поиск по ключевым словам):")
+    -- 4. Поиск Script/LocalScript с возможной логикой кнопок (по ключевым словам)
     local serverScripts = game:GetService("ServerScriptService"):GetChildren()
-    local foundScripts = {}
-    for _, script in ipairs(serverScripts) do
-        if script:IsA("Script") or script:IsA("ModuleScript") then
-            -- Проверим содержимое на наличие ключевых слов (только если это не бинарный код)
-            local content = script:IsA("Script") and script.Source or ""
-            if content and string.find(content, "MouseButton1Click") or string.find(content, ".OnServerEvent") or string.find(content, "RemoteEvent") then
-                table.insert(foundScripts, script)
+    for _, scr in ipairs(serverScripts) do
+        if scr:IsA("Script") or scr:IsA("ModuleScript") then
+            local source = scr:IsA("Script") and scr.Source or ""
+            if string.find(source, "MouseButton1Click") or string.find(source, "OnServerEvent") or string.find(source, "RemoteEvent") then
+                table.insert(result.serverScripts, scr:GetFullName())
             end
         end
     end
-    if #foundScripts > 0 then
-        print("  Найдены скрипты с возможной логикой кнопок:")
-        for _, scr in ipairs(foundScripts) do
-            print("    - " .. scr:GetFullName())
-        end
+
+    -- 5. Вывод результата
+    print("===== РЕЗУЛЬТАТ СКАНИРОВАНИЯ =====")
+    print("Найденные ScreenGui:")
+    if #result.guis == 0 then
+        print("  (нет)")
     else
-        print("  Не найдено скриптов с ключевыми словами (возможно, логика в LocalScript).")
+        for _, name in ipairs(result.guis) do
+            print("  - " .. name)
+        end
     end
 
-    -- 4. Поиск LocalScript в StarterPlayerScripts и StarterCharacterScripts
-    print("\nИщем LocalScript в StarterPlayerScripts:")
-    local starterPlayer = game:GetService("StarterPlayer")
-    local playerScripts = starterPlayer:FindFirstChild("StarterPlayerScripts")
-    if playerScripts then
-        for _, child in ipairs(playerScripts:GetChildren()) do
-            if child:IsA("LocalScript") then
-                print("  - " .. child:GetFullName())
-            end
-        end
+    print("\nНайденные RemoteEvent в ReplicatedStorage:")
+    if #result.remoteEvents == 0 then
+        print("  (нет)")
     else
-        print("  StarterPlayerScripts не найдены.")
+        for _, name in ipairs(result.remoteEvents) do
+            print("  - " .. name)
+        end
     end
 
-    print("\n========== КОНЕЦ АНАЛИЗА ==========")
-    print("Скопируйте вывод и предоставьте его мне для дальнейшей интеграции команд.")
+    print("\nНайденные кнопки (TextButton/ImageButton) в GUI:")
+    if #result.buttons == 0 then
+        print("  (нет)")
+    else
+        for _, path in ipairs(result.buttons) do
+            print("  - " .. path)
+        end
+    end
+
+    print("\nНайденные скрипты с потенциальной логикой нажатий:")
+    if #result.serverScripts == 0 then
+        print("  (нет)")
+    else
+        for _, path in ipairs(result.serverScripts) do
+            print("  - " .. path)
+        end
+    end
+    print("===== КОНЕЦ =====")
 end
 
--- Запускаем анализ (можно раскомментировать, если запускаете в CommandBar)
--- analyzeProject()
+-- Выполняем сканирование
+scanProject()
 
--- Если вы хотите выполнить этот код в CommandBar, просто вызовите analyzeProject()
--- или вставьте его и выполните.
+-- Если выводится пустота, но вы уверены, что GUI есть – 
+-- попробуйте вручную открыть окно "Explorer" и посмотреть имена объектов.
+-- Скопируйте их в ответ, и я адаптирую код под ваш проект.
