@@ -1,172 +1,128 @@
 -- =============================================================================
---  ПОЛНЫЙ ДАМП ВСЕХ ДОСТУПНЫХ ФУНКЦИЙ (без ограничений, с большими паузами)
+--  ТРЕКЕР ВЫЗОВОВ ФУНКЦИЙ ПРИ КЛИКЕ НА КНОПКУ (Option)
 --  Вставьте в консоль Delta ПОСЛЕ загрузки HUB.
---  Скрипт собирает функции из всех возможных источников, сохраняет в файл.
---  Для стабильности добавлены паузы после каждых 100 функций из getgc.
---  Ошибки перехватываются, сбор продолжается.
+--  При клике на кнопку (вручную) скрипт выведет информацию о всех обработчиках.
+--  Также попытается перехватить вызовы и показать, какие функции сработали.
 -- =============================================================================
 
-print("=== ПОЛНЫЙ СБОР ВСЕХ ФУНКЦИЙ (без лимита) ===")
-print("ВНИМАНИЕ: процесс может занять много времени и использовать много памяти.")
+print("=== ТРЕКЕР КЛИКОВ НА КНОПКУ Option ===")
 
-local allFunctions = {}
-local totalCount = 0
+local path = "CoreGui.5254c01c4691269e68d25763275f564b3f6d90d88346ad2f0bba357e7d8c00c1.redz-library-v5.Window.Components.Containers.Container.Option"
 
--- Безопасное добавление функции
-local function addFunc(name, func)
-    table.insert(allFunctions, {name = name, func = func})
-    totalCount = totalCount + 1
-    -- Каждые 1000 функций выводим прогресс
-    if totalCount % 1000 == 0 then
-        print("  Собрано функций: " .. totalCount)
-        wait(0.2)
+local function getObjectByPath(p)
+    local parts = {}
+    for part in string.gmatch(p, "[^%.]+") do table.insert(parts, part) end
+    local current = game:GetService(parts[1])
+    for i = 2, #parts do
+        current = current:FindFirstChild(parts[i])
+        if not current then return nil end
+    end
+    return current
+end
+
+local btn = getObjectByPath(path)
+if not btn then
+    print("[!] Кнопка Option не найдена по указанному пути.")
+    return
+end
+print("[✓] Кнопка найдена: " .. btn:GetFullName())
+
+-- Функция получения информации о функции
+local function getFunctionInfo(func)
+    if type(func) ~= "function" then return "Не функция" end
+    local info = {}
+    if debug and debug.getinfo then
+        local di = debug.getinfo(func, "Slunf")
+        if di then
+            info.source = di.source or "?"
+            info.linedefined = di.linedefined or "?"
+            info.name = di.name or "?"
+            info.short_src = di.short_src or "?"
+        end
+    end
+    return info
+end
+
+-- Перехват вызовов через добавление слушателей на события кнопки
+local events = {"MouseButton1Click", "Activated", "MouseButton1Down", "MouseButton1Up"}
+local function setupEventTracker(btn)
+    for _, evName in ipairs(events) do
+        local signal = btn:FindFirstChild(evName)
+        if signal and signal:IsA("RBXScriptSignal") then
+            -- Получаем существующие подключения
+            if getconnections then
+                local conns = getconnections(signal)
+                if #conns > 0 then
+                    print("\n--- Событие " .. evName .. " — найдено привязок: " .. #conns)
+                    for i, c in ipairs(conns) do
+                        print("  Обработчик #" .. i)
+                        if c.Function then
+                            local info = getFunctionInfo(c.Function)
+                            print("    Функция: " .. tostring(c.Function))
+                            print("    Источник: " .. (info.source or "неизвестно"))
+                            print("    Строка: " .. (info.linedefined or "неизвестно"))
+                            print("    Имя: " .. (info.name or "неизвестно"))
+                        end
+                        if c.Script then
+                            print("    Скрипт: " .. c.Script:GetFullName())
+                        end
+                    end
+                else
+                    print("  Событие " .. evName .. " не имеет привязок.")
+                end
+            else
+                print("  getconnections недоступен, невозможно отследить обработчики.")
+            end
+        end
     end
 end
 
--- Рекурсивный сбор из таблицы (глубина 1, чтобы не зациклиться)
-local function collectFromTable(tbl, prefix, depth)
-    depth = depth or 0
-    if depth > 2 then return end  -- разрешаем два уровня вложенности
-    if type(tbl) ~= "table" then return end
+-- Вывод информации о кнопке и её событиях
+setupEventTracker(btn)
+
+-- Дополнительно: попытаемся найти функцию, которая вызывается через глобальные переменные
+print("\n--- Поиск глобальных переменных, связанных с Option ---")
+local keywords = {"option", "toggle", "enable", "disable", "activate", "fly", "noclip", "god", "esp"}
+local function searchGlobals(tbl, name)
     for k, v in pairs(tbl) do
-        if type(v) == "function" then
-            addFunc(prefix .. tostring(k), v)
-        elseif type(v) == "table" and depth < 2 then
-            collectFromTable(v, prefix .. tostring(k) .. ".", depth + 1)
-        end
-    end
-end
-
--- ---- ЭТАП 1: _G ----
-print("Сбор _G...")
-pcall(function() collectFromTable(_G, "_G.") end)
-wait(1)
-
--- ---- ЭТАП 2: shared ----
-if shared then
-    print("Сбор shared...")
-    pcall(function() collectFromTable(shared, "shared.") end)
-end
-wait(1)
-
--- ---- ЭТАП 3: getreg() ----
-if getreg then
-    print("Сбор getreg...")
-    pcall(function()
-        local reg = getreg()
-        if type(reg) == "table" then
-            for i, v in ipairs(reg) do
+        local key = tostring(k):lower()
+        for _, kw in ipairs(keywords) do
+            if key:find(kw, 1, true) then
+                print("Найдена " .. name .. "." .. tostring(k) .. " = " .. tostring(v) .. " (тип: " .. type(v) .. ")")
                 if type(v) == "function" then
-                    addFunc("reg[" .. i .. "]", v)
+                    local info = getFunctionInfo(v)
+                    print("  Источник: " .. (info.source or "неизвестно"))
+                    print("  Строка: " .. (info.linedefined or "неизвестно"))
                 end
+                break
             end
         end
-    end)
-end
-wait(1)
-
--- ---- ЭТАП 4: getgc() (все объекты, с паузами каждые 100) ----
-if getgc then
-    print("Сбор getgc (все объекты, с паузами каждые 100 функций)...")
-    pcall(function()
-        local gc = getgc()
-        local funcCount = 0
-        for i, obj in ipairs(gc) do
-            if type(obj) == "function" then
-                addFunc("gc[" .. i .. "]", obj)
-                funcCount = funcCount + 1
-                if funcCount % 100 == 0 then
-                    wait(0.2)  -- пауза для стабильности
-                    print("  getgc прогресс: " .. funcCount .. " функций собрано")
-                end
-            end
-        end
-        print("  Всего функций из getgc: " .. funcCount)
-    end)
-end
-wait(1)
-
--- ---- ЭТАП 5: getrenv() ----
-if getrenv then
-    print("Сбор getrenv...")
-    pcall(function()
-        local renv = getrenv()
-        if type(renv) == "table" then
-            collectFromTable(renv, "renv.")
-        end
-    end)
-end
-wait(1)
-
--- ---- ЭТАП 6: debug.getregistry() ----
-if debug and debug.getregistry then
-    print("Сбор debug.getregistry...")
-    pcall(function()
-        local reg = debug.getregistry()
-        if type(reg) == "table" then
-            collectFromTable(reg, "debug_registry.")
-        end
-    end)
-end
-
-print("Итого собрано функций: " .. totalCount)
-
--- ---- СОХРАНЕНИЕ В ФАЙЛ ----
-print("Формирование содержимого файла...")
-local fileContent = "===== ПОЛНЫЙ ДАМП ВСЕХ ФУНКЦИЙ =====\n"
-fileContent = fileContent .. "Всего функций: " .. totalCount .. "\n\n"
-
-local function writeProgress(i)
-    if i % 5000 == 0 then
-        print("  Записано в файл: " .. i .. " функций")
     end
 end
 
--- Построчное добавление (чтобы не держать огромную строку в памяти)
--- Но writefile требует полную строку, поэтому собираем частями
-local chunks = {}
-local chunkSize = 10000
-for i = 1, #allFunctions, chunkSize do
-    local chunk = ""
-    for j = i, math.min(i + chunkSize - 1, #allFunctions) do
-        local item = allFunctions[j]
-        chunk = chunk .. "[" .. j .. "] " .. item.name .. "\n"
-        chunk = chunk .. "    Адрес: " .. tostring(item.func) .. "\n\n"
-    end
-    table.insert(chunks, chunk)
-    if i % 50000 == 0 then
-        print("  Подготовлено " .. i .. " записей")
-    end
+searchGlobals(_G, "_G")
+if shared then searchGlobals(shared, "shared") end
+
+-- Если есть возможность, добавляем временный обработчик для логирования кликов
+print("\n--- Добавление временного обработчика для логирования кликов ---")
+local function logClick()
+    print(">>> КЛИК ПО КНОПКЕ ОБНАРУЖЕН! <<<")
+    -- Повторно выведем информацию о привязках (они могли измениться)
+    setupEventTracker(btn)
 end
 
-local fullContent = table.concat(chunks)
-fullContent = fileContent .. fullContent
-
-if writefile then
-    local success, err = pcall(function()
-        writefile("functions_full_dump.txt", fullContent)
-        print("Файл 'functions_full_dump.txt' сохранён.")
-        print("Размер файла: " .. #fullContent .. " байт")
-    end)
-    if not success then
-        print("Ошибка записи файла: " .. tostring(err))
-        print("Попытка записать частями...")
-        -- Если файл слишком большой, попробуем записать в несколько файлов
-        for i = 1, #chunks do
-            local filename = "functions_dump_part" .. i .. ".txt"
-            local partContent = fileContent .. chunks[i]
-            pcall(function()
-                writefile(filename, partContent)
-                print("Сохранён файл: " .. filename)
-            end)
-        end
-    end
+-- Подключаемся к событию кнопки (свой локальный обработчик)
+local conn
+if btn.MouseButton1Click then
+    conn = btn.MouseButton1Click:Connect(logClick)
+    print("[✓] Временный обработчик добавлен на MouseButton1Click.")
 else
-    print("writefile недоступен. Вывод первых 1000 функций в консоль:")
-    for i = 1, math.min(1000, #allFunctions) do
-        print("[" .. i .. "] " .. allFunctions[i].name)
-    end
+    print("[✗] Не удалось добавить обработчик (событие отсутствует).")
 end
 
-print("=== ДАМП ЗАВЕРШЁН ===")
-print("Всего собрано: " .. totalCount .. " функций.")
+print("\n=== ТРЕКЕР ЗАПУЩЕН ===")
+print("Теперь нажмите на кнопку Option вручную, и скрипт покажет, какие функции сработали.")
+print("Для остановки трекера выполните: if conn then conn:Disconnect() end")
+
+-- Сохраняем обработчик в глобальную переменную для возможности отключения
+_G._tracker_connection = conn
