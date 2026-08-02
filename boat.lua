@@ -1,90 +1,108 @@
--- =====================================================================
---  УЛЬТРА-ТРЕКЕР (упрощённый, без ошибок)
--- =====================================================================
+-- ============================================================================
+--  РАСШИРЕННЫЙ ПЕРЕХВАТЧИК КЛИКОВ (выводит полные данные о кнопке)
+--  Вставьте в консоль Delta ПОСЛЕ загрузки HUB.
+--  При каждом клике на ЛЮБУЮ кнопку будет выведена максимальная информация.
+-- ============================================================================
 
-print("=== ЗАПУСК ТРЕКЕРА (без ошибок) ===")
-
-local function printObjectInfo(obj)
-    print("\n=== КЛИК ПО ОБЪЕКТУ ===")
-    print("Имя:", obj.Name)
-    print("Класс:", obj.ClassName)
-    print("Путь:", obj:GetFullName())
-    print("Видимость:", obj.Visible)
-    print("Активен:", obj.Active)
-    if obj:IsA("TextButton") then
-        print("Текст:", obj.Text)
-    elseif obj:IsA("ImageButton") then
-        print("Tooltip:", obj.Tooltip or "")
-    end
-    if obj.Parent then
-        print("Родитель:", obj.Parent:GetFullName(), "(класс:", obj.Parent.ClassName .. ")")
-    end
-    local children = obj:GetChildren()
-    if #children > 0 then
-        print("Дочерние элементы:")
-        for _, ch in ipairs(children) do
-            print("  - " .. ch.Name .. " (" .. ch.ClassName .. ")")
-        end
-    end
-    -- Проверим события
-    local events = {"MouseButton1Click", "MouseButton1Down", "MouseButton1Up", "Activated"}
-    for _, evName in ipairs(events) do
-        local ev = obj:FindFirstChild(evName)
-        if ev and ev:IsA("RBXScriptSignal") then
-            print("Событие", evName, "присутствует.")
-            if getconnections then
-                local conns = getconnections(ev)
-                if #conns > 0 then
-                    print("  Количество привязок:", #conns)
-                    for i, c in ipairs(conns) do
-                        if c.Script then
-                            print("    Привязка", i, "скрипт:", c.Script:GetFullName())
-                        end
-                        if c.Function then
-                            print("    Функция:", tostring(c.Function))
-                        end
-                    end
-                end
-            end
-        end
-    end
-    print("===========================")
-end
-
--- Подключаем обработчик на все существующие и будущие объекты
-local function hookObject(obj)
-    if obj:IsA("TextButton") or obj:IsA("ImageButton") or obj:IsA("Frame") then
-        local ev = obj:FindFirstChild("MouseButton1Click")
-        if ev and ev:IsA("RBXScriptSignal") then
-            if not obj:GetAttribute("_hooked") then
-                obj:SetAttribute("_hooked", true)
-                obj.MouseButton1Click:Connect(function()
-                    printObjectInfo(obj)
-                end)
-            end
+-- Вспомогательная функция: рекурсивный вывод дочерних объектов (ограничим 2 уровня)
+local function printChildren(obj, level)
+    level = level or 0
+    local prefix = string.rep("  ", level)
+    for _, child in ipairs(obj:GetChildren()) do
+        print(prefix .. "├─ " .. child.Name .. " [" .. child.ClassName .. "]")
+        if level < 2 then -- покажем только 2 уровня вложенности
+            printChildren(child, level + 1)
         end
     end
 end
 
-local function scan(parent)
+-- Функция вывода свойств (наиболее важные)
+local function printProperties(btn)
+    local props = {
+        "Name", "ClassName", "Visible", "Position", "Size", "AnchorPoint",
+        "BackgroundColor3", "BackgroundTransparency", "TextColor3", "Text",
+        "TextSize", "Font", "TextXAlignment", "TextYAlignment", "Active",
+        "Selectable", "AutoButtonColor", "Image", "ImageColor3", "ImageTransparency"
+    }
+    print("  --- Свойства ---")
+    for _, prop in ipairs(props) do
+        local success, val = pcall(function() return btn[prop] end)
+        if success and val ~= nil then
+            print("    " .. prop .. " = " .. tostring(val))
+        end
+    end
+    -- Дополнительно атрибуты (если есть)
+    local attrs = btn:GetAttributes()
+    if next(attrs) then
+        print("  --- Атрибуты ---")
+        for k, v in pairs(attrs) do
+            print("    " .. k .. " = " .. tostring(v))
+        end
+    else
+        print("  (атрибутов нет)")
+    end
+end
+
+-- Главная функция логирования
+local function logButtonFull(btn)
+    print("\n========== КНОПКА НАЖАТА ==========")
+    print("Имя: " .. btn.Name)
+    print("Класс: " .. btn.ClassName)
+    print("Полный путь: " .. btn:GetFullName())
+    print("Видимость: " .. tostring(btn.Visible))
+    print("Абсолютная позиция: " .. tostring(btn.AbsolutePosition))
+    print("Абсолютный размер: " .. tostring(btn.AbsoluteSize))
+    printProperties(btn)
+    print("  --- Дочерние объекты (до 2 уровней) ---")
+    local children = btn:GetChildren()
+    if #children == 0 then
+        print("    (нет)")
+    else
+        printChildren(btn, 1)
+    end
+    print("=======================================\n")
+end
+
+-- Функция добавления обработчика на кнопку
+local function hookButton(btn)
+    if (btn:IsA("TextButton") or btn:IsA("ImageButton")) and not btn:GetAttribute("_hooked_full") then
+        btn:SetAttribute("_hooked_full", true)
+        btn.MouseButton1Click:Connect(function()
+            logButtonFull(btn)
+        end)
+    end
+end
+
+-- Сканирование всех существующих GUI
+local function scanAndHook(parent)
     if not parent then return end
     for _, child in ipairs(parent:GetChildren()) do
-        hookObject(child)
-        scan(child)
+        hookButton(child)
+        scanAndHook(child)
     end
 end
 
-local sources = {
-    game:GetService("CoreGui"),
-    game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
-}
-
-for _, src in ipairs(sources) do
-    if src then
-        scan(src)
-        src.DescendantAdded:Connect(hookObject)
-    end
+-- Отслеживание новых объектов
+local function setupDescendantTracking(parent)
+    parent.DescendantAdded:Connect(function(desc)
+        hookButton(desc)
+    end)
 end
 
-print("Трекер запущен. Кликните по кнопке, активирующей FlyBoat.")
-print("Информация появится в консоли.")
+-- Запуск
+local function startFullListener()
+    print("Запуск расширенного перехватчика...")
+    local sources = {
+        game:GetService("CoreGui"),
+        game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+    }
+    for _, src in ipairs(sources) do
+        if src then
+            scanAndHook(src)
+            setupDescendantTracking(src)
+        end
+    end
+    print("Готово. Теперь кликайте по любым кнопкам – получите подробный отчёт.")
+end
+
+startFullListener()
