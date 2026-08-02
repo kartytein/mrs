@@ -1,121 +1,133 @@
--- ================================================================
---  МАКСИМАЛЬНАЯ ИНФОРМАЦИЯ О КЛЮЧАХ _G (сохранение в файл)
---  Вставьте в консоль Delta после загрузки HUB.
---  Будет создан файл "G_analysis.txt" с подробным отчётом.
--- ================================================================
+-- ============================================================================
+--  ДИАГНОСТИКА КНОПКИ: собираем ВСЕ данные для понимания, как её активировать
+--  Запустите в Delta. В консоль выведется полный отчёт.
+-- ============================================================================
 
-local function analyzeGlobal()
-    local report = {
-        "=== АНАЛИЗ ГЛОБАЛЬНОЙ ТАБЛИЦЫ _G ===",
-        "Всего ключей: " .. #({}),
-        ""
-    }
+local targetPath = "CoreGui.5254c01c4691269e68d25763275f564b3f6d90d88346ad2f0bba357e7d8c00c1.redz-library-v5.Window.Components.Containers.Container.Option"
+local btn = nil
 
-    local function inspectValue(value, depth)
-        depth = depth or 0
-        local indent = string.rep("  ", depth)
-        local valueType = type(value)
-        if valueType == "number" or valueType == "string" or valueType == "boolean" then
-            return indent .. tostring(value)
-        elseif valueType == "function" then
-            local info = {}
-            -- Попытка получить информацию о функции (если доступно)
-            local debugInfo = debug and debug.getinfo and debug.getinfo(value)
-            if debugInfo then
-                if debugInfo.nparams then
-                    table.insert(info, "параметров: " .. debugInfo.nparams)
-                end
-                if debugInfo.isvararg then
-                    table.insert(info, "vararg")
-                end
-                if debugInfo.name then
-                    table.insert(info, "имя: " .. debugInfo.name)
-                end
-                if debugInfo.source then
-                    table.insert(info, "исходник: " .. debugInfo.source)
-                end
-            else
-                table.insert(info, "(информация недоступна)")
-            end
-            return indent .. "function [" .. table.concat(info, ", ") .. "]"
-        elseif valueType == "table" then
-            local count = 0
-            local sample = {}
-            for k, v in pairs(value) do
-                count = count + 1
-                if count <= 5 then
-                    table.insert(sample, tostring(k) .. "=" .. type(v))
-                end
-            end
-            if count > 5 then
-                table.insert(sample, "... и ещё " .. (count-5) .. " элементов")
-            end
-            return indent .. "table [" .. count .. " элементов] примеры: " .. table.concat(sample, ", ")
-        elseif valueType == "userdata" then
-            return indent .. "userdata (объект Roblox)"
-        else
-            return indent .. type(value)
+-- Попытка получить кнопку
+pcall(function()
+    btn = _G[targetPath] or game:GetService("CoreGui"):FindFirstChild("5254c01c4691269e68d25763275f564b3f6d90d88346ad2f0bba357e7d8c00c1") -- лучше искать по полному пути динамически
+end)
+-- Упростим: найдём объект напрямую, используя GetFullName
+local function findTarget()
+    for _, obj in ipairs(game:GetDescendants()) do
+        if obj:GetFullName() == targetPath then
+            return obj
         end
     end
+    return nil
+end
 
-    local suspicious = {}  -- ключи с подозрительными именами
+btn = findTarget()
 
-    for key, value in pairs(_G) do
-        local keyStr = tostring(key)
-        local info = keyStr .. " (" .. type(value) .. ")"
+if not btn then
+    print("Кнопка не найдена. Проверьте путь.")
+    return
+end
 
-        -- Детальное содержимое
-        local details = inspectValue(value, 1)
-        table.insert(report, info)
-        table.insert(report, "  " .. details)
+print("=== ДИАГНОСТИКА КНОПКИ ===")
+print("Путь:", targetPath)
+print("Класс:", btn.ClassName)
+print("Имя:", btn.Name)
 
-        -- Отдельно собираем подозрительные ключи
-        local lowerKey = keyStr:lower()
-        if lowerKey:find("toggle") or lowerKey:find("option") or lowerKey:find("enable") or lowerKey:find("disable") or 
-           lowerKey:find("switch") or lowerKey:find("state") or lowerKey:find("flag") or lowerKey:find("click") or
-           lowerKey:find("activate") or lowerKey:find("redz") or lowerKey:find("hub") or lowerKey:find("library") then
-            table.insert(suspicious, keyStr)
+-- 1. Все атрибуты
+print("\nАтрибуты:")
+for _, attr in ipairs(btn:GetAttributes()) do
+    print("  " .. attr .. " = " .. tostring(btn:GetAttribute(attr)))
+end
+
+-- 2. Теги CollectionService (могут быть важны)
+local CollectionService = game:GetService("CollectionService")
+local tags = {}
+for _, tag in ipairs(CollectionService:GetTags(btn)) do
+    table.insert(tags, tag)
+end
+print("Теги: " .. table.concat(tags, ", "))
+
+-- 3. Дочерние элементы (возможно, скрытый ClickDetector?)
+print("\nДочерние элементы:")
+for _, child in ipairs(btn:GetChildren()) do
+    print("  " .. child:GetFullName() .. " (" .. child.ClassName .. ")")
+end
+
+-- 4. Родительские скрипты, обрабатывающие клики (рекурсивно вверх)
+print("\nОбработчики в родительской иерархии:")
+local parent = btn
+while parent do
+    for _, child in ipairs(parent:GetChildren()) do
+        if child:IsA("LocalScript") or child:IsA("Script") or child:IsA("ModuleScript") then
+            -- Пытаемся получить его код (может не дать из-за безопасности)
+            local src = "недоступен"
+            pcall(function()
+                src = child:GetFullName() .. ":\n" .. child.Source:sub(1, 500) -- первые 500 символов
+            end)
+            print(string.format("  Скрипт: %s (%s)", child:GetFullName(), child.ClassName))
+            print("    Первые 500 символов: " .. src)
+        end
+        -- Возможно, есть RemoteEvent или BindableEvent для кликов
+        if child:IsA("RemoteEvent") or child:IsA("BindableEvent") then
+            print(string.format("  Событие: %s (%s)", child:GetFullName(), child.ClassName))
         end
     end
+    parent = parent.Parent
+end
 
-    -- Добавляем итоговый раздел с кандидатами
-    table.insert(report, "")
-    table.insert(report, "=== ВЕРОЯТНЫЕ КАНДИДАТЫ (по именам) ===")
-    if #suspicious > 0 then
-        for _, name in ipairs(suspicious) do
-            table.insert(report, "  " .. name)
-        end
-    else
-        table.insert(report, "  (ничего не найдено)")
-    end
+-- 5. Подключаем наблюдателей за событиями на кнопке и родителе
+-- Ловим Activated, MouseButton1Click, MouseButton1Down, InputBegan на 3 родителя вверх
+print("\nПодключаем наблюдателей событий...")
+local events = {"Activated", "MouseButton1Click", "MouseButton1Down", "MouseButton2Click", "MouseEnter", "MouseLeave"}
+local connectedSignals = {}
 
-    -- Сохраняем в файл
-    local content = table.concat(report, "\n")
-    if writefile then
-        writefile("G_analysis.txt", content)
-        print("Полный отчёт сохранён в G_analysis.txt")
-    else
-        print("writefile не поддерживается. Вывод в консоль (будет длинным):")
-        for _, line in ipairs(report) do
-            print(line)
-        end
-    end
-
-    -- Выводим краткий итог в консоль
-    print("\n=== КРАТКИЙ ИТОГ ===")
-    print("Всего ключей: " .. #({}))
-    print("Подозрительных ключей: " .. #suspicious)
-    if #suspicious > 0 then
-        print("Список кандидатов:")
-        for _, name in ipairs(suspicious) do
-            print("  " .. name)
-        end
-        print("Для вызова кандидата используйте: _G['имя']()")
-        print("Если это таблица, изучите её содержимое: for k,v in pairs(_G['имя']) do print(k,v) end")
-    else
-        print("Кандидатов не найдено. Изучите полный отчёт в файле.")
+local function connectSignal(obj, eventName)
+    local signal = obj[eventName]
+    if signal then
+        local conn = signal:Connect(function(...)
+            local args = {...}
+            print(string.format("  [!] Событие %s на %s вызвано! Аргументы: %s", eventName, obj:GetFullName(), tostring(#args > 0 and args[1] or "нет")))
+            -- Ловим сам факт вызова, чтобы понять, какое событие реально реагирует
+        end)
+        table.insert(connectedSignals, conn)
     end
 end
 
--- Запуск анализа
-analyzeGlobal()
+for _, ev in ipairs(events) do
+    connectSignal(btn, ev)
+end
+
+-- Также на родителя (Container), вдруг обработка на нём
+local container = btn.Parent
+if container then
+    for _, ev in ipairs(events) do
+        connectSignal(container, ev)
+    end
+    -- InputBegan на GuiObject ловит любые вводы (включая мышь)
+    if container:IsA("GuiObject") then
+        connectSignal(container, "InputBegan")
+    end
+end
+
+-- Ещё выше на Components
+local components = container and container.Parent
+if components then
+    connectSignal(components, "InputBegan")
+end
+
+print("Теперь вручную кликните по кнопке. В консоли отобразится, какие события сработали.")
+
+-- 6. Дополнительно: проверим, подключен ли VirtualUser и может ли Delta симулировать мышь
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local UserInputService = game:GetService("UserInputService")
+print("\nИнформация для симуляции мыши:")
+print("  Позиция кнопки (AbsolutePosition):", btn.AbsolutePosition)
+print("  Размер кнопки (AbsoluteSize):", btn.AbsoluteSize)
+local center = btn.AbsolutePosition + btn.AbsoluteSize / 2
+print("  Центр кнопки:", center)
+print("  Текущая позиция мыши:", UserInputService:GetMouseLocation())
+-- Проверка на возможность использования SendMouseInputEvent (может быть запрещено)
+print("  VirtualInputManager доступен:", VirtualInputManager and "Да" or "Нет")
+print("  Поддерживается SendMouseInputEvent:", pcall(function() VirtualInputManager:SendMouseInputEvent(center.X, center.Y, 0, true, game, 0) end) and "Да" or "Нет")
+
+print("\n=== ДИАГНОСТИКА ЗАВЕРШЕНА ===")
+print("После клика проанализируйте, какие события сработали, и используйте соответствующий firesignal.")
