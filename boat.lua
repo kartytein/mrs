@@ -1,141 +1,163 @@
 -- =============================================================================
---  ПОДРОБНЫЙ ДАМП ФУНКЦИЙ (с защитой от ошибок и паузами)
+--  ПОЛНЫЙ ДАМП ВСЕХ ФУНКЦИЙ (БЕЗ ОГРАНИЧЕНИЙ) С ПАУЗАМИ
 --  Вставьте в консоль Delta ПОСЛЕ загрузки HUB.
---  Файл: functions_detailed_dump.txt
+--  Будет создан файл "functions_full_dump.txt" со ВСЕМИ найденными функциями.
+--  ВНИМАНИЕ: файл может быть очень большим (сотни тысяч строк).
 -- =============================================================================
 
-print("=== ПОДРОБНЫЙ ДАМП ФУНКЦИЙ (без ограничений, но с паузами) ===")
+print("=== ПОЛНЫЙ СБОР ВСЕХ ФУНКЦИЙ (без лимита) ===")
+print("Это может занять несколько минут...")
 
-local allData = {}  -- массив строк для вывода
-local function addLine(line)
-    table.insert(allData, line)
+local allFunctions = {}
+local function addFunction(name, func)
+    table.insert(allFunctions, {name = name, func = func})
 end
 
--- Функция получения подробной информации о функции (безопасно)
-local function getFunctionInfo(func, nameHint)
-    local info = {}
-    -- Пытаемся получить debug.getinfo
-    if debug and debug.getinfo then
-        local ok, di = pcall(debug.getinfo, func)
-        if ok and di then
-            info.name = di.name or ""
-            info.namewhat = di.namewhat or ""
-            info.source = di.source or ""
-            info.linedefined = di.linedefined or 0
-            info.lastlinedefined = di.lastlinedefined or 0
-            info.nparams = di.nparams or 0
-            info.isvararg = di.isvararg or false
-        end
-    end
-    if not info.name or info.name == "" then
-        info.name = nameHint or "unknown"
-    end
-    -- Получаем upvalues (безопасно)
-    local upvalues = {}
-    if debug and debug.getupvalue then
-        local i = 1
-        while true do
-            local ok, name, value = pcall(debug.getupvalue, func, i)
-            if not ok or not name then break end
-            table.insert(upvalues, {name = name, value = tostring(value), type = type(value)})
-            i = i + 1
-        end
-    end
-    info.upvalues = upvalues
-    return info
-end
-
--- Сбор функций из таблицы (только прямой обход, без рекурсии вглубь)
-local function collectFromTable(tbl, prefix)
-    if type(tbl) ~= "table" then return end
-    for k, v in pairs(tbl) do
-        if type(v) == "function" then
-            local hint = prefix .. "." .. tostring(k)
-            local info = getFunctionInfo(v, hint)
-            addLine("=== ФУНКЦИЯ ===")
-            addLine("Путь: " .. hint)
-            if info.name and info.name ~= "" and info.name ~= hint then
-                addLine("Имя (debug): " .. info.name)
+-- Вспомогательная функция для обхода таблицы с паузами
+local function scanTable(tbl, prefix, maxDepth)
+    maxDepth = maxDepth or 2  -- глубина вложенности, чтобы не зациклиться
+    local function recursiveScan(current, path, depth)
+        if depth > maxDepth then return end
+        if type(current) ~= "table" then return end
+        for k, v in pairs(current) do
+            if type(v) == "function" then
+                addFunction(path .. "." .. tostring(k), v)
+            elseif type(v) == "table" and depth < maxDepth then
+                recursiveScan(v, path .. "." .. tostring(k), depth + 1)
             end
-            addLine("Источник: " .. (info.source or "неизвестно"))
-            addLine("Строки определения: " .. info.linedefined .. " - " .. info.lastlinedefined)
-            addLine("Кол-во параметров: " .. info.nparams)
-            addLine("Vararg: " .. tostring(info.isvararg))
-            if #info.upvalues > 0 then
-                addLine("Upvalues (" .. #info.upvalues .. "):")
-                for _, uv in ipairs(info.upvalues) do
-                    addLine("  " .. uv.name .. " = " .. uv.value .. " (" .. uv.type .. ")")
-                end
-            else
-                addLine("Upvalues: нет")
-            end
-            addLine("Адрес: " .. tostring(v))
-            addLine("")
         end
     end
+    recursiveScan(tbl, prefix, 0)
 end
 
--- Источники для сбора (только прямые таблицы, без рекурсии)
-local sources = {
-    {tbl = _G, name = "_G"},
-    {tbl = shared, name = "shared"},
-    {tbl = getreg and getreg(), name = "getreg"},
-    {tbl = getrenv and getrenv(), name = "getrenv"},
-    {tbl = debug and debug.getregistry and debug.getregistry(), name = "debug_registry"},
-}
+-- 1. _G
+print("Сбор _G...")
+scanTable(_G, "_G")
+wait(0.5)
+print("  Найдено функций: " .. #allFunctions)
 
--- Собираем из каждого источника
-for _, src in ipairs(sources) do
-    if src.tbl and type(src.tbl) == "table" then
-        print("Сканируем: " .. src.name)
-        collectFromTable(src.tbl, src.name)
-        wait(0.5)  -- пауза между источниками
+-- 2. shared
+if shared then
+    print("Сбор shared...")
+    scanTable(shared, "shared")
+    wait(0.5)
+    print("  Найдено функций: " .. #allFunctions)
+end
+
+-- 3. getreg()
+if getreg then
+    print("Сбор getreg...")
+    local reg = getreg()
+    if type(reg) == "table" then
+        for i, v in ipairs(reg) do
+            if type(v) == "function" then
+                addFunction("reg[" .. i .. "]", v)
+            end
+            if i % 100 == 0 then wait(0.05) end
+        end
     end
+    wait(0.5)
+    print("  Найдено функций: " .. #allFunctions)
 end
 
--- Также собираем из getgc (все функции в памяти) – но с паузами и без обработки upvalues
+-- 4. getgc() – все объекты (может быть очень много)
 if getgc then
-    print("Сканируем getgc (это может занять время)...")
+    print("Сбор getgc (все объекты, может занять время)...")
     local gc = getgc()
     local count = 0
     for i, obj in ipairs(gc) do
         if type(obj) == "function" then
-            -- Для gc не используем полную информацию, чтобы не перегружать
-            local info = getFunctionInfo(obj, "gc[" .. i .. "]")
-            addLine("=== ФУНКЦИЯ ===")
-            addLine("Путь: gc[" .. i .. "]")
-            if info.name and info.name ~= "" then
-                addLine("Имя (debug): " .. info.name)
-            end
-            addLine("Источник: " .. (info.source or "неизвестно"))
-            addLine("Строки определения: " .. info.linedefined .. " - " .. info.lastlinedefined)
-            addLine("Кол-во параметров: " .. info.nparams)
-            addLine("Vararg: " .. tostring(info.isvararg))
-            addLine("Upvalues: " .. #info.upvalues .. " (не отображаем для экономии)")
-            addLine("Адрес: " .. tostring(obj))
-            addLine("")
+            addFunction("gc[" .. i .. "]", obj)
             count = count + 1
-            if count % 50 == 0 then wait(0.1) end
         end
-        if i % 1000 == 0 then wait(0.1) end
+        if i % 100 == 0 then wait(0.05) end
     end
-    print("Собрано из gc: " .. count)
+    wait(0.5)
+    print("  Найдено функций в gc: " .. count)
+    print("  Всего собрано: " .. #allFunctions)
 end
 
-print("Собрано записей: " .. #allData)
-
--- Сохраняем в файл
-if writefile then
-    local fileName = "functions_detailed_dump.txt"
-    local content = table.concat(allData, "\n")
-    writefile(fileName, content)
-    print("Файл сохранён: " .. fileName)
-    print("Размер файла: " .. #content .. " байт")
-else
-    print("writefile недоступен. Вывожу первые 50 строк в консоль:")
-    for i = 1, math.min(50, #allData) do
-        print(allData[i])
+-- 5. getrenv()
+if getrenv then
+    print("Сбор getrenv...")
+    local renv = getrenv()
+    if type(renv) == "table" then
+        scanTable(renv, "renv")
     end
+    wait(0.5)
+    print("  Найдено функций: " .. #allFunctions)
+end
+
+-- 6. debug.getregistry()
+if debug and debug.getregistry then
+    print("Сбор debug.getregistry...")
+    local reg = debug.getregistry()
+    if type(reg) == "table" then
+        scanTable(reg, "debug_registry")
+    end
+    wait(0.5)
+    print("  Найдено функций: " .. #allFunctions)
+end
+
+-- 7. Дополнительно: окружения всех скриптов (если доступно)
+if getfenv and debug and debug.getinfo then
+    print("Сбор окружений скриптов (может быть медленно)...")
+    for level = 0, 100 do
+        local info = debug.getinfo(level)
+        if not info then break end
+        local env = getfenv(level)
+        if env and type(env) == "table" and env ~= _G and env ~= shared then
+            -- Не полный обход, чтобы не повторяться, но добавим функции
+            for k, v in pairs(env) do
+                if type(v) == "function" then
+                    addFunction("env_level" .. level .. "." .. tostring(k), v)
+                end
+            end
+        end
+        if level % 10 == 0 then wait(0.1) end
+    end
+    print("  Найдено функций: " .. #allFunctions)
+end
+
+print("=== СБОР ЗАВЕРШЁН ===")
+print("Всего собрано функций: " .. #allFunctions)
+
+-- Формируем содержимое файла
+local fileContent = "===== ПОЛНЫЙ ДАМП ВСЕХ ФУНКЦИЙ =====\n"
+fileContent = fileContent .. "Всего функций: " .. #allFunctions .. "\n\n"
+
+-- Создаём содержимое по частям, чтобы не перегружать память
+local CHUNK_SIZE = 5000
+local function writeChunk(startIdx)
+    local chunk = {}
+    for i = startIdx, math.min(startIdx + CHUNK_SIZE - 1, #allFunctions) do
+        local item = allFunctions[i]
+        table.insert(chunk, "[" .. i .. "] " .. item.name .. "\n    Адрес: " .. tostring(item.func) .. "\n\n")
+    end
+    return table.concat(chunk)
+end
+
+if writefile then
+    local fileName = "functions_full_dump.txt"
+    -- Записываем заголовок
+    writefile(fileName, fileContent)
+    -- Дописываем по частям
+    for i = 1, #allFunctions, CHUNK_SIZE do
+        local chunkText = writeChunk(i)
+        writefile(fileName, chunkText, true)  -- append
+        if i % CHUNK_SIZE == 0 then
+            print("Записано " .. i .. " из " .. #allFunctions)
+            wait(0.2)
+        end
+    end
+    print("Файл сохранён: " .. fileName)
+    print("Путь: " .. (getcwd and getcwd() or "рабочая папка Delta"))
+else
+    print("writefile недоступен. Вывод в консоль (первые 100 записей):")
+    for i = 1, math.min(100, #allFunctions) do
+        print("[" .. i .. "] " .. allFunctions[i].name)
+    end
+    print("Остальные функции не отображены из-за отсутствия writefile.")
 end
 
 print("=== ДАМП ЗАВЕРШЁН ===")
