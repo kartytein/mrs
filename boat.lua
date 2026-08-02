@@ -1,12 +1,11 @@
 -- =====================================================================
---  ТРЕКЕР КЛИКОВ ПО КНОПКЕ OPTION (исправленный)
---  Вставьте в консоль Delta после загрузки HUB.
---  Скрипт находит кнопку Option (которая оказалась Frame) и ищет внутри неё все дочерние кнопки,
---  вешает обработчики на их события MouseButton1Click / Activated.
---  При клике выводит стек вызовов.
+--  ТРЕКЕР КЛИКОВ ПО КНОПКЕ OPTION (на основе позиции мыши)
+--  Не использует события кнопки, работает через UserInputService.
+--  При клике левой кнопкой мыши проверяет, попадает ли курсор в область кнопки.
+--  Если да – выводит стек вызовов и информацию.
 -- =====================================================================
 
-print("=== ТРЕКЕР КЛИКОВ ПО КНОПКЕ OPTION (исправленный) ===")
+print("=== ТРЕКЕР КЛИКОВ ПО ПОЗИЦИИ МЫШИ (для Option) ===")
 
 local path = "CoreGui.5254c01c4691269e68d25763275f564b3f6d90d88346ad2f0bba357e7d8c00c1.redz-library-v5.Window.Components.Containers.Container.Option"
 
@@ -21,83 +20,68 @@ local function getByPath(p)
     return current
 end
 
-local container = getByPath(path)  -- это Frame Option
-if not container then
-    print("[✗] Контейнер Option не найден по пути: " .. path)
+local target = getByPath(path)
+if not target then
+    print("[✗] Объект Option не найден.")
     return
 end
 
-print("[✓] Найден контейнер: " .. container:GetFullName() .. " (класс: " .. container.ClassName .. ")")
+print("[✓] Найден объект: " .. target:GetFullName() .. " (класс: " .. target.ClassName .. ")")
 
--- Функция поиска всех кнопок (TextButton, ImageButton) внутри контейнера (рекурсивно)
-local function findButtons(parent)
-    local buttons = {}
-    for _, child in ipairs(parent:GetChildren()) do
-        if child:IsA("TextButton") or child:IsA("ImageButton") then
-            table.insert(buttons, child)
+-- Функция проверки попадания точки в область объекта
+local function isPointInsideGuiObject(obj, x, y)
+    if not obj or not obj.Visible then return false end
+    local absPos = obj.AbsolutePosition
+    local absSize = obj.AbsoluteSize
+    if not absPos or not absSize then return false end
+    return x >= absPos.X and x <= absPos.X + absSize.X and
+           y >= absPos.Y and y <= absPos.Y + absSize.Y
+end
+
+local input = game:GetService("UserInputService")
+local connection
+
+connection = input.InputBegan:Connect(function(inputObj, gameProcessed)
+    if gameProcessed then return end
+    if inputObj.UserInputType == Enum.UserInputType.MouseButton1 then
+        -- Получаем позицию мыши
+        local mousePos = input:GetMouseLocation()
+        local x, y = mousePos.X, mousePos.Y
+
+        -- Проверяем все дочерние объекты (включая вложенные)
+        local function checkChildren(parent)
+            for _, child in ipairs(parent:GetChildren()) do
+                if child:IsA("GuiObject") and child.Visible then
+                    if isPointInsideGuiObject(child, x, y) then
+                        -- Попали внутрь дочернего объекта
+                        print("===== КЛИК НА " .. child:GetFullName() .. " =====")
+                        print(debug.traceback("Стек вызовов:"))
+                        print("=============================================")
+                        return true
+                    end
+                end
+                -- рекурсивно проверяем вложенные
+                local found = checkChildren(child)
+                if found then return true end
+            end
+            return false
         end
-        -- Рекурсивно обходим всех потомков (на случай вложенности)
-        local sub = findButtons(child)
-        for _, b in ipairs(sub) do table.insert(buttons, b) end
-    end
-    return buttons
-end
 
-local allButtons = findButtons(container)
-
-if #allButtons == 0 then
-    print("[!] Внутри контейнера не найдено кнопок. Возможно, клик обрабатывается на самом Frame.")
-    print("    Попробуем повесить обработчик на само событие родителя (если есть).")
-else
-    print("[✓] Найдено кнопок внутри контейнера: " .. #allButtons)
-end
-
--- Добавляем обработчики на все найденные кнопки
-for _, btn in ipairs(allButtons) do
-    local name = btn:GetFullName()
-    print("  Обработчик добавлен на: " .. name)
-
-    -- MouseButton1Click
-    if btn:FindFirstChild("MouseButton1Click") then
-        btn.MouseButton1Click:Connect(function()
-            print("===== КЛИК ПО КНОПКЕ: " .. name .. " (MouseButton1Click) =====")
+        -- Сначала проверяем сам целевой объект
+        if isPointInsideGuiObject(target, x, y) then
+            print("===== КЛИК НА " .. target:GetFullName() .. " =====")
             print(debug.traceback("Стек вызовов:"))
-            print("===========================================================")
-        end)
-    else
-        -- Пробуем Activated
-        if btn:FindFirstChild("Activated") then
-            btn.Activated:Connect(function()
-                print("===== КЛИК ПО КНОПКЕ: " .. name .. " (Activated) =====")
-                print(debug.traceback("Стек вызовов:"))
-                print("======================================================")
-            end)
+            print("=============================================")
         else
-            print("    [!] У кнопки " .. name .. " нет событий MouseButton1Click или Activated.")
+            -- Проверяем дочерние объекты
+            checkChildren(target)
         end
     end
-end
+end)
 
--- Если кнопок не нашлось, попробуем повесить обработчик на сам контейнер (Frame) через событие Activated или другие
-if #allButtons == 0 then
-    print("Пытаемся добавить обработчик на сам контейнер (Frame).")
-    if container:FindFirstChild("Activated") then
-        container.Activated:Connect(function()
-            print("===== КЛИК ПО FRAME (Activated) =====")
-            print(debug.traceback("Стек вызовов:"))
-            print("====================================")
-        end)
-    elseif container:FindFirstChild("MouseButton1Click") then
-        container.MouseButton1Click:Connect(function()
-            print("===== КЛИК ПО FRAME (MouseButton1Click) =====")
-            print(debug.traceback("Стек вызовов:"))
-            print("============================================")
-        end)
-    else
-        print("[✗] Не удалось найти ни одного события для отслеживания кликов.")
-    end
-end
+print("[✓] Трекер запущен. Теперь кликните по кнопке Option (или её дочерним элементам).")
+print("    При клике в консоль будет выведен стек вызовов.")
+print("    Для остановки выполните: connection:Disconnect()")
 
-print("\n=== ТРЕКЕР ЗАПУЩЕН ===")
-print("Теперь нажмите на кнопку Option в интерфейсе (или на её дочернюю кнопку).")
-print("В консоли появится стек вызовов при клике.")
+-- Сохраняем подключение в глобальную переменную для отключения
+_G._tracker_connection = connection
