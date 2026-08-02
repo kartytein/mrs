@@ -17,67 +17,25 @@ if not frame then
     return
 end
 
-print("=== ПОИСК ОБРАБОТЧИКОВ НА FRAME ===")
-local events = {"MouseButton1Click", "MouseButton1Down", "MouseButton1Up", "Activated"}
-local found = false
-
-if getconnections then
-    for _, evName in ipairs(events) do
-        local ev = frame:FindFirstChild(evName)
-        if ev and ev:IsA("RBXScriptSignal") then
-            local conns = getconnections(ev)
-            if #conns > 0 then
-                found = true
-                print("Найдено", #conns, "привязок к", evName)
-                for i, conn in ipairs(conns) do
-                    print("  Привязка", i)
-                    if conn.Function then
-                        print("    Функция:", tostring(conn.Function))
-                        -- Попытка вызвать функцию напрямую
-                        pcall(function() conn.Function() end)
-                        pcall(function() conn.Function(true) end)
-                        pcall(function() conn.Function(false) end)
-                    end
-                    if conn.Script then
-                        print("    Скрипт:", conn.Script:GetFullName())
-                    end
-                end
-            end
-        end
-    end
-
-    -- Проверим родителя (Container)
-    local parent = frame.Parent
-    if parent then
-        print("\n=== ПОИСК НА РОДИТЕЛЕ:", parent:GetFullName(), "===")
-        for _, evName in ipairs(events) do
-            local ev = parent:FindFirstChild(evName)
-            if ev and ev:IsA("RBXScriptSignal") then
-                local conns = getconnections(ev)
-                if #conns > 0 then
-                    found = true
-                    print("Найдено", #conns, "привязок к", evName, "на родителе")
-                    for i, conn in ipairs(conns) do
-                        print("  Привязка", i)
-                        if conn.Function then
-                            print("    Функция:", tostring(conn.Function))
-                            pcall(function() conn.Function() end)
-                            pcall(function() conn.Function(true) end)
-                        end
-                        if conn.Script then
-                            print("    Скрипт:", conn.Script:GetFullName())
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    if not found then
-        print("Обработчиков не найдено ни на Frame, ни на родителе.")
-    end
+if frame:FindFirstChild("MouseButton1Click") then
+    frame.MouseButton1Click:Connect(function()
+        print("\n=== КЛИК ПЕРЕХВАЧЕН ===")
+        print(debug.traceback())
+        print("=========================\n")
+    end)
+    print("Теперь кликните по кнопке (по тексту 'Option'). Стек появится в консоли.")
 else
-    print("getconnections не доступен.")
+    print("У Frame нет события MouseButton1Click. Возможно, обработчик висит на родителе.")
+    -- Попробуем подключиться к родителю
+    local parent = frame.Parent
+    if parent and parent:FindFirstChild("MouseButton1Click") then
+        parent.MouseButton1Click:Connect(function()
+            print("\n=== КЛИК НА РОДИТЕЛЕ ПЕРЕХВАЧЕН ===")
+            print(debug.traceback())
+            print("=========================\n")
+        end)
+        print("Подключились к родителю. Кликните по 'Option'.")
+    else
+        print("Не удалось найти событие MouseButton1Click ни на Frame, ни на родителе.")
+    end
 end
-
-print("\n=== ЗАВЕРШЕНО ===")
