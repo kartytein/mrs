@@ -1,36 +1,37 @@
 -- =============================================================================
---  ПОЛНЫЙ ДАМП ВСЕХ ФУНКЦИЙ (без ограничений, с увеличенными паузами)
+--  ПОЛНЫЙ ДАМП ВСЕХ ДОСТУПНЫХ ФУНКЦИЙ (без ограничений, с большими паузами)
 --  Вставьте в консоль Delta ПОСЛЕ загрузки HUB.
---  Будет создан файл "functions_full_dump.txt" со ВСЕМИ найденными функциями.
---  Добавлены паузы между этапами и внутри больших циклов для стабильности.
+--  Скрипт собирает функции из всех возможных источников, сохраняет в файл.
+--  Для стабильности добавлены паузы после каждых 100 функций из getgc.
+--  Ошибки перехватываются, сбор продолжается.
 -- =============================================================================
 
-print("=== ПОЛНЫЙ СБОР ВСЕХ ФУНКЦИЙ (с большими паузами) ===")
+print("=== ПОЛНЫЙ СБОР ВСЕХ ФУНКЦИЙ (без лимита) ===")
+print("ВНИМАНИЕ: процесс может занять много времени и использовать много памяти.")
 
 local allFunctions = {}
-local MAX = 15000 -- увеличили лимит (можно убрать или поднять)
+local totalCount = 0
 
--- Функция добавления с проверкой лимита
+-- Безопасное добавление функции
 local function addFunc(name, func)
-    if #allFunctions >= MAX then 
-        print("Достигнут лимит функций (" .. MAX .. "), остановка.")
-        return false 
-    end
     table.insert(allFunctions, {name = name, func = func})
-    return true
+    totalCount = totalCount + 1
+    -- Каждые 1000 функций выводим прогресс
+    if totalCount % 1000 == 0 then
+        print("  Собрано функций: " .. totalCount)
+        wait(0.2)
+    end
 end
 
--- Рекурсивный сбор функций из таблицы (глубина 1)
+-- Рекурсивный сбор из таблицы (глубина 1, чтобы не зациклиться)
 local function collectFromTable(tbl, prefix, depth)
     depth = depth or 0
-    if depth > 1 then return end
+    if depth > 2 then return end  -- разрешаем два уровня вложенности
     if type(tbl) ~= "table" then return end
     for k, v in pairs(tbl) do
-        if #allFunctions >= MAX then break end
         if type(v) == "function" then
-            local key = tostring(k)
-            addFunc(prefix .. key, v)
-        elseif type(v) == "table" and depth == 0 then
+            addFunc(prefix .. tostring(k), v)
+        elseif type(v) == "table" and depth < 2 then
             collectFromTable(v, prefix .. tostring(k) .. ".", depth + 1)
         end
     end
@@ -38,17 +39,13 @@ end
 
 -- ---- ЭТАП 1: _G ----
 print("Сбор _G...")
-pcall(function()
-    collectFromTable(_G, "_G.")
-end)
-wait(1)  -- большая пауза
+pcall(function() collectFromTable(_G, "_G.") end)
+wait(1)
 
 -- ---- ЭТАП 2: shared ----
 if shared then
     print("Сбор shared...")
-    pcall(function()
-        collectFromTable(shared, "shared.")
-    end)
+    pcall(function() collectFromTable(shared, "shared.") end)
 end
 wait(1)
 
@@ -59,7 +56,6 @@ if getreg then
         local reg = getreg()
         if type(reg) == "table" then
             for i, v in ipairs(reg) do
-                if #allFunctions >= MAX then break end
                 if type(v) == "function" then
                     addFunc("reg[" .. i .. "]", v)
                 end
@@ -69,24 +65,23 @@ if getreg then
 end
 wait(1)
 
--- ---- ЭТАП 4: getgc() - БЕЗ ОГРАНИЧЕНИЙ, с паузами ----
+-- ---- ЭТАП 4: getgc() (все объекты, с паузами каждые 100) ----
 if getgc then
-    print("Сбор getgc (все объекты, с паузами каждые 50 функций)...")
+    print("Сбор getgc (все объекты, с паузами каждые 100 функций)...")
     pcall(function()
         local gc = getgc()
-        local count = 0
+        local funcCount = 0
         for i, obj in ipairs(gc) do
-            if #allFunctions >= MAX then break end
             if type(obj) == "function" then
                 addFunc("gc[" .. i .. "]", obj)
-                count = count + 1
-                if count % 50 == 0 then
-                    wait(0.1)  -- пауза после каждых 50 функций
-                    print("  Прогресс getgc: собрано " .. count .. " функций")
+                funcCount = funcCount + 1
+                if funcCount % 100 == 0 then
+                    wait(0.2)  -- пауза для стабильности
+                    print("  getgc прогресс: " .. funcCount .. " функций собрано")
                 end
             end
         end
-        print("  Всего функций из getgc: " .. count)
+        print("  Всего функций из getgc: " .. funcCount)
     end)
 end
 wait(1)
@@ -114,34 +109,64 @@ if debug and debug.getregistry then
     end)
 end
 
-print("Итого собрано функций: " .. #allFunctions)
+print("Итого собрано функций: " .. totalCount)
 
 -- ---- СОХРАНЕНИЕ В ФАЙЛ ----
-local fileContent = "===== ПОЛНЫЙ ДАМП ФУНКЦИЙ =====\n"
-fileContent = fileContent .. "Всего функций: " .. #allFunctions .. "\n\n"
+print("Формирование содержимого файла...")
+local fileContent = "===== ПОЛНЫЙ ДАМП ВСЕХ ФУНКЦИЙ =====\n"
+fileContent = fileContent .. "Всего функций: " .. totalCount .. "\n\n"
 
-for i, item in ipairs(allFunctions) do
-    fileContent = fileContent .. "[" .. i .. "] " .. item.name .. "\n"
-    fileContent = fileContent .. "    Адрес: " .. tostring(item.func) .. "\n\n"
-end
-
-local saved = false
-if writefile then
-    local success, err = pcall(function()
-        writefile("functions_full_dump.txt", fileContent)
-        saved = true
-        print("Файл 'functions_full_dump.txt' сохранён.")
-    end)
-    if not success then
-        print("Ошибка записи файла: " .. tostring(err))
+local function writeProgress(i)
+    if i % 5000 == 0 then
+        print("  Записано в файл: " .. i .. " функций")
     end
 end
 
-if not saved then
-    print("writefile недоступен. Вывод первых 500 функций в консоль:")
-    for i = 1, math.min(500, #allFunctions) do
+-- Построчное добавление (чтобы не держать огромную строку в памяти)
+-- Но writefile требует полную строку, поэтому собираем частями
+local chunks = {}
+local chunkSize = 10000
+for i = 1, #allFunctions, chunkSize do
+    local chunk = ""
+    for j = i, math.min(i + chunkSize - 1, #allFunctions) do
+        local item = allFunctions[j]
+        chunk = chunk .. "[" .. j .. "] " .. item.name .. "\n"
+        chunk = chunk .. "    Адрес: " .. tostring(item.func) .. "\n\n"
+    end
+    table.insert(chunks, chunk)
+    if i % 50000 == 0 then
+        print("  Подготовлено " .. i .. " записей")
+    end
+end
+
+local fullContent = table.concat(chunks)
+fullContent = fileContent .. fullContent
+
+if writefile then
+    local success, err = pcall(function()
+        writefile("functions_full_dump.txt", fullContent)
+        print("Файл 'functions_full_dump.txt' сохранён.")
+        print("Размер файла: " .. #fullContent .. " байт")
+    end)
+    if not success then
+        print("Ошибка записи файла: " .. tostring(err))
+        print("Попытка записать частями...")
+        -- Если файл слишком большой, попробуем записать в несколько файлов
+        for i = 1, #chunks do
+            local filename = "functions_dump_part" .. i .. ".txt"
+            local partContent = fileContent .. chunks[i]
+            pcall(function()
+                writefile(filename, partContent)
+                print("Сохранён файл: " .. filename)
+            end)
+        end
+    end
+else
+    print("writefile недоступен. Вывод первых 1000 функций в консоль:")
+    for i = 1, math.min(1000, #allFunctions) do
         print("[" .. i .. "] " .. allFunctions[i].name)
     end
 end
 
 print("=== ДАМП ЗАВЕРШЁН ===")
+print("Всего собрано: " .. totalCount .. " функций.")
