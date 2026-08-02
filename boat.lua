@@ -1,108 +1,121 @@
--- ============================================================================
---  РАСШИРЕННЫЙ ПЕРЕХВАТЧИК КЛИКОВ (выводит полные данные о кнопке)
---  Вставьте в консоль Delta ПОСЛЕ загрузки HUB.
---  При каждом клике на ЛЮБУЮ кнопку будет выведена максимальная информация.
--- ============================================================================
+-- ================================================================
+--  МАКСИМАЛЬНАЯ ИНФОРМАЦИЯ О КЛЮЧАХ _G (сохранение в файл)
+--  Вставьте в консоль Delta после загрузки HUB.
+--  Будет создан файл "G_analysis.txt" с подробным отчётом.
+-- ================================================================
 
--- Вспомогательная функция: рекурсивный вывод дочерних объектов (ограничим 2 уровня)
-local function printChildren(obj, level)
-    level = level or 0
-    local prefix = string.rep("  ", level)
-    for _, child in ipairs(obj:GetChildren()) do
-        print(prefix .. "├─ " .. child.Name .. " [" .. child.ClassName .. "]")
-        if level < 2 then -- покажем только 2 уровня вложенности
-            printChildren(child, level + 1)
-        end
-    end
-end
-
--- Функция вывода свойств (наиболее важные)
-local function printProperties(btn)
-    local props = {
-        "Name", "ClassName", "Visible", "Position", "Size", "AnchorPoint",
-        "BackgroundColor3", "BackgroundTransparency", "TextColor3", "Text",
-        "TextSize", "Font", "TextXAlignment", "TextYAlignment", "Active",
-        "Selectable", "AutoButtonColor", "Image", "ImageColor3", "ImageTransparency"
+local function analyzeGlobal()
+    local report = {
+        "=== АНАЛИЗ ГЛОБАЛЬНОЙ ТАБЛИЦЫ _G ===",
+        "Всего ключей: " .. #({}),
+        ""
     }
-    print("  --- Свойства ---")
-    for _, prop in ipairs(props) do
-        local success, val = pcall(function() return btn[prop] end)
-        if success and val ~= nil then
-            print("    " .. prop .. " = " .. tostring(val))
+
+    local function inspectValue(value, depth)
+        depth = depth or 0
+        local indent = string.rep("  ", depth)
+        local valueType = type(value)
+        if valueType == "number" or valueType == "string" or valueType == "boolean" then
+            return indent .. tostring(value)
+        elseif valueType == "function" then
+            local info = {}
+            -- Попытка получить информацию о функции (если доступно)
+            local debugInfo = debug and debug.getinfo and debug.getinfo(value)
+            if debugInfo then
+                if debugInfo.nparams then
+                    table.insert(info, "параметров: " .. debugInfo.nparams)
+                end
+                if debugInfo.isvararg then
+                    table.insert(info, "vararg")
+                end
+                if debugInfo.name then
+                    table.insert(info, "имя: " .. debugInfo.name)
+                end
+                if debugInfo.source then
+                    table.insert(info, "исходник: " .. debugInfo.source)
+                end
+            else
+                table.insert(info, "(информация недоступна)")
+            end
+            return indent .. "function [" .. table.concat(info, ", ") .. "]"
+        elseif valueType == "table" then
+            local count = 0
+            local sample = {}
+            for k, v in pairs(value) do
+                count = count + 1
+                if count <= 5 then
+                    table.insert(sample, tostring(k) .. "=" .. type(v))
+                end
+            end
+            if count > 5 then
+                table.insert(sample, "... и ещё " .. (count-5) .. " элементов")
+            end
+            return indent .. "table [" .. count .. " элементов] примеры: " .. table.concat(sample, ", ")
+        elseif valueType == "userdata" then
+            return indent .. "userdata (объект Roblox)"
+        else
+            return indent .. type(value)
         end
     end
-    -- Дополнительно атрибуты (если есть)
-    local attrs = btn:GetAttributes()
-    if next(attrs) then
-        print("  --- Атрибуты ---")
-        for k, v in pairs(attrs) do
-            print("    " .. k .. " = " .. tostring(v))
+
+    local suspicious = {}  -- ключи с подозрительными именами
+
+    for key, value in pairs(_G) do
+        local keyStr = tostring(key)
+        local info = keyStr .. " (" .. type(value) .. ")"
+
+        -- Детальное содержимое
+        local details = inspectValue(value, 1)
+        table.insert(report, info)
+        table.insert(report, "  " .. details)
+
+        -- Отдельно собираем подозрительные ключи
+        local lowerKey = keyStr:lower()
+        if lowerKey:find("toggle") or lowerKey:find("option") or lowerKey:find("enable") or lowerKey:find("disable") or 
+           lowerKey:find("switch") or lowerKey:find("state") or lowerKey:find("flag") or lowerKey:find("click") or
+           lowerKey:find("activate") or lowerKey:find("redz") or lowerKey:find("hub") or lowerKey:find("library") then
+            table.insert(suspicious, keyStr)
+        end
+    end
+
+    -- Добавляем итоговый раздел с кандидатами
+    table.insert(report, "")
+    table.insert(report, "=== ВЕРОЯТНЫЕ КАНДИДАТЫ (по именам) ===")
+    if #suspicious > 0 then
+        for _, name in ipairs(suspicious) do
+            table.insert(report, "  " .. name)
         end
     else
-        print("  (атрибутов нет)")
+        table.insert(report, "  (ничего не найдено)")
     end
-end
 
--- Главная функция логирования
-local function logButtonFull(btn)
-    print("\n========== КНОПКА НАЖАТА ==========")
-    print("Имя: " .. btn.Name)
-    print("Класс: " .. btn.ClassName)
-    print("Полный путь: " .. btn:GetFullName())
-    print("Видимость: " .. tostring(btn.Visible))
-    print("Абсолютная позиция: " .. tostring(btn.AbsolutePosition))
-    print("Абсолютный размер: " .. tostring(btn.AbsoluteSize))
-    printProperties(btn)
-    print("  --- Дочерние объекты (до 2 уровней) ---")
-    local children = btn:GetChildren()
-    if #children == 0 then
-        print("    (нет)")
+    -- Сохраняем в файл
+    local content = table.concat(report, "\n")
+    if writefile then
+        writefile("G_analysis.txt", content)
+        print("Полный отчёт сохранён в G_analysis.txt")
     else
-        printChildren(btn, 1)
-    end
-    print("=======================================\n")
-end
-
--- Функция добавления обработчика на кнопку
-local function hookButton(btn)
-    if (btn:IsA("TextButton") or btn:IsA("ImageButton")) and not btn:GetAttribute("_hooked_full") then
-        btn:SetAttribute("_hooked_full", true)
-        btn.MouseButton1Click:Connect(function()
-            logButtonFull(btn)
-        end)
-    end
-end
-
--- Сканирование всех существующих GUI
-local function scanAndHook(parent)
-    if not parent then return end
-    for _, child in ipairs(parent:GetChildren()) do
-        hookButton(child)
-        scanAndHook(child)
-    end
-end
-
--- Отслеживание новых объектов
-local function setupDescendantTracking(parent)
-    parent.DescendantAdded:Connect(function(desc)
-        hookButton(desc)
-    end)
-end
-
--- Запуск
-local function startFullListener()
-    print("Запуск расширенного перехватчика...")
-    local sources = {
-        game:GetService("CoreGui"),
-        game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
-    }
-    for _, src in ipairs(sources) do
-        if src then
-            scanAndHook(src)
-            setupDescendantTracking(src)
+        print("writefile не поддерживается. Вывод в консоль (будет длинным):")
+        for _, line in ipairs(report) do
+            print(line)
         end
     end
-    print("Готово. Теперь кликайте по любым кнопкам – получите подробный отчёт.")
+
+    -- Выводим краткий итог в консоль
+    print("\n=== КРАТКИЙ ИТОГ ===")
+    print("Всего ключей: " .. #({}))
+    print("Подозрительных ключей: " .. #suspicious)
+    if #suspicious > 0 then
+        print("Список кандидатов:")
+        for _, name in ipairs(suspicious) do
+            print("  " .. name)
+        end
+        print("Для вызова кандидата используйте: _G['имя']()")
+        print("Если это таблица, изучите её содержимое: for k,v in pairs(_G['имя']) do print(k,v) end")
+    else
+        print("Кандидатов не найдено. Изучите полный отчёт в файле.")
+    end
 end
 
-startFullListener()
+-- Запуск анализа
+analyzeGlobal()
