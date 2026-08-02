@@ -1,112 +1,119 @@
 -- =============================================================================
---  ДАМП ВСЕХ ФУНКЦИЙ В ФАЙЛ (С ЗАДЕРЖКАМИ, ЧТОБЫ НЕ КРАШИЛО)
+--  УПРОЩЁННЫЙ ДАМП ВСЕХ ФУНКЦИЙ (без вызова debug.getupvalues)
 --  Вставьте в консоль Delta ПОСЛЕ загрузки HUB.
---  Будет создан файл "functions_full_dump.txt".
---  Добавлены wait(0.5) между большими операциями для снижения нагрузки.
+--  Будет создан файл "functions_dump_safe.txt" со списком функций.
+--  Все опасные операции обёрнуты в pcall.
 -- =============================================================================
 
-print("=== НАЧАЛО СБОРА ФУНКЦИЙ (с паузами) ===")
+print("=== БЕЗОПАСНЫЙ СБОР ФУНКЦИЙ (с паузами) ===")
 
 local allFunctions = {}
-local function addFunction(name, func)
+local MAX = 5000 -- лимит, чтобы не перегрузить память
+
+-- Функция добавления с проверкой лимита
+local function addFunc(name, func)
+    if #allFunctions >= MAX then return false end
     table.insert(allFunctions, {name = name, func = func})
+    return true
 end
 
--- Ограничение на количество собираемых функций (чтобы не переполнить память)
-local MAX_FUNCTIONS = 2000
-local function checkLimit()
-    return #allFunctions < MAX_FUNCTIONS
+-- Обработка таблицы: собираем функции (только прямой уровень)
+local function collectFromTable(tbl, prefix, depth)
+    depth = depth or 0
+    if depth > 1 then return end -- только один уровень вложенности
+    if type(tbl) ~= "table" then return end
+    for k, v in pairs(tbl) do
+        if #allFunctions >= MAX then break end
+        if type(v) == "function" then
+            local key = tostring(k)
+            local fullName = prefix .. key
+            addFunc(fullName, v)
+        elseif type(v) == "table" and depth == 0 then
+            -- Рекурсивно на один уровень глубже
+            collectFromTable(v, prefix .. tostring(k) .. ".", depth + 1)
+        end
+    end
 end
 
--- 1. _G
+-- Этап 1: _G
 print("Сбор _G...")
-if _G then
-    for k, v in pairs(_G) do
-        if not checkLimit() then break end
-        if type(v) == "function" then
-            addFunction("_G." .. tostring(k), v)
-        end
-    end
-end
-wait(0.5)
+pcall(function()
+    collectFromTable(_G, "_G.")
+end)
+wait(0.3)
 
--- 2. shared
-print("Сбор shared...")
+-- Этап 2: shared
 if shared then
-    for k, v in pairs(shared) do
-        if not checkLimit() then break end
-        if type(v) == "function" then
-            addFunction("shared." .. tostring(k), v)
-        end
-    end
+    print("Сбор shared...")
+    pcall(function()
+        collectFromTable(shared, "shared.")
+    end)
 end
-wait(0.5)
+wait(0.3)
 
--- 3. getreg()
-print("Сбор getreg...")
+-- Этап 3: getreg()
 if getreg then
-    local reg = getreg()
-    if type(reg) == "table" then
-        for i, v in ipairs(reg) do
-            if not checkLimit() then break end
-            if type(v) == "function" then
-                addFunction("reg[" .. i .. "]", v)
+    print("Сбор getreg...")
+    pcall(function()
+        local reg = getreg()
+        if type(reg) == "table" then
+            for i, v in ipairs(reg) do
+                if #allFunctions >= MAX then break end
+                if type(v) == "function" then
+                    addFunc("reg[" .. i .. "]", v)
+                end
             end
         end
-    end
+    end)
 end
-wait(0.5)
+wait(0.3)
 
--- 4. getgc() – собираем только первые 500, с паузой внутри
-print("Сбор getgc (первые 500)...")
+-- Этап 4: getgc() – первые 500
 if getgc then
-    local gc = getgc()
-    local count = 0
-    for i, obj in ipairs(gc) do
-        if not checkLimit() then break end
-        if count > 500 then break end
-        if type(obj) == "function" then
-            addFunction("gc[" .. i .. "]", obj)
-            count = count + 1
-            if count % 50 == 0 then wait(0.1) end -- пауза каждые 50 функций
+    print("Сбор getgc (первые 500)...")
+    pcall(function()
+        local gc = getgc()
+        local count = 0
+        for i, obj in ipairs(gc) do
+            if #allFunctions >= MAX then break end
+            if count >= 500 then break end
+            if type(obj) == "function" then
+                addFunc("gc[" .. i .. "]", obj)
+                count = count + 1
+                if count % 50 == 0 then wait(0.1) end
+            end
         end
-    end
+    end)
 end
-wait(0.5)
+wait(0.3)
 
--- 5. getrenv()
-print("Сбор getrenv...")
+-- Этап 5: getrenv()
 if getrenv then
-    local renv = getrenv()
-    if type(renv) == "table" then
-        for k, v in pairs(renv) do
-            if not checkLimit() then break end
-            if type(v) == "function" then
-                addFunction("renv." .. tostring(k), v)
-            end
+    print("Сбор getrenv...")
+    pcall(function()
+        local renv = getrenv()
+        if type(renv) == "table" then
+            collectFromTable(renv, "renv.")
         end
-    end
+    end)
 end
-wait(0.5)
+wait(0.3)
 
--- 6. debug.getregistry()
-print("Сбор debug.getregistry...")
+-- Этап 6: debug.getregistry()
 if debug and debug.getregistry then
-    local reg = debug.getregistry()
-    if type(reg) == "table" then
-        for k, v in pairs(reg) do
-            if not checkLimit() then break end
-            if type(v) == "function" then
-                addFunction("debug_registry." .. tostring(k), v)
-            end
+    print("Сбор debug.getregistry...")
+    pcall(function()
+        local reg = debug.getregistry()
+        if type(reg) == "table" then
+            collectFromTable(reg, "debug_registry.")
         end
-    end
+    end)
 end
 
 print("Собрано функций: " .. #allFunctions)
 
 -- Формируем содержимое файла
-local fileContent = "===== ПОЛНЫЙ ДАМП ФУНКЦИЙ =====\n"
+local fileContent = "===== ДАМП ФУНКЦИЙ (безопасный) =====\n"
 fileContent = fileContent .. "Всего функций: " .. #allFunctions .. "\n\n"
 
 for i, item in ipairs(allFunctions) do
@@ -115,14 +122,21 @@ for i, item in ipairs(allFunctions) do
 end
 
 -- Сохраняем в файл
+local saved = false
 if writefile then
-    local fileName = "functions_full_dump.txt"
-    writefile(fileName, fileContent)
-    print("Файл сохранён: " .. fileName)
-    print("Путь: " .. (getcwd and getcwd() or "рабочая папка Delta"))
-else
-    print("writefile недоступен. Вывод в консоль (первые 100 записей):")
-    for i = 1, math.min(100, #allFunctions) do
+    local success, err = pcall(function()
+        writefile("functions_dump_safe.txt", fileContent)
+        saved = true
+        print("Файл 'functions_dump_safe.txt' сохранён.")
+    end)
+    if not success then
+        print("Ошибка записи файла: " .. tostring(err))
+    end
+end
+
+if not saved then
+    print("writefile недоступен или ошибка. Вывод первых 200 функций в консоль:")
+    for i = 1, math.min(200, #allFunctions) do
         print("[" .. i .. "] " .. allFunctions[i].name)
     end
 end
