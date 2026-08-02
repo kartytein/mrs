@@ -1,41 +1,121 @@
-local path = "CoreGui.5254c01c4691269e68d25763275f564b3f6d90d88346ad2f0bba357e7d8c00c1.redz-library-v5.Window.Components.Containers.Container.Option"
+-- =====================================================================
+--  РАСШИРЕННЫЙ ТРЕКЕР КЛИКОВ (по всем объектам)
+-- =====================================================================
 
-local function getObjectByPath(p)
-    local parts = {}
-    for part in string.gmatch(p, "[^%.]+") do table.insert(parts, part) end
-    local current = game:GetService(parts[1])
-    for i = 2, #parts do
-        current = current:FindFirstChild(parts[i])
-        if not current then return nil end
+print("=== ЗАПУСК ТРЕКЕРА КЛИКОВ (полный перехват) ===")
+
+-- Функция для вывода информации об объекте
+local function printObjectInfo(obj, label)
+    label = label or "Клик по объекту"
+    print("\n=== " .. label .. " ===")
+    print("Имя:", obj.Name)
+    print("Класс:", obj.ClassName)
+    print("Полный путь:", obj:GetFullName())
+    print("Visible:", obj.Visible)
+    print("Active:", obj.Active)
+    if obj:IsA("TextButton") then
+        print("Текст:", obj.Text)
+    elseif obj:IsA("ImageButton") then
+        print("Tooltip:", obj.Tooltip or "")
     end
-    return current
+    -- Выводим родителя
+    local parent = obj.Parent
+    if parent then
+        print("Родитель:", parent:GetFullName() .. " (класс: " .. parent.ClassName .. ")")
+    end
+    -- Выводим всех потомков, если есть
+    local children = obj:GetChildren()
+    if #children > 0 then
+        print("Дочерние элементы:")
+        for _, ch in ipairs(children) do
+            print("  -", ch.Name, "(", ch.ClassName, ")")
+        end
+    end
+    -- Проверяем наличие событий
+    local events = {"MouseButton1Click", "MouseButton1Down", "MouseButton1Up", "Activated"}
+    for _, evName in ipairs(events) do
+        local ev = obj:FindFirstChild(evName)
+        if ev and ev:IsA("RBXScriptSignal") then
+            print("Событие", evName, "присутствует.")
+            if getconnections then
+                local conns = getconnections(ev)
+                if #conns > 0 then
+                    print("  Количество привязок:", #conns)
+                    for i, c in ipairs(conns) do
+                        if c.Script then
+                            print("    Привязка", i, "скрипт:", c.Script:GetFullName())
+                        end
+                        if c.Function then
+                            print("    Функция:", tostring(c.Function))
+                        end
+                    end
+                end
+            end
+        end
+    end
+    print("===========================")
 end
 
-local frame = getObjectByPath(path)
-if not frame then
-    print("Frame не найден.")
-    return
+-- 1. Перехват кликов на всех объектах через DescendantAdded (для новых объектов)
+local function hookObject(obj)
+    if obj:IsA("TextButton") or obj:IsA("ImageButton") or obj:IsA("Frame") then
+        if obj:FindFirstChild("MouseButton1Click") then
+            local conn = obj.MouseButton1Click:Connect(function()
+                printObjectInfo(obj, "ПЕРЕХВАТЧИК НА ОБЪЕКТЕ")
+            end)
+            -- Сохраняем connection, чтобы не потерять
+            if not obj:GetAttribute("_hookActive") then
+                obj:SetAttribute("_hookActive", true)
+                obj:SetAttribute("_hookConn", conn)
+            end
+        end
+    end
 end
 
-if frame:FindFirstChild("MouseButton1Click") then
-    frame.MouseButton1Click:Connect(function()
-        print("\n=== КЛИК ПЕРЕХВАЧЕН ===")
-        print(debug.traceback())
-        print("=========================\n")
-    end)
-    print("Теперь кликните по кнопке (по тексту 'Option'). Стек появится в консоли.")
-else
-    print("У Frame нет события MouseButton1Click. Возможно, обработчик висит на родителе.")
-    -- Попробуем подключиться к родителю
-    local parent = frame.Parent
-    if parent and parent:FindFirstChild("MouseButton1Click") then
-        parent.MouseButton1Click:Connect(function()
-            print("\n=== КЛИК НА РОДИТЕЛЕ ПЕРЕХВАЧЕН ===")
-            print(debug.traceback())
-            print("=========================\n")
+-- Обработка существующих объектов
+local function scanAndHook(parent)
+    if not parent then return end
+    for _, child in ipairs(parent:GetChildren()) do
+        hookObject(child)
+        scanAndHook(child)
+    end
+end
+
+-- Запускаем для CoreGui и PlayerGui
+local sources = {
+    game:GetService("CoreGui"),
+    game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+}
+for _, src in ipairs(sources) do
+    if src then
+        scanAndHook(src)
+        src.DescendantAdded:Connect(hookObject)
+    end
+end
+
+-- 2. Дополнительный перехват через UserInputService (глобальный)
+local inputService = game:GetService("UserInputService")
+inputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        -- Получаем объект под курсором
+        local mouse = inputService:GetMouseLocation()
+        local target = nil
+        -- Используем GuiService для поиска объекта под курсором (если доступно)
+        pcall(function()
+            local guiService = game:GetService("GuiService")
+            target = guiService:GetGuiObjectsAtPosition(mouse.X, mouse.Y)
+            if target and #target > 0 then
+                target = target[1]
+            end
         end)
-        print("Подключились к родителю. Кликните по 'Option'.")
-    else
-        print("Не удалось найти событие MouseButton1Click ни на Frame, ни на родителе.")
+        if target then
+            printObjectInfo(target, "ПЕРЕХВАТЧИК UserInputService")
+        else
+            print("Клик по координатам, но объект не определён.")
+        end
     end
-end
+end)
+
+print("Трекер запущен. Теперь кликните по кнопке, которая активирует FlyBoat.")
+print("Информация о кликнутом объекте появится в консоли.")
