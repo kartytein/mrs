@@ -4,7 +4,7 @@
 --  Запустите после ручного переключения в нужную вкладку.
 -- ============================================================
 
-local TAB_INDEX = 1
+local TAB_INDEX = 5
 local OPTION_INDEX = 6
 
 local coreGui = game:GetService("CoreGui")
