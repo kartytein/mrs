@@ -7,7 +7,7 @@
 --  Параметры TAB_INDEX, OPTION_INDEX и TOGGLE
 -- ============================================================
 
-local TAB_INDEX = 1        -- номер вкладки
+local TAB_INDEX = 5        -- номер вкладки
 local OPTION_INDEX = 6     -- номер видимой Option
 local TOGGLE = false       -- true = переключить, false = только узнать состояние
 
