@@ -1,88 +1,105 @@
 -- ============================================================================
---  ПРЯМОЙ ВЫЗОВ ОБРАБОТЧИКОВ КЛИКА ЧЕРЕЗ getconnections
---  Этот скрипт находит указанную кнопку, считывает все подключённые функции
---  к событиям Activated и MouseButton1Click, выводит их и вызывает первую
---  активную. Эмулирует нажатие без необходимости firesignal.
---  Вставьте в консоль Delta.
+--  РАСШИРЕННЫЙ ТРЕКЕР КЛИКОВ С ТАЙМАУТОМ 10 СЕКУНД (для Delta)
+--  После запуска жмите на кнопки – будет показана максимальная информация.
+--  Через 10 секунд вывод прекратится.
+--  (Код написан без использования сложных таблиц – только примитивы и строки)
 -- ============================================================================
 
--- Путь к кнопке (скопируйте из вывода предыдущей диагностики)
-local buttonPath = "CoreGui.5254c01c4691269e68d25763275f564b3f6d90d88346ad2f0bba357e7d8c00c1.redz-library-v5.Window.Components.Containers.Container.Option"
+-- Флаг активности трекера
+local enabled = true
 
-local button = nil
-pcall(function()
-    button = game:GetObjects(buttonPath)[1]
+-- Запускаем таймер на 10 секунд в отдельном потоке
+spawn(function()
+    wait(10)
+    enabled = false
+    print("[Трекер] 10 секунд истекли, отслеживание остановлено.")
 end)
-if not button then
-    -- Прямой путь (на случай, если GetObjects не подходит)
-    local parts = {}
-    for part in buttonPath:gmatch("[^%.]+") do
-        table.insert(parts, part)
+
+-- Функция логирования подробной информации о кнопке
+local function logButton(btn)
+    if not enabled then return end
+
+    -- Собираем всю информацию в одну строку (чтобы избежать таблиц)
+    local info = "=== КНОПКА НАЖАТА ===\n"
+    info = info .. "Имя: " .. btn.Name .. "\n"
+    info = info .. "Класс: " .. btn.ClassName .. "\n"
+
+    -- Свойства, зависящие от типа кнопки
+    if btn:IsA("TextButton") then
+        info = info .. "Текст: " .. (btn.Text or "") .. "\n"
+        info = info .. "TextColor3: " .. tostring(btn.TextColor3) .. "\n"
+        info = info .. "Font: " .. tostring(btn.Font) .. "\n"
+        info = info .. "TextSize: " .. btn.TextSize .. "\n"
+        info = info .. "TextTransparency: " .. btn.TextTransparency .. "\n"
+        info = info .. "TextStrokeColor3: " .. tostring(btn.TextStrokeColor3) .. "\n"
+        info = info .. "TextStrokeTransparency: " .. btn.TextStrokeTransparency .. "\n"
+    elseif btn:IsA("ImageButton") then
+        info = info .. "Image: " .. (btn.Image or "") .. "\n"
+        info = info .. "ImageColor3: " .. tostring(btn.ImageColor3) .. "\n"
+        info = info .. "ImageTransparency: " .. btn.ImageTransparency .. "\n"
     end
-    local obj = game
-    for _, name in ipairs(parts) do
-        obj = obj:FindFirstChild(name)
-        if not obj then break end
-    end
-    button = obj
+
+    -- Универсальные свойства
+    info = info .. "Путь (FullName): " .. btn:GetFullName() .. "\n"
+    info = info .. "Родитель: " .. (btn.Parent and btn.Parent:GetFullName() or "nil") .. "\n"
+    info = info .. "AbsolutePosition: " .. tostring(btn.AbsolutePosition) .. "\n"
+    info = info .. "AbsoluteSize: " .. tostring(btn.AbsoluteSize) .. "\n"
+    info = info .. "Visible: " .. tostring(btn.Visible) .. "\n"
+    info = info .. "Active: " .. tostring(btn.Active) .. "\n"
+    info = info .. "ZIndex: " .. btn.ZIndex .. "\n"
+    info = info .. "BackgroundColor3: " .. tostring(btn.BackgroundColor3) .. "\n"
+    info = info .. "BackgroundTransparency: " .. btn.BackgroundTransparency .. "\n"
+    info = info .. "BorderSizePixel: " .. btn.BorderSizePixel .. "\n"
+    info = info .. "AutoButtonColor: " .. tostring(btn.AutoButtonColor) .. "\n"
+    info = info .. "Modal: " .. tostring(btn.Modal) .. "\n"
+    info = info .. "======================="
+
+    print(info)
 end
 
-if not button or not button:IsA("GuiButton") then
-    print("Кнопка не найдена. Проверьте путь.")
-    return
-end
+-- Навешивает обработчик клика на кнопку, если ещё не навешен
+local function hookButton(btn)
+    if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return end
+    -- Проверяем атрибут, чтобы не навесить повторно
+    if btn:GetAttribute("_hooked") then return end
+    btn:SetAttribute("_hooked", true)
 
-print("Кнопка найдена: " .. button:GetFullName())
-
--- Функция для работы с getconnections (если доступна)
-local function tryFireConnections(signal)
-    local conns
-    local success, err = pcall(function()
-        conns = getconnections(signal)
+    btn.MouseButton1Click:Connect(function()
+        logButton(btn)
     end)
-    if not success then
-        print("getconnections недоступен для " .. tostring(signal) .. ": " .. tostring(err))
-        return false
+end
+
+-- Рекурсивный обход всех потомков (без ipairs/таблиц, через числовой индекс)
+local function scan(parent)
+    if not parent then return end
+    local children = parent:GetChildren()
+    for i = 1, #children do
+        local child = children[i]
+        hookButton(child)
+        scan(child)  -- заходим глубже
     end
-    print("Найдено " .. #conns .. " подключений к " .. tostring(signal))
-    for i, conn in ipairs(conns) do
-        local status = conn.Enabled and "АКТИВНО" or "ОТКЛЮЧЕНО"
-        local fn = conn.Function
-        local info = "неизвестно"
-        pcall(function()
-            local di = debug.getinfo(fn, "Sl")
-            if di then
-                info = (di.name or "<anonymous>") .. " в " .. (di.short_src or "?") .. ":" .. (di.linedefined or "?")
-            end
-        end)
-        print("  [" .. i .. "] " .. status .. " | Функция: " .. info)
-        
-        if conn.Enabled and fn then
-            print("  -> Вызываю эту функцию...")
-            local callSuccess, callErr = pcall(fn)
-            if callSuccess then
-                print("  -> Функция выполнена успешно.")
-            else
-                print("  -> Ошибка при вызове: " .. tostring(callErr))
-            end
-            return true -- достаточно одного вызова
-        end
-    end
-    return false
 end
 
--- Пробуем Activated
-print("\n--- Проверка Activated ---")
-local fired = tryFireConnections(button.Activated)
-
--- Пробуем MouseButton1Click, если Activated не дал результата
-if not fired then
-    print("\n--- Проверка MouseButton1Click ---")
-    fired = tryFireConnections(button.MouseButton1Click)
+-- Отслеживание динамически добавляемых кнопок
+local function setupTracking(parent)
+    parent.DescendantAdded:Connect(function(desc)
+        hookButton(desc)
+    end)
 end
 
-if not fired then
-    print("\nНе удалось найти активные функции для вызова.")
-    print("Возможно, обработчик находится внутри другого скрипта (LocalScript),")
-    print("который подключается иначе. Попробуйте найти его вручную в CoreGui.")
+-- ========== ТОЧКА ВХОДА ==========
+print("[Трекер] Запуск расширенного перехватчика на 10 секунд...")
+
+-- CoreGui
+local coreGui = game:GetService("CoreGui")
+scan(coreGui)
+setupTracking(coreGui)
+
+-- PlayerGui
+local playerGui = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+if playerGui then
+    scan(playerGui)
+    setupTracking(playerGui)
 end
+
+print("[Трекер] Готов к работе. Кликайте по кнопкам – информация будет в консоли.")
