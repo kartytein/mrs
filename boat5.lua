@@ -1,14 +1,12 @@
 -- ============================================================
---  ДИАГНОСТИКА СОСТОЯНИЯ КНОПКИ (ВКЛ/ВЫКЛ)
---  После ручного переключения вкладки и нажатия на Option
---  выполните этот скрипт. Он покажет все визуальные свойства,
---  которые могут меняться при включении/выключении.
---  Сравните вывод для включённой и выключенной кнопки.
+--  УГЛУБЛЁННАЯ ДИАГНОСТИКА: ИЩЕМ ИНДИКАТОР СОСТОЯНИЯ (ВКЛ/ВЫКЛ)
+--  Сравнивает все свойства Holder и дочерних элементов.
+--  Также проверяет атрибуты и скрытые различия.
+--  Запустите для включённого и выключенного состояния, сравните вывод.
 -- ============================================================
 
--- Задайте номер вкладки и кнопки (как в активаторе)
-local TAB_INDEX = 5
-local OPTION_INDEX = 6
+local TAB_INDEX = 1      -- Номер вкладки
+local OPTION_INDEX = 6   -- Номер Option
 
 local coreGui = game:GetService("CoreGui")
 
@@ -18,17 +16,16 @@ for _, child in ipairs(coreGui:GetChildren()) do
     root = child:FindFirstChild("redz-library-v5")
     if root then break end
 end
-if not root then print("Не найден redz-library-v5") return end
+if not root then print("[Ошибка] redz-library-v5 не найден") return end
 
--- Получаем контейнер (сначала переключаем вкладку через активатор или руками)
--- Предполагаем, что вкладка уже активна. Если нет – запустите активатор без Option.
+-- Получаем контейнер
 local container = root:FindFirstChild("Window")
 container = container and container:FindFirstChild("Components")
 container = container and container:FindFirstChild("Containers")
 container = container and container:FindFirstChild("Container")
-if not container then print("Контейнер не найден") return end
+if not container then print("[Ошибка] Container не найден") return end
 
--- Ищем видимую Option по индексу
+-- Ищем нужную Option (только видимые)
 local optionBtn
 local idx = 0
 for _, child in ipairs(container:GetChildren()) do
@@ -41,41 +38,67 @@ for _, child in ipairs(container:GetChildren()) do
     end
 end
 
-if not optionBtn then print("Option #" .. OPTION_INDEX .. " не найдена") return end
+if not optionBtn then print("[Ошибка] Option #" .. OPTION_INDEX .. " не найдена") return end
 
-print("=== СВОЙСТВА КНОПКИ (состояние) ===")
+print("=== ГЛУБОКАЯ ДИАГНОСТИКА КНОПКИ ===")
 print("Путь: " .. optionBtn:GetFullName())
-if optionBtn:IsA("TextButton") then
-    print("Текст: '" .. optionBtn.Text .. "'")
-    print("Цвет текста: " .. tostring(optionBtn.TextColor3))
-    print("Прозрачность текста: " .. optionBtn.TextTransparency)
-end
-if optionBtn:IsA("ImageButton") then
-    print("Изображение: " .. optionBtn.Image)
-    print("Цвет изображения: " .. tostring(optionBtn.ImageColor3))
-    print("Прозрачность изобр.: " .. optionBtn.ImageTransparency)
-end
-print("Цвет фона: " .. tostring(optionBtn.BackgroundColor3))
-print("Прозрачность фона: " .. optionBtn.BackgroundTransparency)
-print("Цвет рамки: " .. tostring(optionBtn.BorderColor3))
-print("Размер рамки: " .. optionBtn.BorderSizePixel)
-print("Активна (Active): " .. tostring(optionBtn.Active))
-print("Автоцвет (AutoButtonColor): " .. tostring(optionBtn.AutoButtonColor))
 
--- Проверяем наличие дополнительных индикаторов в дочерних элементах
-print("Дочерние элементы:")
-for _, child in ipairs(optionBtn:GetChildren()) do
-    local desc = "  " .. child.Name .. " (" .. child.ClassName .. ")"
-    if child:IsA("Frame") then
-        desc = desc .. " BG: " .. tostring(child.BackgroundColor3) .. " Visible: " .. tostring(child.Visible)
-    elseif child:IsA("TextLabel") then
-        desc = desc .. " Text: '" .. child.Text .. "'"
-    elseif child:IsA("ImageLabel") then
-        desc = desc .. " Image: " .. child.Image
+-- 1. Основные свойства кнопки
+print("--- Основные свойства ---")
+print("Text: '" .. (optionBtn:IsA("TextButton") and optionBtn.Text or "") .. "'")
+print("TextColor3: " .. tostring(optionBtn.TextColor3))
+print("TextTransparency: " .. optionBtn.TextTransparency)
+print("BackgroundColor3: " .. tostring(optionBtn.BackgroundColor3))
+print("BackgroundTransparency: " .. optionBtn.BackgroundTransparency)
+print("BorderColor3: " .. tostring(optionBtn.BorderColor3))
+print("BorderSizePixel: " .. optionBtn.BorderSizePixel)
+print("Active: " .. tostring(optionBtn.Active))
+print("AutoButtonColor: " .. tostring(optionBtn.AutoButtonColor))
+
+-- 2. Атрибуты
+print("--- Атрибуты ---")
+local attrs = optionBtn:GetAttributes()
+if attrs then
+    for k, v in pairs(attrs) do
+        print("  " .. tostring(k) .. " = " .. tostring(v))
     end
-    print(desc)
+else
+    print("  нет")
 end
 
-print("====================================")
-print("Включите/выключите функцию вручную и запустите снова. Сравните различия.")
-print("Обычно индикатором служат: цвет фона, текст, наличие дочернего Frame и т.п.")
+-- 3. Глубокая проверка всех дочерних элементов (включая Holder)
+print("--- Дочерние элементы ---")
+local function printDeep(parent, indent)
+    local children = parent:GetChildren()
+    for i = 1, #children do
+        local child = children[i]
+        local prefix = string.rep("  ", indent) .. "- " .. child.Name .. " (" .. child.ClassName .. ")"
+        local extra = ""
+        if child:IsA("Frame") or child:IsA("ScrollingFrame") then
+            extra = " BG: " .. tostring(child.BackgroundColor3)
+                .. " BGTrans: " .. child.BackgroundTransparency
+                .. " Visible: " .. tostring(child.Visible)
+        elseif child:IsA("TextLabel") then
+            extra = " Text: '" .. child.Text .. "'"
+                .. " TextColor3: " .. tostring(child.TextColor3)
+                .. " Visible: " .. tostring(child.Visible)
+        elseif child:IsA("ImageLabel") then
+            extra = " Image: " .. child.Image
+                .. " ImageTrans: " .. child.ImageTransparency
+                .. " Visible: " .. tostring(child.Visible)
+        elseif child:IsA("UIAnchor") then
+            extra = " (якорь)"
+        elseif child:IsA("UIInner") then  -- возможно кастомный класс
+            extra = " (UIInner)"
+        else
+            extra = " Visible: " .. tostring(child.Visible)
+        end
+        print(prefix .. extra)
+        -- Рекурсия вглубь
+        printDeep(child, indent + 1)
+    end
+end
+printDeep(optionBtn, 0)
+
+print("======================================")
+print("Сравните вывод для вкл и выкл состояния (особенно Holder и его потомков).")
