@@ -1,7 +1,8 @@
 -- ============================================================
---  ПОЛУЧЕНИЕ И ВЫЗОВ ПРИВЯЗАННОЙ ФУНКЦИИ ЧЕРЕЗ getconnections
---  Работает, если Delta поддерживает getconnections (проверьте).
---  Если нет – выведет доступные методы для отладки.
+--  ПОЛНАЯ ЭМУЛЯЦИЯ ПОСЛЕДОВАТЕЛЬНОСТИ СОБЫТИЙ КЛИКА
+--  Вызывает функции из всех сигналов в том же порядке,
+--  что и при ручном нажатии.
+--  Использует getconnections (доступен в Delta).
 -- ============================================================
 
 local coreGui = game:GetService("CoreGui")
@@ -26,74 +27,45 @@ if not container then
     return
 end
 
--- Находим нужную кнопку по позиции
-local targetBtn = nil
+-- Ищем нужную Option (по позиции)
+local btn = nil
 for _, child in ipairs(container:GetChildren()) do
     if child.Name == "Option" and child:IsA("TextButton") then
         local pos = child.AbsolutePosition
         if math.abs(pos.X - 355.2) < 0.01 and math.abs(pos.Y - 269.6) < 0.01 then
-            targetBtn = child
+            btn = child
             break
         end
     end
 end
 
-if not targetBtn then
+if not btn then
     print("[Ошибка] Кнопка не найдена.")
     return
 end
 
-print("Кнопка: " .. targetBtn:GetFullName())
+print("Кнопка: " .. btn:GetFullName())
 
--- Попробуем через getconnections (если доступен в Delta)
-local function tryFireConnections(signal)
-    local success, connections = pcall(function() return getconnections(signal) end)
-    if success and connections then
+-- Вспомогательная функция вызова всех обработчиков для заданного сигнала
+local function fireSignal(signal)
+    local ok, connections = pcall(function() return getconnections(signal) end)
+    if ok and connections then
         for i = 1, #connections do
             local conn = connections[i]
-            -- Проверяем, что соединение активно и имеет функцию
             if conn and conn.Enabled and type(conn.Function) == "function" then
-                print("[getconnections] Вызываем функцию из " .. tostring(signal))
                 conn.Function()
-                return true
             end
         end
-    else
-        print("[getconnections] Не удалось для " .. tostring(signal) .. ": " .. tostring(connections))
-    end
-    return false
-end
-
-local fired = false
-
--- Пробуем MouseButton1Click
-if not fired then fired = tryFireConnections(targetBtn.MouseButton1Click) end
--- Пробуем Activated
-if not fired then fired = tryFireConnections(targetBtn.Activated) end
--- Пробуем MouseButton1Down
-if not fired then fired = tryFireConnections(targetBtn.MouseButton1Down) end
--- Пробуем MouseButton1Up
-if not fired then fired = tryFireConnections(targetBtn.MouseButton1Up) end
-
-if fired then
-    print("[Готово] Функция хаба успешно вызвана.")
-else
-    print("Не удалось вызвать функцию через getconnections.")
-    print("Проверяем атрибуты и дочерние скрипты кнопки:")
-    -- Показываем все атрибуты
-    local attrs = targetBtn:GetAttributes()
-    if attrs then
-        print("Атрибуты:")
-        -- Перебор пар ключ-значение (упрощённо, если attrs как таблица)
-        for k, v in pairs(attrs) do
-            print("  " .. tostring(k) .. " = " .. tostring(v))
-        end
-    else
-        print("  Атрибутов нет.")
-    end
-    -- Показываем дочерние объекты (может быть BindableEvent или скрипт)
-    print("Дети кнопки:")
-    for _, child in ipairs(targetBtn:GetChildren()) do
-        print("  " .. child.Name .. " (" .. child.ClassName .. ")")
     end
 end
+
+-- Последовательность, идентичная ручному клику
+print("Эмуляция последовательности...")
+fireSignal(btn.MouseEnter)             -- >>> MouseEnter
+fireSignal(btn.MouseButton1Down)       -- >>> MouseButton1Down
+fireSignal(btn.MouseButton1Click)      -- >>> MouseButton1Click
+fireSignal(btn.MouseButton1Up)         -- >>> MouseButton1Up
+fireSignal(btn.Activated)              -- >>> Activated
+fireSignal(btn.MouseLeave)             -- >>> MouseLeave
+
+print("[Готово] Полная последовательность выполнена.")
