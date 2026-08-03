@@ -7,7 +7,7 @@
 --  Установите TOGGLE = true, чтобы переключить состояние.
 -- ============================================================
 
-local TAB_INDEX = 1        -- Номер вкладки в TabsScroll
+local TAB_INDEX = 5        -- Номер вкладки в TabsScroll
 local OPTION_INDEX = 6     -- Номер видимой Option
 local TOGGLE = false       -- true: переключить (кликнуть), false: только проверить
 
