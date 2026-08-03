@@ -1,76 +1,89 @@
--- ============================================================================
---  СКРИПТ-ПЕРЕХВАТЧИК КЛИКОВ ПО КНОПКАМ
---  Вставьте в консоль Delta после загрузки HUB.
---  При каждом клике на любую кнопку (TextButton/ImageButton) будет выводиться
---  её информация в консоль. Помогает идентифицировать нужные кнопки.
--- ============================================================================
+-- ============================================================
+--  ДИАГНОСТИКА СОБЫТИЙ КНОПКИ (по позиции 355.199951, 269.599976)
+--  Подключается к ВСЕМ возможным событиям кнопки.
+--  Кликните вручную по нужной Option – в консоли появится
+--  название сработавшего события.
+--  После этого можно будет эмулировать именно это событие.
+-- ============================================================
 
--- Функция вывода информации о кнопке
-local function logButton(btn)
-    local info = {
-        Name = btn.Name,
-        Class = btn.ClassName,
-        Text = btn:IsA("TextButton") and btn.Text or "—",
-        Path = btn:GetFullName(),
-        Visible = btn.Visible,
-        Position = tostring(btn.AbsolutePosition),
-        Size = tostring(btn.AbsoluteSize)
-    }
-    print("=== КНОПКА НАЖАТА ===")
-    print("Имя: " .. info.Name)
-    print("Класс: " .. info.Class)
-    print("Текст: " .. info.Text)
-    print("Путь: " .. info.Path)
-    print("Видимость: " .. tostring(info.Visible))
-    print("Позиция: " .. info.Position)
-    print("Размер: " .. info.Size)
-    print("=======================")
+local coreGui = game:GetService("CoreGui")
+
+-- Поиск контейнера (динамический UID)
+local container = nil
+for _, firstChild in ipairs(coreGui:GetChildren()) do
+    local obj = firstChild
+    obj = obj:FindFirstChild("redz-library-v5")
+    if obj then obj = obj:FindFirstChild("Window") end
+    if obj then obj = obj:FindFirstChild("Components") end
+    if obj then obj = obj:FindFirstChild("Containers") end
+    if obj then obj = obj:FindFirstChild("Container") end
+    if obj then
+        container = obj
+        break
+    end
 end
 
--- Функция добавления обработчика на кнопку
-local function hookButton(btn)
-    if btn:IsA("TextButton") or btn:IsA("ImageButton") then
-        -- Убедимся, что обработчик не добавлен дважды (используем атрибут)
-        if not btn:GetAttribute("_hooked") then
-            btn:SetAttribute("_hooked", true)
-            btn.MouseButton1Click:Connect(function()
-                logButton(btn)
-            end)
+if not container then
+    print("[Ошибка] Контейнер не найден.")
+    return
+end
+
+-- Ищем Option с позицией 355.199951, 269.599976
+local targetOption = nil
+for _, child in ipairs(container:GetChildren()) do
+    if child.Name == "Option" and (child:IsA("TextButton") or child:IsA("ImageButton")) then
+        local pos = child.AbsolutePosition
+        -- Сравниваем с погрешностью 0.01
+        if math.abs(pos.X - 355.2) < 0.01 and math.abs(pos.Y - 269.6) < 0.01 then
+            targetOption = child
+            break
         end
     end
 end
 
--- Обработка всех существующих объектов
-local function scanAndHook(parent)
-    if not parent then return end
-    for _, child in ipairs(parent:GetChildren()) do
-        hookButton(child)
-        scanAndHook(child)  -- рекурсивно обрабатываем вложенные
-    end
+if not targetOption then
+    print("[Ошибка] Кнопка Option с позицией 355.2, 269.6 не найдена.")
+    return
 end
 
--- Отслеживание новых объектов (для динамически создаваемых кнопок)
-local function setupDescendantTracking(parent)
-    parent.DescendantAdded:Connect(function(desc)
-        hookButton(desc)
+print("Диагностическая кнопка: " .. targetOption:GetFullName())
+
+-- Подключаемся к стандартным событиям (без таблиц)
+targetOption.MouseButton1Click:Connect(function()
+    print(">>> Сработало событие: MouseButton1Click")
+end)
+targetOption.MouseButton1Down:Connect(function()
+    print(">>> Сработало событие: MouseButton1Down")
+end)
+targetOption.MouseButton1Up:Connect(function()
+    print(">>> Сработало событие: MouseButton1Up")
+end)
+targetOption.MouseButton2Click:Connect(function()
+    print(">>> Сработало событие: MouseButton2Click")
+end)
+targetOption.MouseButton2Down:Connect(function()
+    print(">>> Сработало событие: MouseButton2Down")
+end)
+targetOption.MouseButton2Up:Connect(function()
+    print(">>> Сработало событие: MouseButton2Up")
+end)
+targetOption.Activated:Connect(function()
+    print(">>> Сработало событие: Activated")
+end)
+targetOption.MouseEnter:Connect(function()
+    print(">>> Сработало событие: MouseEnter")
+end)
+targetOption.MouseLeave:Connect(function()
+    print(">>> Сработало событие: MouseLeave")
+end)
+-- Если есть Touch-события (для мобильных)
+if targetOption:IsA("GuiButton") then -- TextButton и ImageButton наследуют GuiButton
+    pcall(function() -- на случай отсутствия события
+        targetOption.TouchTap:Connect(function()
+            print(">>> Сработало событие: TouchTap")
+        end)
     end)
 end
 
--- Основная функция запуска
-local function startListener()
-    print("Запуск перехватчика кликов...")
-    local sources = {
-        game:GetService("CoreGui"),
-        game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
-    }
-    for _, src in ipairs(sources) do
-        if src then
-            scanAndHook(src)
-            setupDescendantTracking(src)
-        end
-    end
-    print("Перехватчик активен. Кликайте по кнопкам – информация появится в консоли.")
-end
-
--- Запускаем
-startListener()
+print("Диагностика готова. Нажмите ВРУЧНУЮ на кнопку в игре и посмотрите, что выведется.")
+print("============================================")
