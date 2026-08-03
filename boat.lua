@@ -1,225 +1,212 @@
 -- ============================================================================
---  ДИАГНОСТИКА КНОПКИ: ПОИСК УДАЛЁННЫХ ВЫЗОВОВ
---  При клике на кнопку перехватывает следующие за этим вызовы RemoteEvent,
---  RemoteFunction, BindableEvent, BindableFunction и выводит их параметры.
---  Также выводит детальную информацию о самой кнопке.
---  Вставлять в консоль Delta. Работает только со строками.
+--  РАСШИРЕННАЯ ДИАГНОСТИКА КЛИКА (ЛОВИМ ВСЁ)
+--  Перехватывает InputBegan, все события кнопки, изменения свойств, 
+--  удалённые вызовы в течение 2 секунд после клика.
+--  Работает в Delta, только строки.
 -- ============================================================================
 
-local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 local playerGui = player and player:FindFirstChild("PlayerGui")
+local RunService = game:GetService("RunService")
 
--- Хранилище для корреляции клика и вызовов
-local clickFlag = false
+-- Флаг клика и время
+local clickActive = false
 local lastClickTime = 0
-local CLICK_TIMEOUT = 0.5 -- секунды
+local CLICK_WINDOW = 2.0 -- расширенное окно
 
--- ===== ПЕРЕХВАТ УДАЛЁННЫХ ВЫЗОВОВ =====
-local oldFireServer = hookfunction(Instance.new("RemoteEvent").FireServer, function(self, ...)
+-- Последняя нажатая кнопка (для связи событий с ней)
+local lastClickedButton = nil
+
+-- ===== УНИВЕРСАЛЬНЫЙ ПЕРЕХВАТ УДАЛЁННЫХ ВЫЗОВОВ =====
+local function formatArgs(...)
     local args = {...}
-    local now = tick()
-    local triggeredByClick = clickFlag and (now - lastClickTime) < CLICK_TIMEOUT
-    if triggeredByClick then
-        clickFlag = false -- сброс, чтобы не ловить другие вызовы
-    end
-
-    -- Формируем строку с аргументами (только примитивы, таблицы заменяем "table")
-    local argsStr = ""
+    local parts = {}
     for i, v in ipairs(args) do
-        if i > 1 then argsStr = argsStr .. ", " end
-        if type(v) == "table" then
-            argsStr = argsStr .. "{...}"
-        elseif type(v) == "string" then
-            argsStr = argsStr .. '"' .. v .. '"'
+        if type(v) == "string" then
+            table.insert(parts, '"' .. v .. '"')
+        elseif type(v) == "table" then
+            table.insert(parts, "{...}")
         else
-            argsStr = argsStr .. tostring(v)
+            table.insert(parts, tostring(v))
         end
     end
+    return table.concat(parts, ", ")
+end
 
-    if triggeredByClick then
-        print(">>> ОБНАРУЖЕН ВЫЗОВ RemoteEvent:FireServer (СВЯЗАН С КЛИКОМ)")
-    else
-        print("RemoteEvent:FireServer")
+-- Перехват FireServer
+local oldFireServer
+oldFireServer = hookfunction(Instance.new("RemoteEvent").FireServer, function(self, ...)
+    local args = {...}
+    local now = tick()
+    if clickActive and (now - lastClickTime) < CLICK_WINDOW then
+        print(">>> [СВЯЗАНО С КЛИКОМ] RemoteEvent:FireServer")
+        print("    Объект: " .. self:GetFullName())
+        print("    Аргументы: " .. formatArgs(...))
+        print("    Команда эмуляции: fireserver(" .. self:GetFullName() .. ", " .. formatArgs(...) .. ")")
     end
-    print("   Объект: " .. self:GetFullName())
-    print("   Аргументы: " .. argsStr)
-    print("   Команда эмуляции: fireserver(" .. self:GetFullName() .. ", " .. argsStr .. ")")
-    print("   (Замените таблицы {..} вручную, если они есть)")
-
     return oldFireServer(self, ...)
 end)
 
-local oldInvokeServer = nil
+-- Перехват InvokeServer
+local oldInvokeServer
 pcall(function()
     oldInvokeServer = hookfunction(Instance.new("RemoteFunction").InvokeServer, function(self, ...)
-        local args = {...}
         local now = tick()
-        local triggeredByClick = clickFlag and (now - lastClickTime) < CLICK_TIMEOUT
-        if triggeredByClick then clickFlag = false end
-
-        local argsStr = ""
-        for i, v in ipairs(args) do
-            if i > 1 then argsStr = argsStr .. ", " end
-            if type(v) == "table" then argsStr = argsStr .. "{...}"
-            elseif type(v) == "string" then argsStr = argsStr .. '"' .. v .. '"'
-            else argsStr = argsStr .. tostring(v) end
+        if clickActive and (now - lastClickTime) < CLICK_WINDOW then
+            print(">>> [СВЯЗАНО С КЛИКОМ] RemoteFunction:InvokeServer")
+            print("    Объект: " .. self:GetFullName())
+            print("    Аргументы: " .. formatArgs(...))
+            print("    Команда эмуляции: invokeserver(" .. self:GetFullName() .. ", " .. formatArgs(...) .. ")")
         end
-
-        if triggeredByClick then
-            print(">>> ОБНАРУЖЕН ВЫЗОВ RemoteFunction:InvokeServer (СВЯЗАН С КЛИКОМ)")
-        else
-            print("RemoteFunction:InvokeServer")
-        end
-        print("   Объект: " .. self:GetFullName())
-        print("   Аргументы: " .. argsStr)
-        print("   Команда эмуляции: invokeserver(" .. self:GetFullName() .. ", " .. argsStr .. ")")
         return oldInvokeServer(self, ...)
     end)
 end)
 
-local oldFireBindable = hookfunction(Instance.new("BindableEvent").Fire, function(self, ...)
-    local args = {...}
+-- Перехват BindableEvent:Fire
+local oldFire
+oldFire = hookfunction(Instance.new("BindableEvent").Fire, function(self, ...)
     local now = tick()
-    local triggeredByClick = clickFlag and (now - lastClickTime) < CLICK_TIMEOUT
-    if triggeredByClick then clickFlag = false end
-
-    local argsStr = ""
-    for i, v in ipairs(args) do
-        if i > 1 then argsStr = argsStr .. ", " end
-        if type(v) == "table" then argsStr = argsStr .. "{...}"
-        elseif type(v) == "string" then argsStr = argsStr .. '"' .. v .. '"'
-        else argsStr = argsStr .. tostring(v) end
+    if clickActive and (now - lastClickTime) < CLICK_WINDOW then
+        print(">>> [СВЯЗАНО С КЛИКОМ] BindableEvent:Fire")
+        print("    Объект: " .. self:GetFullName())
+        print("    Аргументы: " .. formatArgs(...))
+        -- команда: firesignal(путь.Event, аргументы)
+        print("    Команда эмуляции: firesignal(" .. self:GetFullName() .. ".Event, " .. formatArgs(...) .. ")")
     end
-
-    if triggeredByClick then
-        print(">>> ОБНАРУЖЕН ВЫЗОВ BindableEvent:Fire (СВЯЗАН С КЛИКОМ)")
-    else
-        print("BindableEvent:Fire")
-    end
-    print("   Объект: " .. self:GetFullName())
-    print("   Аргументы: " .. argsStr)
-    print("   Команда эмуляции: firesignal(" .. self:GetFullName() .. ".Event, " .. argsStr .. ") -- осторожно, может не сработать")
-    return oldFireBindable(self, ...)
+    return oldFire(self, ...)
 end)
 
-local oldInvokeBindable = nil
+-- Перехват BindableFunction:Invoke
+local oldInvoke
 pcall(function()
-    oldInvokeBindable = hookfunction(Instance.new("BindableFunction").Invoke, function(self, ...)
-        local args = {...}
+    oldInvoke = hookfunction(Instance.new("BindableFunction").Invoke, function(self, ...)
         local now = tick()
-        local triggeredByClick = clickFlag and (now - lastClickTime) < CLICK_TIMEOUT
-        if triggeredByClick then clickFlag = false end
-
-        local argsStr = ""
-        for i, v in ipairs(args) do
-            if i > 1 then argsStr = argsStr .. ", " end
-            if type(v) == "table" then argsStr = argsStr .. "{...}"
-            elseif type(v) == "string" then argsStr = argsStr .. '"' .. v .. '"'
-            else argsStr = argsStr .. tostring(v) end
+        if clickActive and (now - lastClickTime) < CLICK_WINDOW then
+            print(">>> [СВЯЗАНО С КЛИКОМ] BindableFunction:Invoke")
+            print("    Объект: " .. self:GetFullName())
+            print("    Аргументы: " .. formatArgs(...))
         end
-
-        if triggeredByClick then
-            print(">>> ОБНАРУЖЕН ВЫЗОВ BindableFunction:Invoke (СВЯЗАН С КЛИКОМ)")
-        else
-            print("BindableFunction:Invoke")
-        end
-        print("   Объект: " .. self:GetFullName())
-        print("   Аргументы: " .. argsStr)
-        return oldInvokeBindable(self, ...)
+        return oldInvoke(self, ...)
     end)
 end)
 
-print("Перехват удалённых вызовов активирован.")
-
--- ===== ДЕТЕКТОР КЛИКА И ВЫВОД ИНФОРМАЦИИ =====
-local function logButtonDeep(btn)
-    print("=== КНОПКА НАЖАТА ===")
-    local info = {
-        Name = btn.Name,
-        Class = btn.ClassName,
-        Path = btn:GetFullName(),
-        Visible = btn.Visible,
-        AbsPos = btn.AbsolutePosition,
-        AbsSize = btn.AbsoluteSize,
-        Text = (btn:IsA("TextButton") and btn.Text) or "—",
-        Attributes = ""
-    }
-    -- Считываем атрибуты в строку
-    local attrList = btn:GetAttributes()
-    for k, v in pairs(attrList) do
-        info.Attributes = info.Attributes .. k .. "=" .. tostring(v) .. "; "
-    end
-
-    print("Имя: " .. info.Name)
-    print("Класс: " .. info.Class)
-    print("Текст: " .. info.Text)
-    print("Путь: " .. info.Path)
-    print("Видимость: " .. tostring(info.Visible))
-    print("Позиция: " .. tostring(info.AbsPos))
-    print("Размер: " .. tostring(info.AbsSize))
-    print("Атрибуты: " .. (info.Attributes ~= "" and info.Attributes or "нет"))
-
-    -- Ищем скрипты внутри кнопки
-    local scriptsInside = ""
-    for _, child in ipairs(btn:GetChildren()) do
-        if child:IsA("LuaSourceContainer") then
-            scriptsInside = scriptsInside .. child.Name .. " (" .. child.ClassName .. "); "
+-- Перехват InputBegan (ловим клики/тапы)
+local inputCon = nil
+inputCon = UIS.InputBegan:Connect(function(input, gameProcessed)
+    if not clickActive then return end
+    local now = tick()
+    if (now - lastClickTime) < CLICK_WINDOW then
+        local inputType = input.UserInputType
+        local pos = input.Position
+        print(">>> [СВЯЗАНО С КЛИКОМ] InputBegan: " .. tostring(inputType) .. " в позиции " .. tostring(pos))
+        if lastClickedButton then
+            print("    Позиция кнопки: " .. tostring(lastClickedButton.AbsolutePosition) .. ", размер: " .. tostring(lastClickedButton.AbsoluteSize))
         end
     end
-    print("Скрипты внутри: " .. (scriptsInside ~= "" and scriptsInside or "нет"))
+end)
 
-    -- Поднимаемся вверх, ищем локальные скрипты/модули в родителях до корня
-    local ancestor = btn.Parent
-    local scriptHierarchy = ""
-    while ancestor do
-        for _, child in ipairs(ancestor:GetChildren()) do
-            if child:IsA("LocalScript") or child:IsA("ModuleScript") then
-                scriptHierarchy = scriptHierarchy .. ancestor:GetFullName() .. "/" .. child.Name .. " (" .. child.ClassName .. "); "
+-- ===== СЛУШАЕМ СОБЫТИЯ КНОПКИ И ОТЛАВЛИВАЕМ ИЗМЕНЕНИЯ =====
+local function monitorButton(btn)
+    if btn:GetAttribute("_advDiagHooked") then return end
+    btn:SetAttribute("_advDiagHooked", true)
+    
+    -- Стандартные события мыши
+    btn.MouseButton1Click:Connect(function()
+        clickActive = true
+        lastClickTime = tick()
+        lastClickedButton = btn
+        
+        print("=== КЛИК ПО КНОПКЕ ===")
+        print("Имя: " .. btn.Name)
+        print("Класс: " .. btn.ClassName)
+        print("Путь: " .. btn:GetFullName())
+        print("Текст: " .. (btn:IsA("TextButton") and btn.Text or "—"))
+        print("Атрибуты: " .. (function() local a=""; for k,v in pairs(btn:GetAttributes()) do a=a..k.."="..tostring(v).."; "; end; return a~="" and a or "нет"; end)())
+        
+        -- Запускаем таймер сброса
+        delay(CLICK_WINDOW + 0.1, function()
+            if clickActive and (tick() - lastClickTime) >= CLICK_WINDOW then
+                print("--- Окно поиска истекло, ничего не поймано ---")
+                clickActive = false
             end
+        end)
+    end)
+    
+    btn.MouseButton1Down:Connect(function()
+        if clickActive and (tick() - lastClickTime) < CLICK_WINDOW then
+            print(">>> MouseButton1Down")
         end
-        ancestor = ancestor.Parent
+    end)
+    btn.MouseButton1Up:Connect(function()
+        if clickActive and (tick() - lastClickTime) < CLICK_WINDOW then
+            print(">>> MouseButton1Up")
+        end
+    end)
+    btn.Activated:Connect(function()
+        if clickActive and (tick() - lastClickTime) < CLICK_WINDOW then
+            print(">>> Activated")
+        end
+    end)
+    btn.TouchTap:Connect(function()
+        if clickActive and (tick() - lastClickTime) < CLICK_WINDOW then
+            print(">>> TouchTap (мобильное нажатие)")
+        end
+    end)
+    
+    -- Отслеживание изменений свойств, которые могут запускать логику
+    -- (например, изменение Visible, Text, или кастомного атрибута)
+    local function onPropertyChanged(prop)
+        if clickActive and (tick() - lastClickTime) < CLICK_WINDOW then
+            local val = btn[prop]
+            print(">>> Изменение свойства [" .. prop .. "] = " .. tostring(val) .. " (было изменено после клика)")
+        end
     end
-    print("Скрипты в иерархии: " .. (scriptHierarchy ~= "" and scriptHierarchy or "не найдены"))
-
-    -- Установка флага для корреляции
-    clickFlag = true
-    lastClickTime = tick()
-    print("Ожидайте перехвата удалённого вызова в течение " .. CLICK_TIMEOUT .. " сек...")
-    print("=================================")
-end
-
--- Хук на кнопки
-local function hookButton(btn)
-    if (btn:IsA("TextButton") or btn:IsA("ImageButton")) and not btn:GetAttribute("_diagHooked") then
-        btn:SetAttribute("_diagHooked", true)
-        btn.MouseButton1Click:Connect(function()
-            logButtonDeep(btn)
+    btn.Changed:Connect(onPropertyChanged)
+    btn.AttributeChanged:Connect(function(attr)
+        if clickActive and (tick() - lastClickTime) < CLICK_WINDOW then
+            print(">>> Изменение атрибута [" .. attr .. "] = " .. tostring(btn:GetAttribute(attr)))
+        end
+    end)
+    
+    -- Также отслеживаем изменение свойств родительских фреймов (вдруг родитель управляется)
+    local parent = btn.Parent
+    if parent and parent:IsA("GuiObject") then
+        parent.Changed:Connect(function(prop)
+            if clickActive and (tick() - lastClickTime) < CLICK_WINDOW then
+                print(">>> Изменение у родителя (" .. parent:GetFullName() .. ") свойство [" .. prop .. "] = " .. tostring(parent[prop]))
+            end
         end)
     end
 end
 
--- Рекурсивный обход
+-- Рекурсивное сканирование
 local function scanRecursive(parent)
     for _, child in ipairs(parent:GetChildren()) do
-        hookButton(child)
+        if child:IsA("TextButton") or child:IsA("ImageButton") then
+            monitorButton(child)
+        end
         scanRecursive(child)
     end
 end
 
--- Запуск сканирования в CoreGui и PlayerGui
-local targets = {CoreGui}
+-- Запуск
+local targets = {}
+if CoreGui then table.insert(targets, CoreGui) end
 if playerGui then table.insert(targets, playerGui) end
+
 for _, target in ipairs(targets) do
     if target then
         scanRecursive(target)
         target.DescendantAdded:Connect(function(desc)
-            hookButton(desc)
+            if desc:IsA("TextButton") or desc:IsA("ImageButton") then
+                monitorButton(desc)
+            end
         end)
     end
 end
 
-print("Диагностика кнопок запущена. Нажмите нужную кнопку.")
-print("В консоли появится детальная информация и, возможно, перехваченный удалённый вызов.")
+print("Расширенная диагностика активирована.")
+print("Нажмите кнопку, затем смотрите все помеченные [СВЯЗАНО С КЛИКОМ] события в течение 2 секунд.")
