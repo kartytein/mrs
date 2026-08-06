@@ -1,7 +1,7 @@
 -- ============================================================
 -- ЦЕЛЬНЫЙ СКРИПТ: Авто-ферма Prehistoric Island + движение лодки
 -- Для Delta, работает с redz-library-v5. Использует getconnections.
--- Не содержит устаревших методов (BodyVelocity заменён на ручное перемещение).
+-- НЕ использует устаревшие методы (BodyVelocity заменён на LinearVelocity).
 -- ============================================================
 
 -- ======================= НАСТРОЙКИ ===========================
@@ -18,8 +18,8 @@ local X_MIN = -77389.3
 local X_MAX = -47968.4
 local SPEED_X = 250
 local TARGET_Y = 100
-local BOAT_SPEED_Y = -2   -- небольшой дрейф, чтобы физика не спала
-local BOAT_SPEED_Z = -2
+local SPEED_Y = -2   -- небольшой дрейф вниз для стабильности
+local SPEED_Z = -2
 
 -- ================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==================
 local Players = game:GetService("Players")
@@ -129,10 +129,8 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
 
 	-- Если нужно включить, сначала выключаем конфликтующую опцию (если задана)
 	if desiredState == "on" and conflictTab and conflictOpt then
-		-- Рекурсивно не вызываем, чтобы избежать петли, просто принудительно выключаем
 		local conflictState = getOptionState(conflictTab, conflictOpt)
 		if conflictState == "on" then
-			-- переключаем вкладку конфликтной опции и кликаем
 			local cfRoot = getRoot()
 			local cfTabsScroll = cfRoot:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("TabsScroll")
 			if cfTabsScroll then
@@ -158,7 +156,6 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
 					if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
 						cfOptCount = cfOptCount + 1
 						if cfOptCount == conflictOpt then
-							-- Проверим, что она ещё on (могла измениться)
 							local ind = findIndicatorFrame(c)
 							if ind and tostring(ind.BackgroundColor3) == COLOR_ON then
 								fireSequence(c)
@@ -168,7 +165,7 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
 					end
 				end
 			end
-			task.wait(0.1) -- даём интерфейсу обновиться
+			task.wait(0.1)
 		end
 	end
 
@@ -224,12 +221,33 @@ end
 local boat, seat, boatRoot = nil, nil, nil
 local moving = false
 local moveThread = nil
+local linearVelocity = nil  -- LinearVelocity constraint
 
 local function stopBoatMovement()
 	moving = false
 	if moveThread then
 		task.cancel(moveThread)
 		moveThread = nil
+	end
+	if linearVelocity then
+		linearVelocity:Destroy()
+		linearVelocity = nil
+	end
+end
+
+-- Создаёт/обновляет LinearVelocity на boatRoot
+local function applyBoatVelocity(dirX, speedY, speedZ)
+	if not boatRoot or not boatRoot.Parent then return end
+	local velocity = Vector3.new(dirX * SPEED_X, speedY, speedZ)
+	if linearVelocity then
+		linearVelocity.VectorVelocity = velocity
+	else
+		linearVelocity = Instance.new("LinearVelocity")
+		linearVelocity.MaxForce = math.huge
+		linearVelocity.VectorVelocity = velocity
+		linearVelocity.Attachment0 = Instance.new("Attachment")
+		linearVelocity.Attachment0.Parent = boatRoot
+		linearVelocity.Parent = boatRoot
 	end
 end
 
@@ -238,36 +256,34 @@ local function startBoatMovement()
 	if not boatRoot then return end
 	moving = true
 	moveThread = task.spawn(function()
-		-- Направление: -1 влево, 1 вправо
 		local dir = -1
-		-- Первоначально ставим высоту
+		-- Приводим лодку к нужной высоте один раз
 		local pos = boatRoot.Position
 		if math.abs(pos.Y - TARGET_Y) > 0.5 then
 			boat:PivotTo(CFrame.new(pos.X, TARGET_Y, pos.Z))
 		end
+		applyBoatVelocity(dir, SPEED_Y, SPEED_Z)
 		while moving do
 			if not boat or not boat.Parent or not seat or not seat.Parent then
 				stopBoatMovement()
 				break
 			end
-			-- Двигаем лодку
-			local currentPos = boatRoot.Position
-			local newX = currentPos.X + dir * SPEED_X * 0.05
-			local newY = TARGET_Y
-			local newZ = currentPos.Z + BOAT_SPEED_Z * 0.05
-			-- Коррекция границ и смена направления
-			if newX <= X_MIN and dir == -1 then
-				dir = 1
-				newX = X_MIN
-			elseif newX >= X_MAX and dir == 1 then
-				dir = -1
-				newX = X_MAX
+			if boatRoot then
+				local currentPos = boatRoot.Position
+				-- Смена направления у границ
+				if currentPos.X <= X_MIN and dir == -1 then
+					dir = 1
+					applyBoatVelocity(dir, SPEED_Y, SPEED_Z)
+				elseif currentPos.X >= X_MAX and dir == 1 then
+					dir = -1
+					applyBoatVelocity(dir, SPEED_Y, SPEED_Z)
+				end
+				-- Корректировка высоты (небольшая подстройка, чтобы не улететь)
+				if math.abs(currentPos.Y - TARGET_Y) > 3 then
+					boat:PivotTo(CFrame.new(currentPos.X, TARGET_Y, currentPos.Z))
+				end
 			end
-			boat:PivotTo(CFrame.new(newX, newY, newZ))
-			-- Дополнительный дрейф по Y для предотвращения сна физики
-			newY = newY + BOAT_SPEED_Y * 0.05
-			boat:PivotTo(CFrame.new(newX, newY, newZ))
-			task.wait(0.05)
+			task.wait(0.1)
 		end
 	end)
 end
@@ -288,7 +304,6 @@ end
 
 -- ==================== ОСТРОВ И ИГРОКИ ========================
 local function findIsland()
-	-- Ищем через Map.PrehistoricIsland.Core.ActivationPrompt.ProximityPrompt
 	local map = Workspace:FindFirstChild("Map")
 	if map then
 		local island = map:FindFirstChild("PrehistoricIsland")
@@ -318,7 +333,6 @@ local function getIslandPosition(island)
 	return nil
 end
 
--- Проверка, что все игроки в пределах 100 единиц от позиции острова
 local function allPlayersNearIsland(islandPos)
 	if not islandPos then return false end
 	local allNear = true
@@ -359,7 +373,6 @@ while true do
 	local hum = char and char:FindFirstChild("Humanoid")
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
 
-	-- Если персонаж умер или перезагрузился, сбрасываем всё
 	if not hum or hum.Health <= 0 or not hrp then
 		stopBoatMovement()
 		boat, seat, boatRoot = nil, nil, nil
@@ -369,7 +382,6 @@ while true do
 	end
 
 	if state == "INIT" then
-		-- Ждём появления хаба
 		if not getRoot() then
 			task.wait(0.5)
 			continue
@@ -377,11 +389,10 @@ while true do
 		state = "WAITING_FOR_BOAT_OPTION"
 
 	elseif state == "WAITING_FOR_BOAT_OPTION" then
-		-- Активируем кнопку лодки, если выключена
 		local curState = getOptionState(BOAT_TAB, BOAT_OPT)
 		if curState == "off" then
 			print("Активируем кнопку лодки (5,6)")
-			setOptionState(BOAT_TAB, BOAT_OPT, "on", BOAT_TAB, ISLAND_OPT) -- конфликт с островом
+			setOptionState(BOAT_TAB, BOAT_OPT, "on", BOAT_TAB, ISLAND_OPT)
 		elseif curState == nil then
 			print("Кнопка лодки не найдена, ждём...")
 			task.wait(1)
@@ -391,17 +402,13 @@ while true do
 		task.wait(0.2)
 
 	elseif state == "WAITING_FOR_BOARD_BOAT" then
-		-- Ждём, пока персонаж сядет в лодку
 		local inBoat, boatModel, seatPart = isInBoat()
 		if inBoat then
 			print("Персонаж сел в лодку")
-			-- Деактивируем кнопку лодки (она больше не нужна в активном состоянии)
 			setOptionState(BOAT_TAB, BOAT_OPT, "off")
-			-- Настраиваем переменные лодки
 			boat = boatModel
 			seat = seatPart
 			boatRoot = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
-			-- Отключаем коллизии и скрипты лодки
 			for _, part in ipairs(boat:GetDescendants()) do
 				if part:IsA("BasePart") then
 					part.CanCollide = false
@@ -409,20 +416,16 @@ while true do
 			end
 			local natScript = boat:FindFirstChild("Script")
 			if natScript then natScript.Disabled = true end
-			-- Запускаем движение
 			startBoatMovement()
 			state = "MOVING_ON_BOAT"
 		else
-			-- Таймаут? Не в лодке — пробуем снова активировать кнопку
 			task.wait(0.5)
-			-- Для надёжности иногда повторно включаем кнопку
 			if math.random(1,10) == 1 then
 				setOptionState(BOAT_TAB, BOAT_OPT, "on", BOAT_TAB, ISLAND_OPT)
 			end
 		end
 
 	elseif state == "MOVING_ON_BOAT" then
-		-- Проверяем, всё ещё ли мы в лодке
 		local inBoat, boatModel, seatPart = isInBoat()
 		if not inBoat or boatModel ~= boat then
 			print("Вышли из лодки, перезапуск поиска")
@@ -431,7 +434,6 @@ while true do
 			state = "WAITING_FOR_BOAT_OPTION"
 			continue
 		end
-		-- Проверяем появление острова
 		local island = findIsland()
 		if island then
 			print("Prehistoric Island обнаружен!")
@@ -441,11 +443,9 @@ while true do
 		task.wait(0.5)
 
 	elseif state == "GOING_TO_ISLAND" then
-		-- Деактивируем лодку (5,6), активируем остров (5,10)
 		print("Переключаемся на остров: выключаем 5,6, включаем 5,10")
 		setOptionState(BOAT_TAB, BOAT_OPT, "off")
-		setOptionState(BOAT_TAB, ISLAND_OPT, "on", BOAT_TAB, BOAT_OPT) -- конфликт с лодкой
-		-- Ждём, пока персонаж окажется рядом с островом
+		setOptionState(BOAT_TAB, ISLAND_OPT, "on", BOAT_TAB, BOAT_OPT)
 		local islandObj = findIsland()
 		if not islandObj then
 			print("Остров пропал, возвращаемся к лодке")
@@ -484,11 +484,9 @@ while true do
 		end
 
 	elseif state == "RETURN_TO_BOAT" then
-		-- Выключаем остров (5,10), включаем лодку (5,6)
 		print("Возврат: выключаем 5,10, включаем 5,6")
 		setOptionState(BOAT_TAB, ISLAND_OPT, "off")
 		setOptionState(BOAT_TAB, BOAT_OPT, "on", BOAT_TAB, ISLAND_OPT)
-		-- Ждём посадки в лодку
 		state = "WAITING_FOR_BOARD_BOAT"
 		task.wait(0.2)
 	end
