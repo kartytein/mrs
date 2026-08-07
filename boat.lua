@@ -1,20 +1,31 @@
 -- ============================================================
--- Сначала загружаем хаб (ОБЯЗАТЕЛЬНО синхронно, с pcall)
--- Затем ждём появления его интерфейса, и только потом запускаем AutoFarm
+-- ГАРАНТИРОВАННЫЙ ЗАПУСК: хаб в фоне, скрипт ждёт интерфейс
+-- Оригинальный warn не трогаем, логируем через сохранённый origWarn
 -- ============================================================
 
--- 1. Загрузка хаба
-local hubLoaded, hubError = pcall(function()
-    loadstring(game:HttpGet("https://raw.githubusercontent.com/Omgshit/Scripts/main/MainLoader.lua"))()
-end)
-if not hubLoaded then
-    warn("[AutoFarm] КРИТИЧЕСКАЯ ОШИБКА загрузки хаба:", hubError)
-    return -- без хаба скрипт бесполезен
-else
-    warn("[AutoFarm] Хаб успешно загружен, ждём интерфейс...")
+-- Сохраняем оригинальный warn (на случай, если хаб его переопределит)
+local origWarn = warn
+
+-- Функция логирования
+local function log(msg)
+    pcall(function()
+        origWarn("[AutoFarm]", msg)
+    end)
 end
 
--- 2. Ожидание появления redz-library-v5 (интерфейс хаба)
+-- 1. Загружаем хаб в отдельном потоке (не блокирует основной)
+task.spawn(function()
+    local ok, err = pcall(function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/Omgshit/Scripts/main/MainLoader.lua"))()
+    end)
+    if not ok then
+        log("Ошибка загрузки хаба: " .. tostring(err))
+    else
+        log("Хаб загружен в фоне")
+    end
+end)
+
+-- 2. Ждём появления интерфейса redz-library-v5
 local CoreGui = game:GetService("CoreGui")
 local function getRoot()
     for _, child in ipairs(CoreGui:GetChildren()) do
@@ -24,17 +35,18 @@ local function getRoot()
     return nil
 end
 
-local timeout = 30  -- секунд ожидания
+log("Ожидание интерфейса хаба...")
+local timeout = 30
 local waited = 0
 while not getRoot() and waited < timeout do
     task.wait(0.5)
     waited = waited + 0.5
 end
 if not getRoot() then
-    warn("[AutoFarm] Интерфейс хаба не появился за", timeout, "секунд. Останов.")
+    log("Интерфейс хаба не появился за " .. timeout .. " сек. Остановка.")
     return
 end
-warn("[AutoFarm] Интерфейс хаба найден. Запускаю скрипт.")
+log("Интерфейс найден. Запуск AutoFarm.")
 
 -- ======================= НАСТРОЙКИ ===========================
 local BOAT_TAB = 5
@@ -52,10 +64,6 @@ local BOAT_SPEED_Z = -2
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local player = Players.LocalPlayer
-
-local function log(msg)
-    warn("[AutoFarm]", msg)
-end
 
 -- ================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==================
 local function fireSequence(btn)
@@ -127,7 +135,6 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
     if desiredState ~= "on" and desiredState ~= "off" then return false end
     local root = getRoot()
     if not root then return false end
-    -- сначала выключить конфликтующую опцию, если требуется
     if desiredState == "on" and conflictTab and conflictOpt then
         if getOptionState(conflictTab, conflictOpt) == "on" then
             local cfRoot = getRoot()
@@ -166,7 +173,6 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
             end
         end
     end
-    -- переключить целевую опцию
     local tabsScroll = root:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("TabsScroll")
     if not tabsScroll then return false end
     local tabButton, tabCount = nil, 0
