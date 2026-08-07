@@ -1,7 +1,6 @@
 -- ============================================================
--- AutoFarm Prehistoric Island + Boat Movement (Final)
--- Порядок: хаб в фоне -> ожидание интерфейса -> основной цикл
--- При посадке в лодку: сразу деактивируем 5,6, ждём 1 сек, запускаем движение.
+-- AutoFarm Prehistoric Island + Boat Movement (Final Fix)
+-- Исправлена ошибка с nil Window при обращении к кнопкам.
 -- ============================================================
 
 local origWarn = warn
@@ -28,18 +27,31 @@ local function getRoot()
     return nil
 end
 
+-- Ждём не только root, но и его внутренний Window
+local function waitForInterface()
+    if not getRoot() then return false end
+    local root = getRoot()
+    -- Проверяем, что внутри root есть Window/Components/TabsScroll
+    local window = root:FindFirstChild("Window")
+    if not window then return false end
+    local components = window:FindFirstChild("Components")
+    if not components then return false end
+    local tabsScroll = components:FindFirstChild("TabsScroll")
+    return tabsScroll ~= nil
+end
+
 log("Ожидание интерфейса хаба...")
 local timeout = 30
 local waited = 0
-while not getRoot() and waited < timeout do
+while not waitForInterface() and waited < timeout do
     task.wait(0.5)
     waited = waited + 0.5
 end
-if not getRoot() then
+if not waitForInterface() then
     log("Интерфейс хаба не появился. Остановка.")
     return
 end
-log("Интерфейс найден, запуск AutoFarm.")
+log("Интерфейс полностью загружен, запуск AutoFarm.")
 
 -- Настройки
 local BOAT_TAB = 5
@@ -57,6 +69,16 @@ local BOAT_SPEED_Z = -2
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local player = Players.LocalPlayer
+
+-- Безопасная функция для последовательного поиска
+local function safeFind(obj, ...)
+    local current = obj
+    for _, name in ipairs({...}) do
+        if not current then return nil end
+        current = current:FindFirstChild(name)
+    end
+    return current
+end
 
 -- Вспомогательные функции
 local function fireSequence(btn)
@@ -91,7 +113,7 @@ end
 local function getOptionState(tabIndex, optIndex)
     local root = getRoot()
     if not root then return nil end
-    local tabsScroll = root:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("TabsScroll")
+    local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll")
     if not tabsScroll then return nil end
     local tabButton, tabCount = nil, 0
     local function findTab(parent)
@@ -107,8 +129,8 @@ local function getOptionState(tabIndex, optIndex)
     findTab(tabsScroll)
     if not tabButton then return nil end
     fireSequence(tabButton)
-    task.wait(0.3)  -- увеличенная задержка для прогрузки интерфейса
-    local container = root:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("Containers"):FindFirstChild("Container")
+    task.wait(0.3)
+    local container = safeFind(root, "Window", "Components", "Containers", "Container")
     if not container then return nil end
     local optionBtn, optCount = nil, 0
     for _, child in ipairs(container:GetChildren()) do
@@ -128,12 +150,12 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
     if desiredState ~= "on" and desiredState ~= "off" then return false end
     local root = getRoot()
     if not root then return false end
-    -- выключаем конфликтующую, если надо
+    -- выключаем конфликтующую
     if desiredState == "on" and conflictTab and conflictOpt then
         if getOptionState(conflictTab, conflictOpt) == "on" then
             local cfRoot = getRoot()
             if cfRoot then
-                local cfTabsScroll = cfRoot:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("TabsScroll")
+                local cfTabsScroll = safeFind(cfRoot, "Window", "Components", "TabsScroll")
                 if cfTabsScroll then
                     local cfTabBtn, cfTabCount = nil, 0
                     local function findCfTab(p)
@@ -149,7 +171,7 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
                     findCfTab(cfTabsScroll)
                     if cfTabBtn then fireSequence(cfTabBtn) task.wait(0.3) end
                 end
-                local cfContainer = cfRoot:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("Containers"):FindFirstChild("Container")
+                local cfContainer = safeFind(cfRoot, "Window", "Components", "Containers", "Container")
                 if cfContainer then
                     local cfOptCount = 0
                     for _, c in ipairs(cfContainer:GetChildren()) do
@@ -168,7 +190,7 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
         end
     end
     -- переключаем целевую
-    local tabsScroll = root:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("TabsScroll")
+    local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll")
     if not tabsScroll then return false end
     local tabButton, tabCount = nil, 0
     local function findTab(parent)
@@ -185,7 +207,7 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
     if not tabButton then return false end
     fireSequence(tabButton)
     task.wait(0.3)
-    local container = root:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("Containers"):FindFirstChild("Container")
+    local container = safeFind(root, "Window", "Components", "Containers", "Container")
     if not container then return false end
     local optionBtn, optCount = nil, 0
     for _, child in ipairs(container:GetChildren()) do
@@ -205,7 +227,7 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
     return true
 end
 
--- Движение лодки
+-- Движение лодки (без изменений)
 local boat, seat, boatRoot = nil, nil, nil
 local moving, moveThread = false, nil
 
@@ -324,7 +346,7 @@ while true do
     end
 
     if state == "INIT" then
-        if not getRoot() then task.wait(0.5); continue end
+        if not waitForInterface() then task.wait(0.5); continue end
         state = "WAITING_FOR_BOAT_OPTION"
 
     elseif state == "WAITING_FOR_BOAT_OPTION" then
