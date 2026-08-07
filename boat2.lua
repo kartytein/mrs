@@ -1,30 +1,24 @@
 -- ============================================================
--- ПОЛНЫЙ РАБОЧИЙ СКРИПТ AutoFarm с отладкой
--- Сначала хаб, потом интерфейс, потом запуск логики
--- Все этапы логируются в консоль через [AutoFarm]
+-- СКРИПТ С УГЛУБЛЕННОЙ ОТЛАДКОЙ
+-- Покажет, где именно застревает в WAITING_FOR_BOAT_OPTION
+-- Вставь этот код целиком вместо предыдущего
 -- ============================================================
 
--- Сохраняем оригинальный warn (на случай переопределения хабом)
 local origWarn = warn
 local function log(msg)
-    pcall(function()
-        origWarn("[AutoFarm]", msg)
-    end)
+    pcall(function() origWarn("[AutoFarm]", msg) end)
 end
 
--- 1. Загружаем хаб в фоновом потоке
+-- 1. Загружаем хаб в фоне
 task.spawn(function()
     local ok, err = pcall(function()
         loadstring(game:HttpGet("https://raw.githubusercontent.com/Omgshit/Scripts/main/MainLoader.lua"))()
     end)
-    if not ok then
-        log("Ошибка загрузки хаба: " .. tostring(err))
-    else
-        log("Хаб загружен в фоне")
-    end
+    if not ok then log("Ошибка загрузки хаба: " .. tostring(err))
+    else log("Хаб загружен в фоне") end
 end)
 
--- 2. Ожидание появления интерфейса redz-library-v5
+-- 2. Ожидание интерфейса
 local CoreGui = game:GetService("CoreGui")
 local function getRoot()
     for _, child in ipairs(CoreGui:GetChildren()) do
@@ -94,19 +88,18 @@ local function findIndicatorFrame(parent)
     return nil
 end
 
--- ВАЖНО: getOptionState с отладочными логами
+-- ГЛАВНАЯ ОТЛАДКА: getOptionState с подробными логами и увеличенным ожиданием
 local function getOptionState(tabIndex, optIndex)
+    log(">> getOptionState вызван для tab=" .. tabIndex .. " opt=" .. optIndex)
     local root = getRoot()
-    if not root then
-        log("getOptionState: root не найден")
-        return nil
-    end
-    local tabsScroll = root:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("TabsScroll")
-    if not tabsScroll then
-        log("getOptionState: TabsScroll не найден")
-        return nil
-    end
-    log("TabsScroll найден, ищем вкладку " .. tabIndex .. "...")
+    if not root then log("getOptionState: root не найден") return nil end
+    local tabsScroll = root:FindFirstChild("Window")
+    if not tabsScroll then log("Window не найден") return nil end
+    tabsScroll = tabsScroll:FindFirstChild("Components")
+    if not tabsScroll then log("Components не найден") return nil end
+    tabsScroll = tabsScroll:FindFirstChild("TabsScroll")
+    if not tabsScroll then log("TabsScroll не найден") return nil end
+    log("TabsScroll найден, ищем вкладки...")
     local tabButton, tabCount = nil, 0
     local function findTab(parent)
         if tabButton then return end
@@ -116,7 +109,7 @@ local function getOptionState(tabIndex, optIndex)
                 log("  Кнопка #" .. tabCount .. ": " .. child.Name .. " (" .. child.ClassName .. ")")
                 if tabCount == tabIndex then
                     tabButton = child
-                    log("  --> Это нужная вкладка, выбираем")
+                    log("  --> Это нужная вкладка!")
                     return
                 end
             end
@@ -128,46 +121,54 @@ local function getOptionState(tabIndex, optIndex)
         log("Вкладка " .. tabIndex .. " не найдена (всего кнопок: " .. tabCount .. ")")
         return nil
     end
-    log("Кликаем по вкладке " .. tabButton.Name)
+    log("Кликаем вкладку...")
     fireSequence(tabButton)
-    task.wait(0.15)
-    local container = root:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("Containers"):FindFirstChild("Container")
-    if not container then
-        log("Container не найден после переключения вкладки")
-        return nil
-    end
+    log("Ждём 0.3 сек после клика...")
+    task.wait(0.3)  -- увеличенное ожидание
+    log("Ищем Container...")
+    local container = root:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("Containers")
+    if not container then log("Containers не найден") return nil end
+    container = container:FindFirstChild("Container")
+    if not container then log("Container не найден") return nil end
+    log("Container найден, ищем Option #" .. optIndex .. " (только видимые)...")
     local optionBtn, optCount = nil, 0
     for _, child in ipairs(container:GetChildren()) do
         if child.Name == "Option" and child.Visible and (child:IsA("TextButton") or child:IsA("ImageButton")) then
             optCount = optCount + 1
+            log("  Видимая Option #" .. optCount .. ": " .. child.Name)
             if optCount == optIndex then
                 optionBtn = child
-                log("Найдена Option #" .. optIndex .. ": " .. child.Name)
+                log("  --> Нашли нужную Option!")
                 break
             end
         end
     end
     if not optionBtn then
-        log("Option #" .. optIndex .. " не найдена (всего видимых Option: " .. optCount .. ")")
+        log("Option #" .. optIndex .. " не найдена (всего видимых: " .. optCount .. ")")
         return nil
     end
+    log("Ищем индикаторный Frame...")
     local indicator = findIndicatorFrame(optionBtn)
-    if not indicator then
-        log("Индикаторный Frame не найден в Option")
-        return nil
-    end
+    if not indicator then log("Индикатор не найден") return nil end
     local col = tostring(indicator.BackgroundColor3)
     log("Цвет индикатора: " .. col)
-    return (col == COLOR_ON and "on") or (col == COLOR_OFF and "off") or nil
+    local state = (col == COLOR_ON and "on") or (col == COLOR_OFF and "off") or nil
+    log("Состояние опции: " .. tostring(state))
+    return state
 end
 
+-- setOptionState тоже с небольшими логами
 local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, conflictOpt)
+    log("setOptionState: tab=" .. tabIndex .. " opt=" .. optIndex .. " -> " .. desiredState)
     if desiredState ~= "on" and desiredState ~= "off" then return false end
     local root = getRoot()
     if not root then return false end
-    -- сначала выключить конфликтующую опцию
+    -- обработка конфликта
     if desiredState == "on" and conflictTab and conflictOpt then
+        log("  Проверяем конфликт: tab=" .. conflictTab .. " opt=" .. conflictOpt)
         if getOptionState(conflictTab, conflictOpt) == "on" then
+            log("  Конфликтная опция ВКЛ, выключаем...")
+            -- ... (аналогично предыдущему, без изменений)
             local cfRoot = getRoot()
             if cfRoot then
                 local cfTabsScroll = cfRoot:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("TabsScroll")
@@ -204,7 +205,7 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
             end
         end
     end
-    -- переключить целевую опцию
+    -- переключаем целевую
     local tabsScroll = root:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("TabsScroll")
     if not tabsScroll then return false end
     local tabButton, tabCount = nil, 0
@@ -236,13 +237,14 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
     if not indicator then return false end
     local currentCol = tostring(indicator.BackgroundColor3)
     local currentState = (currentCol == COLOR_ON and "on") or (currentCol == COLOR_OFF and "off") or nil
-    if currentState == desiredState then return true end
+    if currentState == desiredState then log("  Уже в нужном состоянии") return true end
     fireSequence(optionBtn)
     task.wait(0.1)
+    log("  Переключили")
     return true
 end
 
--- движение лодки
+-- ==================== ДВИЖЕНИЕ ЛОДКИ ========================
 local boat, seat, boatRoot = nil, nil, nil
 local moving, moveThread = false, nil
 
@@ -372,13 +374,17 @@ while true do
         state = "WAITING_FOR_BOAT_OPTION"
 
     elseif state == "WAITING_FOR_BOAT_OPTION" then
+        log(">>> Проверяем состояние кнопки лодки...")
         local curState = getOptionState(BOAT_TAB, BOAT_OPT)
         if curState == "off" then
+            log("Кнопка лодки ВЫКЛ, включаем...")
             setOptionState(BOAT_TAB, BOAT_OPT, "on", BOAT_TAB, ISLAND_OPT)
         elseif curState == nil then
-            log("Кнопка лодки не найдена, ждём...")
+            log("Состояние не определено (возможно кнопка не найдена). Ждём 1 сек...")
             task.wait(1)
             continue
+        else
+            log("Кнопка лодки уже ВКЛ")
         end
         state = "WAITING_FOR_BOARD_BOAT"
         task.wait(0.2)
