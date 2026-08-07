@@ -1,9 +1,8 @@
 loadstring(game:HttpGet("https://raw.githubusercontent.com/Omgshit/Scripts/main/MainLoader.lua"))()
--- ============================================================
--- ЦЕЛЬНЫЙ СКРИПТ: Авто-ферма Prehistoric Island + движение лодки
--- Исправлена тряска лодки: добавлена задержка перед стартом движения
--- ============================================================
+-- Обернём весь код в pcall для отлова ошибок, которые могут убить скрипт
+local success, err = pcall(function()
 
+-- ======================= НАСТРОЙКИ ===========================
 local BOAT_TAB = 5
 local BOAT_OPT = 6
 local ISLAND_OPT = 10
@@ -23,6 +22,13 @@ local CoreGui = game:GetService("CoreGui")
 local Workspace = game:GetService("Workspace")
 local player = Players.LocalPlayer
 
+-- Используем warn вместо print, чтобы гарантированно увидеть сообщения
+-- (хабы часто перехватывают print, warn остаётся в консоли)
+local function log(msg)
+	warn("[AutoFarm]", msg)
+end
+
+-- ================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==================
 local function getRoot()
 	for _, child in ipairs(CoreGui:GetChildren()) do
 		local obj = child:FindFirstChild("redz-library-v5")
@@ -65,7 +71,9 @@ end
 local function getOptionState(tabIndex, optIndex)
 	local root = getRoot()
 	if not root then return nil end
-	local tabsScroll = root:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("TabsScroll")
+	local tabsScroll = root:FindFirstChild("Window")
+	if tabsScroll then tabsScroll = tabsScroll:FindFirstChild("Components") end
+	if tabsScroll then tabsScroll = tabsScroll:FindFirstChild("TabsScroll") end
 	if not tabsScroll then return nil end
 	local tabButton = nil
 	local tabCount = 0
@@ -83,7 +91,10 @@ local function getOptionState(tabIndex, optIndex)
 	if not tabButton then return nil end
 	fireSequence(tabButton)
 	task.wait(0.15)
-	local container = root:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("Containers"):FindFirstChild("Container")
+	local container = root:FindFirstChild("Window")
+	if container then container = container:FindFirstChild("Components") end
+	if container then container = container:FindFirstChild("Containers") end
+	if container then container = container:FindFirstChild("Container") end
 	if not container then return nil end
 	local optionBtn = nil
 	local optCount = 0
@@ -113,43 +124,52 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
 		local conflictState = getOptionState(conflictTab, conflictOpt)
 		if conflictState == "on" then
 			local cfRoot = getRoot()
-			local cfTabsScroll = cfRoot:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("TabsScroll")
-			if cfTabsScroll then
-				local cfTabBtn = nil
-				local cfTabCount = 0
-				local function findCfTab(p)
-					if cfTabBtn then return end
-					for _, c in ipairs(p:GetChildren()) do
-						if c:IsA("TextButton") or c:IsA("ImageButton") then
-							cfTabCount = cfTabCount + 1
-							if cfTabCount == conflictTab then cfTabBtn = c return end
-						end
-						findCfTab(c)
-					end
-				end
-				findCfTab(cfTabsScroll)
-				if cfTabBtn then fireSequence(cfTabBtn) task.wait(0.15) end
-			end
-			local cfContainer = cfRoot:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("Containers"):FindFirstChild("Container")
-			if cfContainer then
-				local cfOptCount = 0
-				for _, c in ipairs(cfContainer:GetChildren()) do
-					if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
-						cfOptCount = cfOptCount + 1
-						if cfOptCount == conflictOpt then
-							local ind = findIndicatorFrame(c)
-							if ind and tostring(ind.BackgroundColor3) == COLOR_ON then
-								fireSequence(c)
+			if cfRoot then
+				local cfTabsScroll = cfRoot:FindFirstChild("Window")
+				if cfTabsScroll then cfTabsScroll = cfTabsScroll:FindFirstChild("Components") end
+				if cfTabsScroll then cfTabsScroll = cfTabsScroll:FindFirstChild("TabsScroll") end
+				if cfTabsScroll then
+					local cfTabBtn = nil
+					local cfTabCount = 0
+					local function findCfTab(p)
+						if cfTabBtn then return end
+						for _, c in ipairs(p:GetChildren()) do
+							if c:IsA("TextButton") or c:IsA("ImageButton") then
+								cfTabCount = cfTabCount + 1
+								if cfTabCount == conflictTab then cfTabBtn = c return end
 							end
-							break
+							findCfTab(c)
+						end
+					end
+					findCfTab(cfTabsScroll)
+					if cfTabBtn then fireSequence(cfTabBtn) task.wait(0.15) end
+				end
+				local cfContainer = cfRoot:FindFirstChild("Window")
+				if cfContainer then cfContainer = cfContainer:FindFirstChild("Components") end
+				if cfContainer then cfContainer = cfContainer:FindFirstChild("Containers") end
+				if cfContainer then cfContainer = cfContainer:FindFirstChild("Container") end
+				if cfContainer then
+					local cfOptCount = 0
+					for _, c in ipairs(cfContainer:GetChildren()) do
+						if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
+							cfOptCount = cfOptCount + 1
+							if cfOptCount == conflictOpt then
+								local ind = findIndicatorFrame(c)
+								if ind and tostring(ind.BackgroundColor3) == COLOR_ON then
+									fireSequence(c)
+								end
+								break
+							end
 						end
 					end
 				end
+				task.wait(0.1)
 			end
-			task.wait(0.1)
 		end
 	end
-	local tabsScroll = root:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("TabsScroll")
+	local tabsScroll = root:FindFirstChild("Window")
+	if tabsScroll then tabsScroll = tabsScroll:FindFirstChild("Components") end
+	if tabsScroll then tabsScroll = tabsScroll:FindFirstChild("TabsScroll") end
 	if not tabsScroll then return false end
 	local tabButton = nil
 	local tabCount = 0
@@ -167,7 +187,10 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
 	if not tabButton then return false end
 	fireSequence(tabButton)
 	task.wait(0.15)
-	local container = root:FindFirstChild("Window"):FindFirstChild("Components"):FindFirstChild("Containers"):FindFirstChild("Container")
+	local container = root:FindFirstChild("Window")
+	if container then container = container:FindFirstChild("Components") end
+	if container then container = container:FindFirstChild("Containers") end
+	if container then container = container:FindFirstChild("Container") end
 	if not container then return false end
 	local optionBtn = nil
 	local optCount = 0
@@ -306,133 +329,142 @@ local function waitForCharacter()
 	end
 end
 
-print("Скрипт запущен. Ожидание загрузки...")
+log("Скрипт запущен. Ожидание загрузки...")
 
-while true do
-	local char = player.Character
-	local hum = char and char:FindFirstChild("Humanoid")
-	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+-- Основной цикл в отдельном потоке, чтобы не вешать остальной код хаба
+task.spawn(function()
+	while true do
+		local char = player.Character
+		local hum = char and char:FindFirstChild("Humanoid")
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
 
-	if not hum or hum.Health <= 0 or not hrp then
-		stopBoatMovement()
-		boat, seat, boatRoot = nil, nil, nil
-		state = "INIT"
-		waitForCharacter()
-		continue
-	end
-
-	if state == "INIT" then
-		if not getRoot() then
-			task.wait(0.5)
-			continue
-		end
-		state = "WAITING_FOR_BOAT_OPTION"
-
-	elseif state == "WAITING_FOR_BOAT_OPTION" then
-		local curState = getOptionState(BOAT_TAB, BOAT_OPT)
-		if curState == "off" then
-			print("Активируем кнопку лодки (5,6)")
-			setOptionState(BOAT_TAB, BOAT_OPT, "on", BOAT_TAB, ISLAND_OPT)
-		elseif curState == nil then
-			print("Кнопка лодки не найдена, ждём...")
-			task.wait(1)
-			continue
-		end
-		state = "WAITING_FOR_BOARD_BOAT"
-		task.wait(0.2)
-
-	elseif state == "WAITING_FOR_BOARD_BOAT" then
-		local inBoat, boatModel, seatPart = isInBoat()
-		if inBoat then
-			print("Персонаж сел в лодку. Ожидание стабилизации...")
-			task.wait(1.5)  -- даём системе успокоиться, чтобы тряска не возникала
-			-- Деактивируем кнопку лодки только после задержки
-			setOptionState(BOAT_TAB, BOAT_OPT, "off")
-			task.wait(0.2)  -- дополнительная пауза после отключения кнопки
-			boat = boatModel
-			seat = seatPart
-			boatRoot = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
-			for _, part in ipairs(boat:GetDescendants()) do
-				if part:IsA("BasePart") then
-					part.CanCollide = false
-				end
-			end
-			local natScript = boat:FindFirstChild("Script")
-			if natScript then natScript.Disabled = true end
-			startBoatMovement()
-			state = "MOVING_ON_BOAT"
-		else
-			task.wait(0.5)
-			if math.random(1,10) == 1 then
-				setOptionState(BOAT_TAB, BOAT_OPT, "on", BOAT_TAB, ISLAND_OPT)
-			end
-		end
-
-	elseif state == "MOVING_ON_BOAT" then
-		local inBoat, boatModel, seatPart = isInBoat()
-		if not inBoat or boatModel ~= boat then
-			print("Вышли из лодки, перезапуск поиска")
+		if not hum or hum.Health <= 0 or not hrp then
 			stopBoatMovement()
 			boat, seat, boatRoot = nil, nil, nil
-			state = "WAITING_FOR_BOAT_OPTION"
+			state = "INIT"
+			waitForCharacter()
 			continue
-		end
-		local island = findIsland()
-		if island then
-			print("Prehistoric Island обнаружен!")
-			stopBoatMovement()
-			state = "GOING_TO_ISLAND"
-		end
-		task.wait(0.5)
-
-	elseif state == "GOING_TO_ISLAND" then
-		print("Переключаемся на остров: выключаем 5,6, включаем 5,10")
-		setOptionState(BOAT_TAB, BOAT_OPT, "off")
-		setOptionState(BOAT_TAB, ISLAND_OPT, "on", BOAT_TAB, BOAT_OPT)
-		local islandObj = findIsland()
-		if not islandObj then
-			print("Остров пропал, возвращаемся к лодке")
-			state = "WAITING_FOR_BOAT_OPTION"
-			continue
-		end
-		local islandPos = getIslandPosition(islandObj)
-		if not islandPos then
-			state = "WAITING_FOR_BOAT_OPTION"
-			continue
-		end
-		if hrp and (hrp.Position - islandPos).Magnitude <= 100 then
-			print("Персонаж на месте, ждём остальных")
-			state = "WAITING_ALL_NEAR"
-		else
-			task.wait(0.3)
 		end
 
-	elseif state == "WAITING_ALL_NEAR" then
-		local island = findIsland()
-		if not island then
-			print("Остров исчез, перезапуск")
+		if state == "INIT" then
+			if not getRoot() then
+				task.wait(0.5)
+				continue
+			end
 			state = "WAITING_FOR_BOAT_OPTION"
-			continue
-		end
-		local islandPos = getIslandPosition(island)
-		if not islandPos then
-			state = "WAITING_FOR_BOAT_OPTION"
-			continue
-		end
-		if allPlayersNearIsland(islandPos) then
-			print("Все игроки на острове! Запускаем возврат в лодку")
-			state = "RETURN_TO_BOAT"
-		else
-			task.wait(1)
+
+		elseif state == "WAITING_FOR_BOAT_OPTION" then
+			local curState = getOptionState(BOAT_TAB, BOAT_OPT)
+			if curState == "off" then
+				log("Активируем кнопку лодки (5,6)")
+				setOptionState(BOAT_TAB, BOAT_OPT, "on", BOAT_TAB, ISLAND_OPT)
+			elseif curState == nil then
+				log("Кнопка лодки не найдена, ждём...")
+				task.wait(1)
+				continue
+			end
+			state = "WAITING_FOR_BOARD_BOAT"
+			task.wait(0.2)
+
+		elseif state == "WAITING_FOR_BOARD_BOAT" then
+			local inBoat, boatModel, seatPart = isInBoat()
+			if inBoat then
+				log("Персонаж сел в лодку. Ожидание стабилизации...")
+				task.wait(1.5)
+				setOptionState(BOAT_TAB, BOAT_OPT, "off")
+				task.wait(0.2)
+				boat = boatModel
+				seat = seatPart
+				boatRoot = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
+				for _, part in ipairs(boat:GetDescendants()) do
+					if part:IsA("BasePart") then
+						part.CanCollide = false
+					end
+				end
+				local natScript = boat:FindFirstChild("Script")
+				if natScript then natScript.Disabled = true end
+				startBoatMovement()
+				state = "MOVING_ON_BOAT"
+			else
+				task.wait(0.5)
+				if math.random(1,10) == 1 then
+					setOptionState(BOAT_TAB, BOAT_OPT, "on", BOAT_TAB, ISLAND_OPT)
+				end
+			end
+
+		elseif state == "MOVING_ON_BOAT" then
+			local inBoat, boatModel, seatPart = isInBoat()
+			if not inBoat or boatModel ~= boat then
+				log("Вышли из лодки, перезапуск поиска")
+				stopBoatMovement()
+				boat, seat, boatRoot = nil, nil, nil
+				state = "WAITING_FOR_BOAT_OPTION"
+				continue
+			end
+			local island = findIsland()
+			if island then
+				log("Prehistoric Island обнаружен!")
+				stopBoatMovement()
+				state = "GOING_TO_ISLAND"
+			end
+			task.wait(0.5)
+
+		elseif state == "GOING_TO_ISLAND" then
+			log("Переключаемся на остров: выключаем 5,6, включаем 5,10")
+			setOptionState(BOAT_TAB, BOAT_OPT, "off")
+			setOptionState(BOAT_TAB, ISLAND_OPT, "on", BOAT_TAB, BOAT_OPT)
+			local islandObj = findIsland()
+			if not islandObj then
+				log("Остров пропал, возвращаемся к лодке")
+				state = "WAITING_FOR_BOAT_OPTION"
+				continue
+			end
+			local islandPos = getIslandPosition(islandObj)
+			if not islandPos then
+				state = "WAITING_FOR_BOAT_OPTION"
+				continue
+			end
+			if hrp and (hrp.Position - islandPos).Magnitude <= 100 then
+				log("Персонаж на месте, ждём остальных")
+				state = "WAITING_ALL_NEAR"
+			else
+				task.wait(0.3)
+			end
+
+		elseif state == "WAITING_ALL_NEAR" then
+			local island = findIsland()
+			if not island then
+				log("Остров исчез, перезапуск")
+				state = "WAITING_FOR_BOAT_OPTION"
+				continue
+			end
+			local islandPos = getIslandPosition(island)
+			if not islandPos then
+				state = "WAITING_FOR_BOAT_OPTION"
+				continue
+			end
+			if allPlayersNearIsland(islandPos) then
+				log("Все игроки на острове! Запускаем возврат в лодку")
+				state = "RETURN_TO_BOAT"
+			else
+				task.wait(1)
+			end
+
+		elseif state == "RETURN_TO_BOAT" then
+			log("Возврат: выключаем 5,10, включаем 5,6")
+			setOptionState(BOAT_TAB, ISLAND_OPT, "off")
+			setOptionState(BOAT_TAB, BOAT_OPT, "on", BOAT_TAB, ISLAND_OPT)
+			state = "WAITING_FOR_BOARD_BOAT"
+			task.wait(0.2)
 		end
 
-	elseif state == "RETURN_TO_BOAT" then
-		print("Возврат: выключаем 5,10, включаем 5,6")
-		setOptionState(BOAT_TAB, ISLAND_OPT, "off")
-		setOptionState(BOAT_TAB, BOAT_OPT, "on", BOAT_TAB, ISLAND_OPT)
-		state = "WAITING_FOR_BOARD_BOAT"
-		task.wait(0.2)
+		task.wait(0.1)
 	end
+end) -- конец task.spawn
 
-	task.wait(0.1)
+end) -- конец pcall
+
+-- Если скрипт упал до pcall (например, ошибка компиляции), варн всё равно появится
+if not success then
+	warn("[AutoFarm] КРИТИЧЕСКАЯ ОШИБКА:", err)
 end
