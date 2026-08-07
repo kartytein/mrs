@@ -364,7 +364,7 @@ while true do
         if inBoat then
             log("Сел в лодку. Деактивируем 5,6 и ждём 1 сек...")
             setOptionState(BOAT_TAB, BOAT_OPT, "off")
-            task.wait(5)
+            task.wait(10)
             boat = boatModel
             seat = seatPart
             boatRoot = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
