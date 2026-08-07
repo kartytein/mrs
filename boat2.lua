@@ -1,6 +1,6 @@
 -- ============================================================
--- AutoFarm Prehistoric Island + Boat Movement (Final Fix v2)
--- Задержка после деактивации кнопки лодки увеличена до 3 сек.
+-- AutoFarm Prehistoric Island + Boat Movement (Final Fix)
+-- Исправлена ошибка с nil Window при обращении к кнопкам.
 -- ============================================================
 
 local origWarn = warn
@@ -227,7 +227,7 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
     return true
 end
 
--- Движение лодки
+-- Движение лодки (без изменений)
 local boat, seat, boatRoot = nil, nil, nil
 local moving, moveThread = false, nil
 
@@ -362,9 +362,9 @@ while true do
     elseif state == "WAITING_FOR_BOARD_BOAT" then
         local inBoat, boatModel, seatPart = isInBoat()
         if inBoat then
-            log("Сел в лодку. Деактивируем 5,6 и ждём 3 сек...")
+            log("Сел в лодку. Деактивируем 5,6 и ждём 1 сек...")
             setOptionState(BOAT_TAB, BOAT_OPT, "off")
-            task.wait(3)  -- Увеличено до 3 секунд
+            task.wait(5)
             boat = boatModel
             seat = seatPart
             boatRoot = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
