@@ -1,7 +1,7 @@
 -- ============================================================
--- AutoFarm Prehistoric Island + Boat Movement (FIXED CRASH)
--- Добавлена защита от краша при смерти: проверки в ensureBV,
--- дополнительный выход в цикле движения, обертки pcall.
+-- AutoFarm Prehistoric Island + Boat Movement (FREEZE FIX)
+-- Исправлено зависание после смерти: очистка bv при Health <= 0,
+-- полный сброс стейта, защита от повторных активаций во время загрузки.
 -- ============================================================
 
 -- 1. Загружаем хаб в фоне
@@ -30,12 +30,11 @@ local SPEED_Y = -2
 local SPEED_Z = -2
 local TARGET_Y = 100
 
--- Функция логирования
 local function log(msg)
     pcall(function() warn("[AutoFarm]", msg) end)
 end
 
--- Ожидание интерфейса
+-- Интерфейс
 local function getRoot()
     for _, child in ipairs(CoreGui:GetChildren()) do
         local obj = child:FindFirstChild("redz-library-v5")
@@ -61,17 +60,14 @@ log("Ожидание интерфейса хаба...")
 repeat task.wait(0.5) until waitForInterface()
 log("Интерфейс загружен.")
 
--- ====================== СИСТЕМА КОЛЛИЗИЙ ======================
--- Постоянное отключение коллизий персонажа (с pcall для безопасности)
+-- Система коллизий
 task.spawn(function()
     while true do
         pcall(function()
             local char = player.Character
             if char then
                 for _, part in ipairs(char:GetDescendants()) do
-                    if part:IsA("BasePart") then
-                        part.CanCollide = false
-                    end
+                    if part:IsA("BasePart") then part.CanCollide = false end
                 end
                 local lower = char:FindFirstChild("LowerTorso")
                 local upper = char:FindFirstChild("UpperTorso")
@@ -83,21 +79,18 @@ task.spawn(function()
     end
 end)
 
--- Отключение коллизий лодки
 local function disableBoatCollisions(boatModel)
     if not boatModel then return end
     pcall(function()
         for _, part in ipairs(boatModel:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = false
-            end
+            if part:IsA("BasePart") then part.CanCollide = false end
         end
         local nat = boatModel:FindFirstChild("Script")
         if nat then nat.Disabled = true end
     end)
 end
 
--- ======================== GUI ФУНКЦИИ =========================
+-- GUI функции
 local function fireSequence(btn)
     if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return end
     local signals = {"MouseEnter","MouseButton1Down","MouseButton1Click","MouseButton1Up","Activated","MouseLeave"}
@@ -240,14 +233,23 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
     return true
 end
 
--- ====================== ДВИЖЕНИЕ ЛОДКИ (С ЗАЩИТОЙ) =============
-local boat = nil
-local seat = nil
-local root = nil
+-- Движение лодки (исправлено для предотвращения фризов)
+local boat, seat, rootPart = nil, nil, nil
 local dir = -1
 local bv = nil
 local moving = false
 local moveThread = nil
+
+local function safeDestroy(instance)
+    pcall(function() if instance then instance:Destroy() end end)
+end
+
+local function stopMove()
+    moving = false
+    if moveThread then task.cancel(moveThread); moveThread = nil end
+    safeDestroy(bv)
+    bv = nil
+end
 
 local function ensureBV()
     local char = player.Character
@@ -260,64 +262,61 @@ local function ensureBV()
     if bv and bv.Parent then
         bv.Velocity = Vector3.new(sx, SPEED_Y, SPEED_Z)
     else
-        if bv then bv:Destroy() end
+        safeDestroy(bv)
         bv = Instance.new("BodyVelocity")
         bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        bv.Parent = upper
         bv.Velocity = Vector3.new(sx, SPEED_Y, SPEED_Z)
+        bv.Parent = upper
     end
     return true
 end
 
-local function stopMove()
-    moving = false
-    if moveThread then task.cancel(moveThread); moveThread = nil end
-    if bv then bv:Destroy(); bv = nil end
+local function isAliveAndSeated()
+    local char = player.Character
+    if not char then return false end
+    local hum = char:FindFirstChild("Humanoid")
+    return hum and hum.Health > 0 and hum.Sit and hum.SeatPart == seat
 end
 
 local function startMove()
-    if moving then return end
-    if not root then return end
+    if moving or not rootPart then return end
     moving = true
     moveThread = task.spawn(function()
         -- начальная корректировка высоты
-        if root and root.Parent then
-            local p = root.Position
-            if math.abs(p.Y - TARGET_Y) > 0.5 then
-                root.CFrame = CFrame.new(p.X, TARGET_Y, p.Z)
-            end
+        if rootPart and rootPart.Parent then
+            pcall(function()
+                local p = rootPart.Position
+                if math.abs(p.Y - TARGET_Y) > 0.5 then
+                    rootPart.CFrame = CFrame.new(p.X, TARGET_Y, p.Z)
+                end
+            end)
         end
-        -- проверка, что персонаж жив перед началом
-        local char = player.Character
-        local hum = char and char:FindFirstChild("Humanoid")
-        if not hum or hum.Health <= 0 then stopMove(); return end
+        if not isAliveAndSeated() then stopMove(); return end
         if not ensureBV() then stopMove(); return end
 
         while moving do
-            -- Проверка жизни и сидения
-            local char = player.Character
-            local hum = char and char:FindFirstChild("Humanoid")
-            if not hum or hum.Health <= 0 or not (hum.Sit and hum.SeatPart == seat) then
-                stopMove()
-                break
-            end
-            if root then
-                local p = root.Position
-                if math.abs(p.Y - TARGET_Y) > 0.5 then
-                    root.CFrame = CFrame.new(p.X, TARGET_Y, p.Z)
-                end
-                if p.X <= X_MIN and dir == -1 then
-                    dir = 1
-                    if not ensureBV() then stopMove(); break end
-                elseif p.X >= X_MAX and dir == 1 then
-                    dir = -1
-                    if not ensureBV() then stopMove(); break end
+            if not isAliveAndSeated() then stopMove(); break end
+            if rootPart then
+                local p
+                pcall(function() p = rootPart.Position end)
+                if p then
+                    if math.abs(p.Y - TARGET_Y) > 0.5 then
+                        pcall(function() rootPart.CFrame = CFrame.new(p.X, TARGET_Y, p.Z) end)
+                    end
+                    if p.X <= X_MIN and dir == -1 then
+                        dir = 1
+                        if not ensureBV() then stopMove(); break end
+                    elseif p.X >= X_MAX and dir == 1 then
+                        dir = -1
+                        if not ensureBV() then stopMove(); break end
+                    end
                 end
             end
-            -- Легкое обновление скорости (если bv еще есть)
             if bv and bv.Parent then
-                local v = bv.Velocity
-                bv.Velocity = Vector3.new(v.X, v.Y - 0.0001, v.Z - 0.0001)
+                pcall(function()
+                    local v = bv.Velocity
+                    bv.Velocity = Vector3.new(v.X, v.Y - 0.0001, v.Z - 0.0001)
+                end)
             end
             task.wait(0.05)
         end
@@ -337,7 +336,7 @@ local function isInBoat()
     return false
 end
 
--- ======================= ОСТРОВ ==========================
+-- Остров
 local function findIsland()
     local map = Workspace:FindFirstChild("Map")
     if map then
@@ -374,20 +373,14 @@ local function allPlayersNearIsland(islandPos)
         if char then
             local hrp = char:FindFirstChild("HumanoidRootPart")
             if hrp then
-                if (hrp.Position - islandPos).Magnitude > 100 then
-                    return false
-                end
-            else
-                return false
-            end
-        else
-            return false
-        end
+                if (hrp.Position - islandPos).Magnitude > 100 then return false end
+            else return false end
+        else return false end
     end
     return true
 end
 
--- ====================== ОСНОВНОЙ ЦИКЛ =========================
+-- Основной цикл
 local state = "INIT"
 
 local function waitForCharacter()
@@ -395,6 +388,8 @@ local function waitForCharacter()
         player.CharacterAdded:Wait()
         task.wait(0.2)
     end
+    -- Дополнительная пауза после появления персонажа, чтобы избежать мгновенного перезапуска
+    task.wait(1)
 end
 
 log("Скрипт AutoFarm запущен.")
@@ -406,8 +401,9 @@ while true do
 
     if not hum or hum.Health <= 0 or not hrp then
         stopMove()
-        boat, seat, root = nil, nil, nil
+        boat, seat, rootPart = nil, nil, nil
         state = "INIT"
+        log("Персонаж мёртв или не готов. Ожидание...")
         waitForCharacter()
         continue
     end
@@ -441,7 +437,7 @@ while true do
             task.wait(10)
             boat = boatModel
             seat = seatPart
-            root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
+            rootPart = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
             disableBoatCollisions(boat)
             startMove()
             state = "MOVING_ON_BOAT"
@@ -457,7 +453,7 @@ while true do
         if not inBoat or boatModel ~= boat then
             log("Вышли из лодки, перезапуск.")
             stopMove()
-            boat, seat, root = nil, nil, nil
+            boat, seat, rootPart = nil, nil, nil
             state = "WAITING_FOR_BOAT_OPTION"
             continue
         end
