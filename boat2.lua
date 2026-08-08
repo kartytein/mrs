@@ -1,5 +1,5 @@
 -- ============================================================
--- AutoFarm (Radius 1000, simplified logs, fixed stuck on island)
+-- AutoFarm Prehistoric Island + Boat Movement (Radius 2000)
 -- ============================================================
 
 -- 1. Хаб в фоне
@@ -21,7 +21,7 @@ local COLOR_OFF = "0.239216, 0.262745, 0.529412"
 local X_MIN, X_MAX = -77389.3, -47968.4
 local SPEED_X, SPEED_Y, SPEED_Z, TARGET_Y = 250, -2, -2, 100
 
--- Логирование только одной строкой (без таблиц)
+-- Логирование только строкой
 local function log(msg) pcall(function() warn("[AutoFarm] " .. msg) end) end
 
 -- Интерфейс
@@ -242,13 +242,13 @@ local function getIslandPosition(island)
     else local part = island:FindFirstChildWhichIsA("BasePart") return part and part.Position end
 end
 
--- РАДИУС УВЕЛИЧЕН ДО 1000
+-- РАДИУС УВЕЛИЧЕН ДО 2000
 local function allPlayersNearIsland(islandPos)
     if not islandPos then return false end
     for _, plr in ipairs(Players:GetPlayers()) do
         local char = plr.Character if not char then return false end
         local hrp = char:FindFirstChild("HumanoidRootPart") if not hrp then return false end
-        if (hrp.Position - islandPos).Magnitude > 1000 then return false end
+        if (hrp.Position - islandPos).Magnitude > 2000 then return false end
     end
     return true
 end
@@ -319,7 +319,7 @@ while true do
         setOptionState(BOAT_TAB, ISLAND_OPT, "on", BOAT_TAB, BOAT_OPT)
         local islandObj = findIsland() if not islandObj then state = "WAITING_FOR_BOAT_OPTION" continue end
         local islandPos = getIslandPosition(islandObj) if not islandPos then state = "WAITING_FOR_BOAT_OPTION" continue end
-        if hrp and (hrp.Position - islandPos).Magnitude <= 1000 then state = "WAITING_ALL_NEAR" else task.wait(0.3) end
+        if hrp and (hrp.Position - islandPos).Magnitude <= 2000 then state = "WAITING_ALL_NEAR" else task.wait(0.3) end
     elseif state == "WAITING_ALL_NEAR" then
         local island = findIsland()
         if not island then
