@@ -1,7 +1,5 @@
 -- ============================================================
--- AutoFarm Prehistoric Island + Boat Movement (NO COLLISIONS)
--- Полный цикл: хаб -> кнопки 5,6 / 5,10 -> движение лодки (чистое)
--- Без отключения коллизий.
+-- AutoFarm (Radius 1000, simplified logs, fixed stuck on island)
 -- ============================================================
 
 -- 1. Хаб в фоне
@@ -23,9 +21,10 @@ local COLOR_OFF = "0.239216, 0.262745, 0.529412"
 local X_MIN, X_MAX = -77389.3, -47968.4
 local SPEED_X, SPEED_Y, SPEED_Z, TARGET_Y = 250, -2, -2, 100
 
-local function log(msg) pcall(function() warn("[AutoFarm]", msg) end) end
+-- Логирование только одной строкой (без таблиц)
+local function log(msg) pcall(function() warn("[AutoFarm] " .. msg) end) end
 
--- Ожидание интерфейса
+-- Интерфейс
 local function getRoot()
     for _, child in ipairs(CoreGui:GetChildren()) do
         local obj = child:FindFirstChild("redz-library-v5")
@@ -186,7 +185,6 @@ local function startMove()
     if moving or not rootPart then return end
     moving = true
     moveThread = task.spawn(function()
-        -- выравнивание высоты
         local p = rootPart.Position
         if math.abs(p.Y - TARGET_Y) > 0.5 then
             rootPart.CFrame = CFrame.new(p.X, TARGET_Y, p.Z)
@@ -244,12 +242,13 @@ local function getIslandPosition(island)
     else local part = island:FindFirstChildWhichIsA("BasePart") return part and part.Position end
 end
 
+-- РАДИУС УВЕЛИЧЕН ДО 1000
 local function allPlayersNearIsland(islandPos)
     if not islandPos then return false end
     for _, plr in ipairs(Players:GetPlayers()) do
         local char = plr.Character if not char then return false end
         local hrp = char:FindFirstChild("HumanoidRootPart") if not hrp then return false end
-        if (hrp.Position - islandPos).Magnitude > 100 then return false end
+        if (hrp.Position - islandPos).Magnitude > 1000 then return false end
     end
     return true
 end
@@ -290,7 +289,7 @@ while true do
     elseif state == "WAITING_FOR_BOARD_BOAT" then
         local inBoat, boatModel, seatPart = isInBoat()
         if inBoat then
-            log("Сел в лодку. Деактивируем 5,6, ждём 10с...")
+            log("Сел в лодку. Выкл 5,6, жду 10с...")
             setOptionState(BOAT_TAB, BOAT_OPT, "off")
             task.wait(10)
             boat, seat = boatModel, seatPart
@@ -320,15 +319,26 @@ while true do
         setOptionState(BOAT_TAB, ISLAND_OPT, "on", BOAT_TAB, BOAT_OPT)
         local islandObj = findIsland() if not islandObj then state = "WAITING_FOR_BOAT_OPTION" continue end
         local islandPos = getIslandPosition(islandObj) if not islandPos then state = "WAITING_FOR_BOAT_OPTION" continue end
-        if hrp and (hrp.Position - islandPos).Magnitude <= 100 then state = "WAITING_ALL_NEAR" else task.wait(0.3) end
+        if hrp and (hrp.Position - islandPos).Magnitude <= 1000 then state = "WAITING_ALL_NEAR" else task.wait(0.3) end
     elseif state == "WAITING_ALL_NEAR" then
-        local island = findIsland() if not island then state = "WAITING_FOR_BOAT_OPTION" continue end
+        local island = findIsland()
+        if not island then
+            log("Остров исчез, возврат к лодке")
+            state = "WAITING_FOR_BOAT_OPTION"
+            continue
+        end
         local islandPos = getIslandPosition(island) if not islandPos then state = "WAITING_FOR_BOAT_OPTION" continue end
-        if allPlayersNearIsland(islandPos) then state = "RETURN_TO_BOAT" else task.wait(1) end
+        if allPlayersNearIsland(islandPos) then
+            log("Все на острове, возврат в лодку")
+            state = "RETURN_TO_BOAT"
+        else
+            task.wait(1)
+        end
     elseif state == "RETURN_TO_BOAT" then
         setOptionState(BOAT_TAB, ISLAND_OPT, "off")
         setOptionState(BOAT_TAB, BOAT_OPT, "on", BOAT_TAB, ISLAND_OPT)
-        state = "WAITING_FOR_BOARD_BOAT" task.wait(0.2)
+        state = "WAITING_FOR_BOARD_BOAT"
+        task.wait(0.2)
     end
     task.wait(0.1)
 end
