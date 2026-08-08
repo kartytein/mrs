@@ -1,7 +1,7 @@
 -- ============================================================
--- AutoFarm (Collision Fix: постоянное отключение коллизий)
--- Коллизии персонажа и лодки теперь отключаются в бесконечных циклах
--- с минимальной задержкой (0.05 сек), чтобы не сбрасывались.
+-- AutoFarm Prehistoric Island + Boat Movement (FULL FINAL)
+-- Движение лодки заменено на минимальный надёжный вариант
+-- с постоянным отключением коллизий персонажа и лодки.
 -- ============================================================
 
 -- Хаб в фоне
@@ -38,9 +38,7 @@ repeat task.wait(0.5) until waitForInterface()
 log("Интерфейс загружен.")
 
 -- ====================== КОЛЛИЗИИ (ПОСТОЯННО) ======================
-local boatCollisionThread = nil
-
--- Отключение коллизий персонажа – каждые 0.05 сек
+-- Коллизии персонажа
 task.spawn(function()
     while true do
         local char = player.Character
@@ -52,30 +50,9 @@ task.spawn(function()
             if lower then lower.CanCollide = false end
             if upper then upper.CanCollide = false end
         end
-        task.wait(0.05)
+        task.wait(0.1)
     end
 end)
-
--- Отключение коллизий лодки – отдельный поток, пока boat существует
-local function startBoatCollisionLoop()
-    if boatCollisionThread then task.cancel(boatCollisionThread) end
-    boatCollisionThread = task.spawn(function()
-        while boat do
-            pcall(function()
-                for _, part in ipairs(boat:GetDescendants()) do
-                    if part:IsA("BasePart") then part.CanCollide = false end
-                end
-                local nat = boat:FindFirstChild("Script")
-                if nat then nat.Disabled = true end
-            end)
-            task.wait(0.05)
-        end
-    end)
-end
-
-local function stopBoatCollisionLoop()
-    if boatCollisionThread then task.cancel(boatCollisionThread); boatCollisionThread = nil end
-end
 
 -- ======================== GUI =========================
 local function fireSequence(btn)
@@ -189,15 +166,40 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
     return true
 end
 
--- ====================== ДВИЖЕНИЕ ЛОДКИ ========================
-local boat, seat, rootPart, dir, bv, moving, moveThread = nil, nil, nil, -1, nil, false, nil
+-- ====================== ДВИЖЕНИЕ ЛОДКИ (МИНИМАЛЬНОЕ, НАДЁЖНОЕ) ========================
+local boat, seat, rootPart = nil, nil, nil
+local dir = -1
+local bv = nil
+local moving = false
+local moveThread = nil
+local collisionThread = nil  -- поток отключения коллизий лодки
 
-local function safeDestroy(inst) pcall(function() if inst then inst:Destroy() end end) end
+-- Поток отключения коллизий лодки
+local function startBoatCollisionLoop()
+    stopBoatCollisionLoop() -- на всякий случай завершим предыдущий
+    collisionThread = task.spawn(function()
+        while boat do
+            pcall(function()
+                for _, part in ipairs(boat:GetDescendants()) do
+                    if part:IsA("BasePart") then part.CanCollide = false end
+                end
+                local nat = boat:FindFirstChild("Script")
+                if nat then nat.Disabled = true end
+            end)
+            task.wait(0.1)
+        end
+    end)
+end
+
+local function stopBoatCollisionLoop()
+    if collisionThread then task.cancel(collisionThread); collisionThread = nil end
+end
+
 local function stopMove()
     moving = false
-    if moveThread then task.cancel(moveThread) moveThread = nil end
-    safeDestroy(bv) bv = nil
-    stopBoatCollisionLoop()  -- останавливаем поток коллизий лодки
+    if moveThread then task.cancel(moveThread); moveThread = nil end
+    if bv then bv:Destroy(); bv = nil end
+    stopBoatCollisionLoop()
 end
 
 local function ensureBV()
@@ -205,12 +207,14 @@ local function ensureBV()
     local hum = char:FindFirstChild("Humanoid") if not hum or hum.Health <= 0 then return false end
     local upper = char:FindFirstChild("UpperTorso") if not upper then return false end
     local sx = dir * SPEED_X
-    if bv and bv.Parent then bv.Velocity = Vector3.new(sx, SPEED_Y, SPEED_Z)
-    else
-        safeDestroy(bv) bv = Instance.new("BodyVelocity")
-        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    if bv and bv.Parent then
         bv.Velocity = Vector3.new(sx, SPEED_Y, SPEED_Z)
+    else
+        if bv then bv:Destroy() end
+        bv = Instance.new("BodyVelocity")
+        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
         bv.Parent = upper
+        bv.Velocity = Vector3.new(sx, SPEED_Y, SPEED_Z)
     end
     return true
 end
@@ -225,16 +229,17 @@ local function startMove()
     moving = true
     startBoatCollisionLoop()  -- запускаем постоянное отключение коллизий лодки
     moveThread = task.spawn(function()
+        -- выравнивание высоты
         if rootPart and rootPart.Parent then
             pcall(function()
                 local p = rootPart.Position
                 if math.abs(p.Y - TARGET_Y) > 0.5 then rootPart.CFrame = CFrame.new(p.X, TARGET_Y, p.Z) end
             end)
         end
-        if not isAliveAndSeated() then stopMove() return end
-        if not ensureBV() then stopMove() return end
+        if not isAliveAndSeated() then stopMove(); return end
+        if not ensureBV() then stopMove(); return end
         while moving do
-            if not isAliveAndSeated() then stopMove() break end
+            if not isAliveAndSeated() then stopMove(); break end
             if rootPart then
                 local p
                 pcall(function() p = rootPart.Position end)
@@ -242,8 +247,10 @@ local function startMove()
                     if math.abs(p.Y - TARGET_Y) > 0.5 then
                         pcall(function() rootPart.CFrame = CFrame.new(p.X, TARGET_Y, p.Z) end)
                     end
-                    if p.X <= X_MIN and dir == -1 then dir = 1; if not ensureBV() then stopMove() break end
-                    elseif p.X >= X_MAX and dir == 1 then dir = -1; if not ensureBV() then stopMove() break end
+                    if p.X <= X_MIN and dir == -1 then
+                        dir = 1; if not ensureBV() then stopMove(); break end
+                    elseif p.X >= X_MAX and dir == 1 then
+                        dir = -1; if not ensureBV() then stopMove(); break end
                     end
                 end
             end
@@ -287,7 +294,7 @@ local function allPlayersNearIsland(islandPos)
     return true
 end
 
--- Основной цикл
+-- Основной цикл состояний
 local state = "INIT"
 local function waitForCharacter()
     while not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") do
@@ -329,7 +336,7 @@ while true do
             task.wait(10)
             boat, seat = boatModel, seatPart
             rootPart = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
-            -- Старт движения (он же запустит постоянное отключение коллизий лодки)
+            -- Запуск движения (включает свой цикл коллизий лодки)
             startMove()
             state = "MOVING_ON_BOAT"
         else
