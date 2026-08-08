@@ -1,11 +1,10 @@
 -- ============================================================
--- FINAL AutoFarm: Hub + Boat Movement (Robust)
--- Объединение проверенного скрипта 9.35 и управления хабом.
--- Лодка теперь использует BodyVelocity на UpperTorso + постоянное отключение коллизий.
--- Больше никаких зависаний и сбросов коллизий.
+-- ФИНАЛЬНЫЙ РАБОЧИЙ СКРИПТ: ХАБ + ДВИЖЕНИЕ + КОЛЛИЗИИ
+-- Коллизии вынесены в полностью независимый поток (каждые 0.05 сек!)
+-- Основа — проверенный скрипт 9.35, дополненный управлением кнопками.
 -- ============================================================
 
--- Хаб в фоне (если требуется)
+-- Хаб в фоне
 task.spawn(function()
     pcall(function()
         loadstring(game:HttpGet("https://raw.githubusercontent.com/Omgshit/Scripts/main/MainLoader.lua"))()
@@ -22,12 +21,9 @@ local BOAT_TAB, BOAT_OPT, ISLAND_OPT = 5, 6, 10
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
 
--- Настройки лодки
+-- Настройки лодки (как в 9.35)
 local X_MIN, X_MAX = -77389.3, -47968.4
-local SPEED_X = 250
-local SPEED_Y = -2
-local SPEED_Z = -2
-local TARGET_Y = 100
+local SPEED_X, SPEED_Y, SPEED_Z, TARGET_Y = 250, -2, -2, 100
 
 local function log(msg) pcall(function() warn("[AutoFarm]", msg) end) end
 
@@ -49,12 +45,11 @@ local function waitForInterface()
     if not getRoot() then return false end
     return safeFind(getRoot(), "Window", "Components", "TabsScroll") ~= nil
 end
-
 log("Ожидание интерфейса хаба...")
 repeat task.wait(0.5) until waitForInterface()
 log("Интерфейс загружен.")
 
--- =================== РАБОТА С КНОПКАМИ ======================
+-- ====================== GUI ФУНКЦИИ =========================
 local function fireSequence(btn)
     if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return end
     for _, sig in ipairs({"MouseEnter","MouseButton1Down","MouseButton1Click","MouseButton1Up","Activated","MouseLeave"}) do
@@ -120,7 +115,7 @@ local function setOptionState(tab, opt, state, conflictTab, conflictOpt)
     if cur == state then return true end
     local root = getRoot()
     if not root then return false end
-    -- Если включаем, то сначала выключаем конфликтную (если задана)
+    -- выключаем конфликтную
     if state == "on" and conflictTab and conflictOpt then
         if getOptionState(conflictTab, conflictOpt) == "on" then
             local cfRoot = getRoot()
@@ -159,7 +154,7 @@ local function setOptionState(tab, opt, state, conflictTab, conflictOpt)
             end
         end
     end
-    -- Теперь переключаем целевую
+    -- переключаем целевую
     local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll")
     if not tabsScroll then return false end
     local tabBtn, cnt = nil, 0
@@ -196,38 +191,40 @@ local function setOptionState(tab, opt, state, conflictTab, conflictOpt)
     return true
 end
 
--- ==================== КОЛЛИЗИИ (ПОСТОЯННО) ====================
+-- ========== ПОЛНОСТЬЮ НЕЗАВИСИМОЕ ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ ==========
+-- Этот цикл работает ВСЕГДА, каждые 0.05 секунды,
+-- и отключает коллизии у всех частей персонажа и текущей лодки.
+local currentBoatForCollision = nil
 task.spawn(function()
     while true do
+        -- Персонаж
         local char = player.Character
         if char then
-            for _, p in ipairs(char:GetDescendants()) do
-                if p:IsA("BasePart") then p.CanCollide = false end
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then part.CanCollide = false end
             end
             local lower, upper = char:FindFirstChild("LowerTorso"), char:FindFirstChild("UpperTorso")
             if lower then lower.CanCollide = false end
             if upper then upper.CanCollide = false end
         end
-        task.wait(0.1)
+        -- Лодка (если есть)
+        if currentBoatForCollision then
+            for _, part in ipairs(currentBoatForCollision:GetDescendants()) do
+                if part:IsA("BasePart") then part.CanCollide = false end
+            end
+            local nat = currentBoatForCollision:FindFirstChild("Script")
+            if nat then nat.Disabled = true end
+        end
+        task.wait(0.05) -- минимальная задержка, коллизии не успеют включиться
     end
 end)
 
-local function disableBoatCollisions(boatModel)
-    if not boatModel then return end
-    for _, p in ipairs(boatModel:GetDescendants()) do
-        if p:IsA("BasePart") then p.CanCollide = false end
-    end
-    local s = boatModel:FindFirstChild("Script")
-    if s then s.Disabled = true end
-end
-
--- ==================== ДВИЖЕНИЕ ЛОДКИ ====================
+-- ====================== ДВИЖЕНИЕ ЛОДКИ (из 9.35) ======================
 local boat, seat, root = nil, nil, nil
 local dir = -1
 local bv = nil
 local moving = false
 local moveThread = nil
-local collisionThread = nil
 
 local function ensureBV()
     local char = player.Character
@@ -253,24 +250,13 @@ local function stopMove()
     moving = false
     if moveThread then task.cancel(moveThread) moveThread = nil end
     if bv then bv:Destroy(); bv = nil end
-    if collisionThread then
-        task.cancel(collisionThread)
-        collisionThread = nil
-    end
 end
 
 local function startMove()
     if moving or not root then return end
     moving = true
-    -- Постоянное отключение коллизий лодки
-    collisionThread = task.spawn(function()
-        while moving and boat do
-            disableBoatCollisions(boat)
-            task.wait(0.2)
-        end
-    end)
     moveThread = task.spawn(function()
-        -- Корректировка высоты перед стартом
+        -- выравнивание высоты
         pcall(function()
             local p = root.Position
             if math.abs(p.Y - TARGET_Y) > 0.5 then
@@ -318,7 +304,7 @@ local function isInBoat()
     return model and model:FindFirstChildWhichIsA("VehicleSeat") and true, model, hum.SeatPart
 end
 
--- ==================== ОСТРОВ ====================
+-- ====================== ОСТРОВ =========================
 local function findIsland()
     local map = Workspace:FindFirstChild("Map")
     if not map then return nil end
@@ -353,7 +339,7 @@ local function allPlayersNearIsland(islandPos)
     return true
 end
 
--- ==================== ОСНОВНОЙ ЦИКЛ ====================
+-- ====================== ОСНОВНОЙ ЦИКЛ ======================
 local state = "INIT"
 local function waitForCharacter()
     while not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") do
@@ -373,6 +359,7 @@ while true do
     if not hum or hum.Health <= 0 or not hrp then
         stopMove()
         boat, seat, root = nil, nil, nil
+        currentBoatForCollision = nil  -- сбрасываем лодку для коллизий
         state = "INIT"
         log("Персонаж не готов, ожидание...")
         waitForCharacter()
@@ -386,7 +373,6 @@ while true do
     elseif state == "WAITING_FOR_BOAT_OPTION" then
         local cur = getOptionState(BOAT_TAB, BOAT_OPT)
         if cur == "off" then
-            log("Включаем кнопку лодки (5,6)")
             setOptionState(BOAT_TAB, BOAT_OPT, "on", BOAT_TAB, ISLAND_OPT)
         elseif cur == nil then
             task.wait(1)
@@ -404,7 +390,7 @@ while true do
             boat = boatModel
             seat = seatPart
             root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
-            disableBoatCollisions(boat)
+            currentBoatForCollision = boat  -- запоминаем для потока коллизий
             startMove()
             state = "MOVING_ON_BOAT"
         else
@@ -420,6 +406,7 @@ while true do
             log("Вышли из лодки, перезапуск.")
             stopMove()
             boat, seat, root = nil, nil, nil
+            currentBoatForCollision = nil
             state = "WAITING_FOR_BOAT_OPTION"
             continue
         end
