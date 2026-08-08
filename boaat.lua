@@ -1,27 +1,11 @@
--- Минимальный скрипт движения лодки с постоянным отключением коллизий.
+-- Минимальный скрипт движения лодки БЕЗ отключения коллизий.
 -- Садитесь в лодку – она поедет, при выходе остановится.
--- Коллизии персонажа и лодки отключаются непрерывно в фоне.
+-- Никаких CanCollide = false.
 
 local player = game.Players.LocalPlayer
 local X_MIN, X_MAX = -77389.3, -47968.4
 local SPEED_X, TARGET_Y = 250, 100
 local SPEED_Y, SPEED_Z = -2, -2
-
--- Отключаем коллизии персонажа постоянно
-task.spawn(function()
-    while true do
-        local char = player.Character
-        if char then
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") then part.CanCollide = false end
-            end
-            local lower, upper = char:FindFirstChild("LowerTorso"), char:FindFirstChild("UpperTorso")
-            if lower then lower.CanCollide = false end
-            if upper then upper.CanCollide = false end
-        end
-        task.wait(0.1)
-    end
-end)
 
 -- Переменные движения
 local boat, seat, root = nil, nil, nil
@@ -30,32 +14,10 @@ local bv = nil
 local moving = false
 local moveThread = nil
 
--- Поток отключения коллизий лодки (работает пока boat не nil)
-local function startBoatCollisionLoop()
-    local thread = task.spawn(function()
-        while boat do
-            for _, part in ipairs(boat:GetDescendants()) do
-                if part:IsA("BasePart") then part.CanCollide = false end
-            end
-            local nat = boat:FindFirstChild("Script")
-            if nat then nat.Disabled = true end
-            task.wait(0.1)
-        end
-    end)
-    return thread
-end
-
-local collisionThread = nil
-
-local function stopBoatCollisionLoop()
-    if collisionThread then task.cancel(collisionThread); collisionThread = nil end
-end
-
 local function stopMove()
     moving = false
     if moveThread then task.cancel(moveThread); moveThread = nil end
     if bv then bv:Destroy(); bv = nil end
-    stopBoatCollisionLoop()
 end
 
 local function ensureBV()
@@ -81,7 +43,6 @@ end
 local function startMove()
     if moving or not root then return end
     moving = true
-    collisionThread = startBoatCollisionLoop()
     moveThread = task.spawn(function()
         -- выравнивание высоты
         local p = root.Position
@@ -142,10 +103,9 @@ while true do
         boat = currentBoat
         seat = seatPart
         root = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
-        dir = -1 -- сброс направления
+        dir = -1
         startMove()
     elseif not moving and hum.SeatPart == seat then
-        -- если движение почему-то остановилось, но всё ещё сидим – перезапуск
         startMove()
     end
 end
