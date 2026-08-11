@@ -1,5 +1,11 @@
 -- ============================================================
--- AutoFarm Prehistoric Island + Boat Movement (Radius 2000)
+-- AutoFarm Prehistoric Island + Boat Movement (v2)
+-- Изменения:
+--   - Добавлена кнопка возврата в лодку TAB3=3, OPT3=1
+--   - При старте и при выпадении из лодки активируется 3,1
+--   - При возврате с острова включаются и 5,6, и 3,1
+--   - При посадке в лодку обе отключаются
+--   - Радиус острова 2000
 -- ============================================================
 
 -- 1. Хаб в фоне
@@ -15,13 +21,13 @@ local Workspace = game:GetService("Workspace")
 local player = Players.LocalPlayer
 
 -- Настройки
-local BOAT_TAB, BOAT_OPT, ISLAND_OPT = 5, 6, 10
+local BOAT_TAB, BOAT_OPT, ISLAND_OPT = 5, 6, 10   -- 5,6 и 5,10
+local RETURN_TAB, RETURN_OPT = 3, 1               -- новая кнопка возврата в лодку
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
 local X_MIN, X_MAX = -77389.3, -47968.4
 local SPEED_X, SPEED_Y, SPEED_Z, TARGET_Y = 250, -2, -2, 100
 
--- Логирование только строкой
 local function log(msg) pcall(function() warn("[AutoFarm] " .. msg) end) end
 
 -- Интерфейс
@@ -148,7 +154,7 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
     return true
 end
 
--- ====================== ДВИЖЕНИЕ ЛОДКИ (ЧИСТОЕ) ======================
+-- ====================== ДВИЖЕНИЕ ЛОДКИ ======================
 local boat, seat, rootPart = nil, nil, nil
 local dir = -1
 local bv = nil
@@ -242,7 +248,6 @@ local function getIslandPosition(island)
     else local part = island:FindFirstChildWhichIsA("BasePart") return part and part.Position end
 end
 
--- РАДИУС УВЕЛИЧЕН ДО 2000
 local function allPlayersNearIsland(islandPos)
     if not islandPos then return false end
     for _, plr in ipairs(Players:GetPlayers()) do
@@ -280,17 +285,26 @@ while true do
     if state == "INIT" then
         if not waitForInterface() then task.wait(0.5) continue end
         state = "WAITING_FOR_BOAT_OPTION"
+
     elseif state == "WAITING_FOR_BOAT_OPTION" then
-        local cur = getOptionState(BOAT_TAB, BOAT_OPT)
+        -- Теперь активируем кнопку возврата в лодку 3,1 вместо 5,6
+        local cur = getOptionState(RETURN_TAB, RETURN_OPT)
         if cur == "off" then
-            setOptionState(BOAT_TAB, BOAT_OPT, "on", BOAT_TAB, ISLAND_OPT)
-        elseif cur == nil then task.wait(1) continue end
-        state = "WAITING_FOR_BOARD_BOAT" task.wait(0.2)
+            setOptionState(RETURN_TAB, RETURN_OPT, "on", BOAT_TAB, ISLAND_OPT)
+        elseif cur == nil then
+            task.wait(1)
+            continue
+        end
+        state = "WAITING_FOR_BOARD_BOAT"
+        task.wait(0.2)
+
     elseif state == "WAITING_FOR_BOARD_BOAT" then
         local inBoat, boatModel, seatPart = isInBoat()
         if inBoat then
-            log("Сел в лодку. Выкл 5,6, жду 10с...")
+            log("Сел в лодку. Отключаем кнопки возврата и ждём 10с...")
+            -- Отключаем обе кнопки возврата
             setOptionState(BOAT_TAB, BOAT_OPT, "off")
+            setOptionState(RETURN_TAB, RETURN_OPT, "off")
             task.wait(10)
             boat, seat = boatModel, seatPart
             rootPart = boat.PrimaryPart or boat:FindFirstChildWhichIsA("BasePart")
@@ -299,8 +313,12 @@ while true do
             state = "MOVING_ON_BOAT"
         else
             task.wait(0.5)
-            if math.random(1,10) == 1 then setOptionState(BOAT_TAB, BOAT_OPT, "on", BOAT_TAB, ISLAND_OPT) end
+            -- Иногда повторно включаем кнопку возврата, если не сели
+            if math.random(1,10) == 1 then
+                setOptionState(RETURN_TAB, RETURN_OPT, "on", BOAT_TAB, ISLAND_OPT)
+            end
         end
+
     elseif state == "MOVING_ON_BOAT" then
         local inBoat, boatModel = isInBoat()
         if not inBoat or boatModel ~= boat then
@@ -314,12 +332,20 @@ while true do
             state = "GOING_TO_ISLAND"
         end
         task.wait(0.5)
+
     elseif state == "GOING_TO_ISLAND" then
+        -- Отключаем все кнопки перемещения (и 5,6 и 3,1), включаем остров
         setOptionState(BOAT_TAB, BOAT_OPT, "off")
-        setOptionState(BOAT_TAB, ISLAND_OPT, "on", BOAT_TAB, BOAT_OPT)
+        setOptionState(RETURN_TAB, RETURN_OPT, "off")
+        setOptionState(BOAT_TAB, ISLAND_OPT, "on", BOAT_TAB, BOAT_OPT)  -- конфликт с 5,6
         local islandObj = findIsland() if not islandObj then state = "WAITING_FOR_BOAT_OPTION" continue end
         local islandPos = getIslandPosition(islandObj) if not islandPos then state = "WAITING_FOR_BOAT_OPTION" continue end
-        if hrp and (hrp.Position - islandPos).Magnitude <= 2000 then state = "WAITING_ALL_NEAR" else task.wait(0.3) end
+        if hrp and (hrp.Position - islandPos).Magnitude <= 2000 then
+            state = "WAITING_ALL_NEAR"
+        else
+            task.wait(0.3)
+        end
+
     elseif state == "WAITING_ALL_NEAR" then
         local island = findIsland()
         if not island then
@@ -334,11 +360,15 @@ while true do
         else
             task.wait(1)
         end
+
     elseif state == "RETURN_TO_BOAT" then
+        -- Отключаем остров, включаем обе кнопки возврата (5,6 и 3,1)
         setOptionState(BOAT_TAB, ISLAND_OPT, "off")
         setOptionState(BOAT_TAB, BOAT_OPT, "on", BOAT_TAB, ISLAND_OPT)
+        setOptionState(RETURN_TAB, RETURN_OPT, "on", BOAT_TAB, ISLAND_OPT)
         state = "WAITING_FOR_BOARD_BOAT"
         task.wait(0.2)
     end
+
     task.wait(0.1)
 end
