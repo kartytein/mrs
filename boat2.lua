@@ -1,7 +1,9 @@
 -- ============================================================
--- AutoFarm Prehistoric Island + Boat Movement (v2)
+-- AutoFarm Prehistoric Island + Boat Movement (v2 + Anti-AFK)
 -- Изменения:
---   - Добавлена кнопка возврата в лодку TAB3=3, OPT3=1
+--   - Добавлена анти-АФК система: вращение камеры каждые 5 мин,
+--     имитация нажатия W каждые 10 мин.
+--   - Кнопка возврата в лодку TAB3=3, OPT3=1
 --   - При старте и при выпадении из лодки активируется 3,1
 --   - При возврате с острова включаются и 5,6, и 3,1
 --   - При посадке в лодку обе отключаются
@@ -29,6 +31,36 @@ local X_MIN, X_MAX = -77389.3, -47968.4
 local SPEED_X, SPEED_Y, SPEED_Z, TARGET_Y = 250, -2, -2, 100
 
 local function log(msg) pcall(function() warn("[AutoFarm] " .. msg) end) end
+
+-- ====================== АНТИ-АФК ======================
+-- Вращение камеры каждые 5 минут
+task.spawn(function()
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+    local orig = cam.CFrame
+    while true do
+        task.wait(300) -- 5 минут
+        if cam then
+            cam.CFrame = cam.CFrame * CFrame.Angles(0, math.rad(1), 0)
+            task.wait(0.5)
+            cam.CFrame = orig
+        end
+    end
+end)
+
+-- Имитация нажатия W каждые 10 минут
+task.spawn(function()
+    local vim = game:GetService("VirtualInputManager")
+    if not vim then return end
+    while true do
+        task.wait(600) -- 10 минут
+        pcall(function()
+            vim:SendKeyEvent(true, "W", false, game)
+            task.wait(0.1)
+            vim:SendKeyEvent(false, "W", false, game)
+        end)
+    end
+end)
 
 -- Интерфейс
 local function getRoot()
@@ -287,7 +319,7 @@ while true do
         state = "WAITING_FOR_BOAT_OPTION"
 
     elseif state == "WAITING_FOR_BOAT_OPTION" then
-        -- Теперь активируем кнопку возврата в лодку 3,1 вместо 5,6
+        -- Активируем кнопку возврата в лодку 3,1
         local cur = getOptionState(RETURN_TAB, RETURN_OPT)
         if cur == "off" then
             setOptionState(RETURN_TAB, RETURN_OPT, "on", BOAT_TAB, ISLAND_OPT)
@@ -302,7 +334,6 @@ while true do
         local inBoat, boatModel, seatPart = isInBoat()
         if inBoat then
             log("Сел в лодку. Отключаем кнопки возврата и ждём 10с...")
-            -- Отключаем обе кнопки возврата
             setOptionState(BOAT_TAB, BOAT_OPT, "off")
             setOptionState(RETURN_TAB, RETURN_OPT, "off")
             task.wait(10)
@@ -313,7 +344,6 @@ while true do
             state = "MOVING_ON_BOAT"
         else
             task.wait(0.5)
-            -- Иногда повторно включаем кнопку возврата, если не сели
             if math.random(1,10) == 1 then
                 setOptionState(RETURN_TAB, RETURN_OPT, "on", BOAT_TAB, ISLAND_OPT)
             end
@@ -334,10 +364,10 @@ while true do
         task.wait(0.5)
 
     elseif state == "GOING_TO_ISLAND" then
-        -- Отключаем все кнопки перемещения (и 5,6 и 3,1), включаем остров
+        -- Отключаем все кнопки перемещения, включаем остров
         setOptionState(BOAT_TAB, BOAT_OPT, "off")
         setOptionState(RETURN_TAB, RETURN_OPT, "off")
-        setOptionState(BOAT_TAB, ISLAND_OPT, "on", BOAT_TAB, BOAT_OPT)  -- конфликт с 5,6
+        setOptionState(BOAT_TAB, ISLAND_OPT, "on", BOAT_TAB, BOAT_OPT)
         local islandObj = findIsland() if not islandObj then state = "WAITING_FOR_BOAT_OPTION" continue end
         local islandPos = getIslandPosition(islandObj) if not islandPos then state = "WAITING_FOR_BOAT_OPTION" continue end
         if hrp and (hrp.Position - islandPos).Magnitude <= 2000 then
@@ -362,7 +392,7 @@ while true do
         end
 
     elseif state == "RETURN_TO_BOAT" then
-        -- Отключаем остров, включаем обе кнопки возврата (5,6 и 3,1)
+        -- Отключаем остров, включаем обе кнопки возврата
         setOptionState(BOAT_TAB, ISLAND_OPT, "off")
         setOptionState(BOAT_TAB, BOAT_OPT, "on", BOAT_TAB, ISLAND_OPT)
         setOptionState(RETURN_TAB, RETURN_OPT, "on", BOAT_TAB, ISLAND_OPT)
