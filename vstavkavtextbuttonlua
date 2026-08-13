@@ -1,0 +1,160 @@
+-- ============================================================
+-- Вставка "!" в TextBox опции 2 вкладки 17 (усовершенствованный)
+-- Запускать при уже загруженном хабе.
+-- ============================================================
+
+local TAB = 17
+local OPT = 2
+local TEXT_TO_INSERT = "!"
+
+local CoreGui = game:GetService("CoreGui")
+
+local function getRoot()
+    for _, child in ipairs(CoreGui:GetChildren()) do
+        local obj = child:FindFirstChild("redz-library-v5")
+        if obj then return obj end
+    end
+    return nil
+end
+
+local function safeFind(obj, ...)
+    for _, name in ipairs({...}) do
+        if not obj then return nil end
+        obj = obj:FindFirstChild(name)
+    end
+    return obj
+end
+
+-- Эмуляция клика по кнопке (для вкладки)
+local function fireSequence(btn)
+    if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return end
+    for _, sig in ipairs({"MouseEnter","MouseButton1Down","MouseButton1Click","MouseButton1Up","Activated","MouseLeave"}) do
+        local event = btn[sig]
+        if event then
+            for _, conn in ipairs(getconnections(event) or {}) do
+                if conn.Enabled then pcall(conn.Function) end
+            end
+        end
+    end
+end
+
+-- Рекурсивный поиск первого TextBox
+local function findTextBox(parent)
+    for _, child in ipairs(parent:GetChildren()) do
+        if child:IsA("TextBox") then
+            return child
+        end
+        local found = findTextBox(child)
+        if found then return found end
+    end
+    return nil
+end
+
+local root = getRoot()
+if not root then
+    warn("Интерфейс не найден. Загрузите хаб.")
+    return
+end
+
+-- Переключаем на вкладку
+local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll")
+if not tabsScroll then
+    warn("TabsScroll не найден")
+    return
+end
+
+local tabButton, tabCount = nil, 0
+local function findTab(p)
+    if tabButton then return end
+    for _, c in ipairs(p:GetChildren()) do
+        if c:IsA("TextButton") or c:IsA("ImageButton") then
+            tabCount += 1
+            if tabCount == TAB then tabButton = c return end
+        end
+        findTab(c)
+    end
+end
+findTab(tabsScroll)
+if not tabButton then
+    warn("Вкладка " .. TAB .. " не найдена")
+    return
+end
+
+print("Переключаем вкладку " .. TAB .. "...")
+fireSequence(tabButton)
+task.wait(0.5)  -- увеличенная пауза
+
+-- Контейнер опций
+local container = safeFind(root, "Window", "Components", "Containers", "Container")
+if not container then
+    warn("Container не найден")
+    return
+end
+
+-- Находим опцию 2 среди видимых
+local optionBtn, optCount = nil, 0
+for _, c in ipairs(container:GetChildren()) do
+    if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
+        optCount += 1
+        if optCount == OPT then
+            optionBtn = c
+            break
+        end
+    end
+end
+
+if not optionBtn then
+    warn("Опция " .. OPT .. " не найдена")
+    return
+end
+
+print("Опция найдена: " .. optionBtn.Name .. " (" .. optionBtn.ClassName .. ")")
+
+-- Ищем TextBox
+local textBox = findTextBox(optionBtn)
+if not textBox then
+    warn("TextBox не найден внутри опции")
+    return
+end
+
+print("TextBox найден: " .. textBox.Name)
+
+-- Пытаемся вставить текст разными способами
+-- Способ 1: установка свойства
+textBox.Text = TEXT_TO_INSERT
+task.wait(0.1)
+print("После установки Text: '" .. textBox.Text .. "'")
+
+-- Способ 2: фокусировка и снятие
+pcall(function()
+    textBox:CaptureFocus()
+    task.wait(0.2)
+    textBox:ReleaseFocus()
+end)
+
+-- Способ 3: эмуляция клика по TextBox (если он кликабельный)
+-- TextBox может реагировать на MouseButton1Click, но у него нет такого сигнала?
+-- Попробуем через VirtualInputManager
+local vim = game:GetService("VirtualInputManager")
+if vim then
+    -- Клик по позиции TextBox (середина)
+    local absPos = textBox.AbsolutePosition
+    local absSize = textBox.AbsoluteSize
+    vim:SendMouseButtonEvent(absPos.X + absSize.X/2, absPos.Y + absSize.Y/2, 0, true, nil, 0)
+    task.wait(0.05)
+    vim:SendMouseButtonEvent(absPos.X + absSize.X/2, absPos.Y + absSize.Y/2, 0, false, nil, 0)
+    task.wait(0.1)
+    -- Теперь можно ввести текст через клавиатуру? Сложно для символа "!".
+    -- Проще снова установить Text
+    textBox.Text = TEXT_TO_INSERT
+end
+
+task.wait(0.3)
+print("Финальный текст в TextBox: '" .. textBox.Text .. "'")
+
+if textBox.Text == TEXT_TO_INSERT then
+    print("Успех: текст вставлен")
+else
+    print("Не удалось вставить текст автоматически.")
+    print("Попробуйте вручную кликнуть по полю и ввести символ.")
+end
