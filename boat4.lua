@@ -1,4 +1,4 @@
-
+local MODE = 2 -- ИЗМЕНИТЕ ЭТО ЗНАЧЕНИЕ ПЕРЕД ЗАПУСКОМ (1-6)
 local teleportService = game:GetService("TeleportService")
 local players = game:GetService("Players")
 local logService = game:GetService("LogService")
