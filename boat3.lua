@@ -1,6 +1,5 @@
--- ===== ТРЕКЕР ТЕЛЕПОРТАЦИЙ ДЛЯ ВЫЯВЛЕНИЯ МЕТОДА ХАБА =====
--- Запускать в Delta Executor (или аналоге) перед использованием хаба.
--- Все данные пишутся в файл teleport_tracker.txt построчно.
+-- ===== ТРЕКЕР ТЕЛЕПОРТАЦИЙ (ИСПРАВЛЕННАЯ ВЕРСИЯ) =====
+-- Исправлено: заменены несуществующие свойства Teleporting/Teleported на событие OnTeleport.
 
 local teleportService = game:GetService("TeleportService")
 local players = game:GetService("Players")
@@ -11,11 +10,9 @@ local runService = game:GetService("RunService")
 local function log(msg)
     local timestamp = os.date("%Y-%m-%d %H:%M:%S")
     local line = "[" .. timestamp .. "] " .. msg .. "\n"
-    -- Используем appendfile, если доступен, иначе writefile (перезапишет)
     if appendfile then
         appendfile("teleport_tracker.txt", line)
     else
-        -- Если appendfile нет, читаем старое содержимое и перезаписываем
         local old = (readfile and readfile("teleport_tracker.txt")) or ""
         writefile("teleport_tracker.txt", old .. line)
     end
@@ -31,7 +28,6 @@ local teleportMethods = {"Teleport", "TeleportToPlaceInstance", "TeleportToPriva
 for _, methodName in ipairs(teleportMethods) do
     local original = teleportService[methodName]
     if type(original) == "function" then
-        -- Перехватываем через hookfunction (доступно в большинстве эксплоитов)
         local hooked
         hooked = hookfunction(original, function(...)
             local args = {...}
@@ -56,14 +52,10 @@ for _, methodName in ipairs(teleportMethods) do
 end
 
 -- ========== ПЕРЕХВАТ REMOTEEVENT / REMOTEFUNCTION ==========
--- Перехватываем FireServer, InvokeServer (клиент -> сервер)
 local remoteEventMT = getrawmetatable(game:GetService("RemoteEvent"))
 local remoteFuncMT = getrawmetatable(game:GetService("RemoteFunction"))
 
 if remoteEventMT then
-    local fireServer = rawget(remoteEventMT, "__namecall") or rawget(remoteEventMT, "FireServer")
-    -- Более надёжно: перехватываем через hookfunction на __namecall, если это возможно
-    -- Но для простоты пробуем перехватить FireServer напрямую, если он есть в метатаблице
     local origFireServer = rawget(remoteEventMT, "FireServer")
     if type(origFireServer) == "function" then
         local hookedFire = hookfunction(origFireServer, function(self, ...)
@@ -97,23 +89,20 @@ if remoteFuncMT then
     end
 end
 
--- Перехват FireClient/InvokeClient (сервер -> клиент) тоже возможно, но менее важно.
--- Можно добавить, если нужно.
-
--- ========== ОТСЛЕЖИВАНИЕ СВОЙСТВ ИГРОКА ==========
+-- ========== ОТСЛЕЖИВАНИЕ СОБЫТИЙ ТЕЛЕПОРТАЦИИ ИГРОКА ==========
 local player = players.LocalPlayer
 if player then
-    local teleportingConn
-    teleportingConn = player:GetPropertyChangedSignal("Teleporting"):Connect(function()
-        log("Свойство player.Teleporting изменилось: " .. tostring(player.Teleporting))
+    -- Используем событие OnTeleport (клиентское), а не несуществующие свойства
+    player.OnTeleport:Connect(function(teleportData)
+        log("Событие player.OnTeleport: тип = " .. tostring(teleportData.TeleportType) .. ", место = " .. tostring(teleportData.PlaceId))
+        if teleportData.JobId then
+            log("  JobId из события: " .. tostring(teleportData.JobId))
+        end
+        if teleportData.PrivateServer then
+            log("  PrivateServer из события: " .. tostring(teleportData.PrivateServer))
+        end
     end)
-    log("Отслеживание player.Teleporting установлено")
-
-    local teleportedConn
-    teleportedConn = player:GetPropertyChangedSignal("Teleported"):Connect(function()
-        log("Свойство player.Teleported изменилось: " .. tostring(player.Teleported))
-    end)
-    log("Отслеживание player.Teleported установлено")
+    log("Отслеживание player.OnTeleport установлено")
 else
     log("Локальный игрок не найден")
 end
@@ -127,7 +116,6 @@ end)
 log("Отслеживание LogService.MessageOut включено")
 
 -- ========== ПЕРЕХВАТ ИЗМЕНЕНИЯ JOBID ЧЕРЕЗ МЕТАТАБЛИЦУ ==========
--- Иногда хабы меняют jobId в TeleportService или в DataModel
 local teleportMT = getrawmetatable(teleportService)
 if teleportMT then
     local oldIndex = rawget(teleportMT, "__index")
@@ -156,7 +144,6 @@ if teleportMT then
 end
 
 -- ========== ДОПОЛНИТЕЛЬНО: ОТСЛЕЖИВАНИЕ НОВЫХ ИНСТАНСОВ ==========
--- Может хаб создаёт RemoteEvent для телепортации
 local function onDescendantAdded(descendant)
     if descendant:IsA("RemoteEvent") or descendant:IsA("RemoteFunction") then
         log("Создан новый инстанс: " .. descendant.ClassName .. " " .. tostring(descendant))
@@ -164,9 +151,6 @@ local function onDescendantAdded(descendant)
 end
 game.DescendantAdded:Connect(onDescendantAdded)
 log("Отслеживание новых RemoteEvent/RemoteFunction включено")
-
--- ========== ПЕРЕХВАТ GETSERVICE (если хаб получает TeleportService) ==========
--- Можно перехватить game.GetService, но не обязательно
 
 -- ========== БЕСКОНЕЧНЫЙ ЦИКЛ ОЖИДАНИЯ ==========
 log("Трекер активен. Используйте хаб для телепортации.")
