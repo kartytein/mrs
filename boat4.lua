@@ -1,12 +1,14 @@
--- ===== ТРЕКЕР ТЕЛЕПОРТАЦИЙ (ИСПРАВЛЕННАЯ ВЕРСИЯ) =====
--- Исправлено: заменены несуществующие свойства Teleporting/Teleported на событие OnTeleport.
+-- ===== ТРЕКЕР ТЕЛЕПОРТАЦИЙ (ИСПРАВЛЕННЫЙ ДЛЯ ПЕРЕХВАТА REMOTE) =====
+-- Теперь перехватываем FireServer/InvokeServer на конкретных RemoteEvent/RemoteFunction,
+-- а также автоматически вешаем хуки на новые создаваемые объекты.
+-- Исправлена ошибка с TeleportType -> используется TeleportState.
 
 local teleportService = game:GetService("TeleportService")
 local players = game:GetService("Players")
 local logService = game:GetService("LogService")
 local runService = game:GetService("RunService")
 
--- Функция логирования: добавляет строку в файл
+-- Функция логирования
 local function log(msg)
     local timestamp = os.date("%Y-%m-%d %H:%M:%S")
     local line = "[" .. timestamp .. "] " .. msg .. "\n"
@@ -22,14 +24,18 @@ end
 writefile("teleport_tracker.txt", "=== Teleport Tracker Started ===\n")
 log("Трекер запущен. Ожидание телепортации...")
 
+-- Флаг для предотвращения рекурсии
+local isLogging = false
+
 -- ========== ПЕРЕХВАТ МЕТОДОВ TELEPORTSERVICE ==========
 local teleportMethods = {"Teleport", "TeleportToPlaceInstance", "TeleportToPrivateServer", "TeleportPartyAsync"}
 
 for _, methodName in ipairs(teleportMethods) do
     local original = teleportService[methodName]
     if type(original) == "function" then
-        local hooked
-        hooked = hookfunction(original, function(...)
+        hookfunction(original, function(...)
+            if isLogging then return original(...) end
+            isLogging = true
             local args = {...}
             local argStr = ""
             for i, v in ipairs(args) do
@@ -42,118 +48,97 @@ for _, methodName in ipairs(teleportMethods) do
                     argStr = argStr .. tostring(v)
                 end
             end
-            log("TeleportService." .. methodName .. " вызван с аргументами: " .. argStr)
-            return hooked(...)
+            log("TeleportService." .. methodName .. " вызван: " .. argStr)
+            isLogging = false
+            return original(...)
         end)
         log("Хук установлен на TeleportService." .. methodName)
-    else
-        log("Не удалось найти метод TeleportService." .. methodName)
     end
 end
 
--- ========== ПЕРЕХВАТ REMOTEEVENT / REMOTEFUNCTION ==========
-local remoteEventMT = getrawmetatable(game:GetService("RemoteEvent"))
-local remoteFuncMT = getrawmetatable(game:GetService("RemoteFunction"))
-
-if remoteEventMT then
-    local origFireServer = rawget(remoteEventMT, "FireServer")
-    if type(origFireServer) == "function" then
-        local hookedFire = hookfunction(origFireServer, function(self, ...)
-            local args = {...}
-            local argStr = ""
-            for i, v in ipairs(args) do
-                if i > 1 then argStr = argStr .. ", " end
-                argStr = argStr .. tostring(v)
-            end
-            log("RemoteEvent.FireServer: " .. tostring(self) .. " -> " .. argStr)
-            return hookedFire(self, ...)
-        end)
-        log("Хук установлен на RemoteEvent.FireServer")
+-- ========== ФУНКЦИЯ ПЕРЕХВАТА REMOTE ДЛЯ ОДНОГО ОБЪЕКТА ==========
+local function hookRemoteObject(remote)
+    if remote:IsA("RemoteEvent") then
+        local fireServer = remote.FireServer
+        if type(fireServer) == "function" then
+            hookfunction(fireServer, function(self, ...)
+                if isLogging then return fireServer(self, ...) end
+                isLogging = true
+                local args = {...}
+                local argStr = ""
+                for i, v in ipairs(args) do
+                    if i > 1 then argStr = argStr .. ", " end
+                    argStr = argStr .. tostring(v)
+                end
+                log("RemoteEvent.FireServer: " .. tostring(remote) .. " -> " .. argStr)
+                isLogging = false
+                return fireServer(self, ...)
+            end)
+            log("Хук установлен на RemoteEvent: " .. tostring(remote))
+        end
+    elseif remote:IsA("RemoteFunction") then
+        local invokeServer = remote.InvokeServer
+        if type(invokeServer) == "function" then
+            hookfunction(invokeServer, function(self, ...)
+                if isLogging then return invokeServer(self, ...) end
+                isLogging = true
+                local args = {...}
+                local argStr = ""
+                for i, v in ipairs(args) do
+                    if i > 1 then argStr = argStr .. ", " end
+                    argStr = argStr .. tostring(v)
+                end
+                log("RemoteFunction.InvokeServer: " .. tostring(remote) .. " -> " .. argStr)
+                isLogging = false
+                return invokeServer(self, ...)
+            end)
+            log("Хук установлен на RemoteFunction: " .. tostring(remote))
+        end
     end
 end
 
-if remoteFuncMT then
-    local invokeServer = rawget(remoteFuncMT, "InvokeServer")
-    if type(invokeServer) == "function" then
-        local hookedInvoke = hookfunction(invokeServer, function(self, ...)
-            local args = {...}
-            local argStr = ""
-            for i, v in ipairs(args) do
-                if i > 1 then argStr = argStr .. ", " end
-                argStr = argStr .. tostring(v)
-            end
-            log("RemoteFunction.InvokeServer: " .. tostring(self) .. " -> " .. argStr)
-            return hookedInvoke(self, ...)
-        end)
-        log("Хук установлен на RemoteFunction.InvokeServer")
+-- Перехватываем все существующие RemoteEvent/RemoteFunction
+for _, descendant in ipairs(game:GetDescendants()) do
+    if descendant:IsA("RemoteEvent") or descendant:IsA("RemoteFunction") then
+        hookRemoteObject(descendant)
     end
 end
+
+-- Перехватываем новые RemoteEvent/RemoteFunction при их создании
+game.DescendantAdded:Connect(function(descendant)
+    if descendant:IsA("RemoteEvent") or descendant:IsA("RemoteFunction") then
+        log("Создан новый инстанс: " .. descendant.ClassName .. " " .. tostring(descendant))
+        hookRemoteObject(descendant)
+    end
+end)
 
 -- ========== ОТСЛЕЖИВАНИЕ СОБЫТИЙ ТЕЛЕПОРТАЦИИ ИГРОКА ==========
 local player = players.LocalPlayer
 if player then
-    -- Используем событие OnTeleport (клиентское), а не несуществующие свойства
     player.OnTeleport:Connect(function(teleportData)
-        log("Событие player.OnTeleport: тип = " .. tostring(teleportData.TeleportType) .. ", место = " .. tostring(teleportData.PlaceId))
+        log("player.OnTeleport: ")
+        log("  PlaceId: " .. tostring(teleportData.PlaceId))
+        log("  TeleportState: " .. tostring(teleportData.TeleportState))
         if teleportData.JobId then
-            log("  JobId из события: " .. tostring(teleportData.JobId))
+            log("  JobId: " .. tostring(teleportData.JobId))
         end
         if teleportData.PrivateServer then
-            log("  PrivateServer из события: " .. tostring(teleportData.PrivateServer))
+            log("  PrivateServer: " .. tostring(teleportData.PrivateServer))
         end
     end)
     log("Отслеживание player.OnTeleport установлено")
-else
-    log("Локальный игрок не найден")
 end
 
 -- ========== ОТСЛЕЖИВАНИЕ СООБЩЕНИЙ LOGSERVICE ==========
 logService.MessageOut:Connect(function(message, messageType)
     if string.find(string.lower(message), "teleport") or string.find(string.lower(message), "jobid") then
-        log("LogService сообщение: [" .. tostring(messageType) .. "] " .. message)
+        log("LogService: [" .. tostring(messageType) .. "] " .. message)
     end
 end)
 log("Отслеживание LogService.MessageOut включено")
 
--- ========== ПЕРЕХВАТ ИЗМЕНЕНИЯ JOBID ЧЕРЕЗ МЕТАТАБЛИЦУ ==========
-local teleportMT = getrawmetatable(teleportService)
-if teleportMT then
-    local oldIndex = rawget(teleportMT, "__index")
-    local oldNewIndex = rawget(teleportMT, "__newindex")
-    
-    if type(oldIndex) == "function" then
-        local newIndex = hookfunction(oldIndex, function(self, key)
-            local result = newIndex(self, key)
-            if key == "JobId" or key == "jobId" then
-                log("TeleportService.__index вызван для ключа: " .. tostring(key) .. " -> " .. tostring(result))
-            end
-            return result
-        end)
-        log("Хук установлен на TeleportService.__index")
-    end
-    
-    if type(oldNewIndex) == "function" then
-        local newNewIndex = hookfunction(oldNewIndex, function(self, key, value)
-            if key == "JobId" or key == "jobId" then
-                log("TeleportService.__newindex: попытка установить " .. tostring(key) .. " = " .. tostring(value))
-            end
-            return newNewIndex(self, key, value)
-        end)
-        log("Хук установлен на TeleportService.__newindex")
-    end
-end
-
--- ========== ДОПОЛНИТЕЛЬНО: ОТСЛЕЖИВАНИЕ НОВЫХ ИНСТАНСОВ ==========
-local function onDescendantAdded(descendant)
-    if descendant:IsA("RemoteEvent") or descendant:IsA("RemoteFunction") then
-        log("Создан новый инстанс: " .. descendant.ClassName .. " " .. tostring(descendant))
-    end
-end
-game.DescendantAdded:Connect(onDescendantAdded)
-log("Отслеживание новых RemoteEvent/RemoteFunction включено")
-
--- ========== БЕСКОНЕЧНЫЙ ЦИКЛ ОЖИДАНИЯ ==========
+-- ========== НЕБЛОКИРУЮЩИЙ ЦИКЛ ОЖИДАНИЯ ==========
 log("Трекер активен. Используйте хаб для телепортации.")
 while true do
-    runService.Heartbeat:Wait()
+    task.wait(1)
 end
