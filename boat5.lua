@@ -1,104 +1,148 @@
--- ============================================================
---  УГЛУБЛЁННАЯ ДИАГНОСТИКА: ИЩЕМ ИНДИКАТОР СОСТОЯНИЯ (ВКЛ/ВЫКЛ)
---  Сравнивает все свойства Holder и дочерних элементов.
---  Также проверяет атрибуты и скрытые различия.
---  Запустите для включённого и выключенного состояния, сравните вывод.
--- ============================================================
+-- ===== УЛУЧШЕННЫЙ ТРЕКЕР ТЕЛЕПОРТАЦИЙ (без зависаний) =====
+-- Использует безопасные хуки через __namecall, защиту от рекурсии и не блокирует хаб.
 
-local TAB_INDEX = 1      -- Номер вкладки
-local OPTION_INDEX = 6   -- Номер Option
+local teleportService = game:GetService("TeleportService")
+local players = game:GetService("Players")
+local logService = game:GetService("LogService")
+local runService = game:GetService("RunService")
 
-local coreGui = game:GetService("CoreGui")
-
--- Поиск корня
-local root
-for _, child in ipairs(coreGui:GetChildren()) do
-    root = child:FindFirstChild("redz-library-v5")
-    if root then break end
+-- Функция логирования: добавляет строку в файл
+local function log(msg)
+    local timestamp = os.date("%Y-%m-%d %H:%M:%S")
+    local line = "[" .. timestamp .. "] " .. msg .. "\n"
+    if appendfile then
+        appendfile("teleport_tracker.txt", line)
+    else
+        local old = (readfile and readfile("teleport_tracker.txt")) or ""
+        writefile("teleport_tracker.txt", old .. line)
+    end
 end
-if not root then print("[Ошибка] redz-library-v5 не найден") return end
 
--- Получаем контейнер
-local container = root:FindFirstChild("Window")
-container = container and container:FindFirstChild("Components")
-container = container and container:FindFirstChild("Containers")
-container = container and container:FindFirstChild("Container")
-if not container then print("[Ошибка] Container не найден") return end
+-- Инициализация файла
+writefile("teleport_tracker.txt", "=== Teleport Tracker Started ===\n")
+log("Трекер запущен. Ожидание телепортации...")
 
--- Ищем нужную Option (только видимые)
-local optionBtn
-local idx = 0
-for _, child in ipairs(container:GetChildren()) do
-    if child.Name == "Option" and child.Visible and (child:IsA("TextButton") or child:IsA("ImageButton")) then
-        idx = idx + 1
-        if idx == OPTION_INDEX then
-            optionBtn = child
-            break
+-- Флаг для предотвращения рекурсии при логировании
+local isLogging = false
+
+-- ========== ПЕРЕХВАТ МЕТОДОВ TELEPORTSERVICE ==========
+local teleportMethods = {"Teleport", "TeleportToPlaceInstance", "TeleportToPrivateServer", "TeleportPartyAsync"}
+
+for _, methodName in ipairs(teleportMethods) do
+    local original = teleportService[methodName]
+    if type(original) == "function" then
+        hookfunction(original, function(...)
+            if isLogging then return original(...) end
+            isLogging = true
+            local args = {...}
+            local argStr = ""
+            for i, v in ipairs(args) do
+                if i > 1 then argStr = argStr .. ", " end
+                if typeof(v) == "Instance" then
+                    argStr = argStr .. tostring(v) .. " [" .. v.ClassName .. "]"
+                elseif typeof(v) == "table" then
+                    argStr = argStr .. "table:" .. tostring(v)
+                else
+                    argStr = argStr .. tostring(v)
+                end
+            end
+            log("TeleportService." .. methodName .. " вызван: " .. argStr)
+            isLogging = false
+            return original(...)
+        end)
+        log("Хук установлен на TeleportService." .. methodName)
+    end
+end
+
+-- ========== ПЕРЕХВАТ REMOTEEVENT / REMOTEFUNCTION через __namecall ==========
+-- Функция для перехвата вызовов FireServer / InvokeServer
+local function hookRemoteMethods()
+    local remoteEventMT = getrawmetatable(game:GetService("RemoteEvent"))
+    local remoteFuncMT = getrawmetatable(game:GetService("RemoteFunction"))
+
+    if remoteEventMT then
+        local oldNamecall = rawget(remoteEventMT, "__namecall")
+        if type(oldNamecall) == "function" then
+            hookfunction(oldNamecall, function(self, ...)
+                local method = getnamecallmethod()
+                if method == "FireServer" then
+                    if isLogging then return oldNamecall(self, ...) end
+                    isLogging = true
+                    local args = {...}
+                    local argStr = ""
+                    for i, v in ipairs(args) do
+                        if i > 1 then argStr = argStr .. ", " end
+                        argStr = argStr .. tostring(v)
+                    end
+                    log("RemoteEvent.FireServer: " .. tostring(self) .. " -> " .. argStr)
+                    isLogging = false
+                end
+                return oldNamecall(self, ...)
+            end)
+            log("Хук установлен на RemoteEvent.__namecall (FireServer)")
+        end
+    end
+
+    if remoteFuncMT then
+        local oldNamecall = rawget(remoteFuncMT, "__namecall")
+        if type(oldNamecall) == "function" then
+            hookfunction(oldNamecall, function(self, ...)
+                local method = getnamecallmethod()
+                if method == "InvokeServer" then
+                    if isLogging then return oldNamecall(self, ...) end
+                    isLogging = true
+                    local args = {...}
+                    local argStr = ""
+                    for i, v in ipairs(args) do
+                        if i > 1 then argStr = argStr .. ", " end
+                        argStr = argStr .. tostring(v)
+                    end
+                    log("RemoteFunction.InvokeServer: " .. tostring(self) .. " -> " .. argStr)
+                    isLogging = false
+                end
+                return oldNamecall(self, ...)
+            end)
+            log("Хук установлен на RemoteFunction.__namecall (InvokeServer)")
         end
     end
 end
 
-if not optionBtn then print("[Ошибка] Option #" .. OPTION_INDEX .. " не найдена") return end
+hookRemoteMethods()
 
-print("=== ГЛУБОКАЯ ДИАГНОСТИКА КНОПКИ ===")
-print("Путь: " .. optionBtn:GetFullName())
-
--- 1. Основные свойства кнопки
-print("--- Основные свойства ---")
-print("Text: '" .. (optionBtn:IsA("TextButton") and optionBtn.Text or "") .. "'")
-print("TextColor3: " .. tostring(optionBtn.TextColor3))
-print("TextTransparency: " .. optionBtn.TextTransparency)
-print("BackgroundColor3: " .. tostring(optionBtn.BackgroundColor3))
-print("BackgroundTransparency: " .. optionBtn.BackgroundTransparency)
-print("BorderColor3: " .. tostring(optionBtn.BorderColor3))
-print("BorderSizePixel: " .. optionBtn.BorderSizePixel)
-print("Active: " .. tostring(optionBtn.Active))
-print("AutoButtonColor: " .. tostring(optionBtn.AutoButtonColor))
-
--- 2. Атрибуты
-print("--- Атрибуты ---")
-local attrs = optionBtn:GetAttributes()
-if attrs then
-    for k, v in pairs(attrs) do
-        print("  " .. tostring(k) .. " = " .. tostring(v))
-    end
-else
-    print("  нет")
-end
-
--- 3. Глубокая проверка всех дочерних элементов (включая Holder)
-print("--- Дочерние элементы ---")
-local function printDeep(parent, indent)
-    local children = parent:GetChildren()
-    for i = 1, #children do
-        local child = children[i]
-        local prefix = string.rep("  ", indent) .. "- " .. child.Name .. " (" .. child.ClassName .. ")"
-        local extra = ""
-        if child:IsA("Frame") or child:IsA("ScrollingFrame") then
-            extra = " BG: " .. tostring(child.BackgroundColor3)
-                .. " BGTrans: " .. child.BackgroundTransparency
-                .. " Visible: " .. tostring(child.Visible)
-        elseif child:IsA("TextLabel") then
-            extra = " Text: '" .. child.Text .. "'"
-                .. " TextColor3: " .. tostring(child.TextColor3)
-                .. " Visible: " .. tostring(child.Visible)
-        elseif child:IsA("ImageLabel") then
-            extra = " Image: " .. child.Image
-                .. " ImageTrans: " .. child.ImageTransparency
-                .. " Visible: " .. tostring(child.Visible)
-        elseif child:IsA("UIAnchor") then
-            extra = " (якорь)"
-        elseif child:IsA("UIInner") then  -- возможно кастомный класс
-            extra = " (UIInner)"
-        else
-            extra = " Visible: " .. tostring(child.Visible)
+-- ========== ОТСЛЕЖИВАНИЕ СОБЫТИЙ ТЕЛЕПОРТАЦИИ ИГРОКА ==========
+local player = players.LocalPlayer
+if player then
+    player.OnTeleport:Connect(function(teleportData)
+        log("player.OnTeleport: тип = " .. tostring(teleportData.TeleportType) .. ", место = " .. tostring(teleportData.PlaceId))
+        if teleportData.JobId then
+            log("  JobId: " .. tostring(teleportData.JobId))
         end
-        print(prefix .. extra)
-        -- Рекурсия вглубь
-        printDeep(child, indent + 1)
+        if teleportData.PrivateServer then
+            log("  PrivateServer: " .. tostring(teleportData.PrivateServer))
+        end
+    end)
+    log("Отслеживание player.OnTeleport установлено")
+end
+
+-- ========== ОТСЛЕЖИВАНИЕ СООБЩЕНИЙ LOGSERVICE ==========
+logService.MessageOut:Connect(function(message, messageType)
+    if string.find(string.lower(message), "teleport") or string.find(string.lower(message), "jobid") then
+        log("LogService: [" .. tostring(messageType) .. "] " .. message)
+    end
+end)
+log("Отслеживание LogService.MessageOut включено")
+
+-- ========== ДОПОЛНИТЕЛЬНО: ОТСЛЕЖИВАНИЕ НОВЫХ REMOTE ИНСТАНСОВ ==========
+local function onDescendantAdded(descendant)
+    if descendant:IsA("RemoteEvent") or descendant:IsA("RemoteFunction") then
+        log("Создан новый инстанс: " .. descendant.ClassName .. " " .. tostring(descendant))
     end
 end
-printDeep(optionBtn, 0)
+game.DescendantAdded:Connect(onDescendantAdded)
+log("Отслеживание новых RemoteEvent/RemoteFunction включено")
 
-print("======================================")
-print("Сравните вывод для вкл и выкл состояния (особенно Holder и его потомков).")
+-- ========== НЕБЛОКИРУЮЩИЙ ЦИКЛ ОЖИДАНИЯ ==========
+log("Трекер активен. Используйте хаб для телепортации.")
+while true do
+    task.wait(1)  -- ждём 1 секунду, чтобы не нагружать процессор
+end
