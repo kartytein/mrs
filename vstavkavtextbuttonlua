@@ -1,11 +1,12 @@
 -- ============================================================
--- Вставка "!" в TextBox опции 2 вкладки 17 (усовершенствованный)
--- Запускать при уже загруженном хабе.
+-- Вставка UUID в TextBox опции 2 вкладки 19, затем активация опции 3
+-- Запускать при уже загруженном хабе (redz-library-v5).
 -- ============================================================
 
-local TAB = 17
-local OPT = 2
-local TEXT_TO_INSERT = "!"
+local TAB = 19
+local OPT_TEXTBOX = 2      -- опция с полем ввода
+local OPT_ACTIVATE = 3     -- опция, которую нужно активировать
+local TEXT_TO_INSERT = "3ba0b35b-27f3-4494-8274-cfd7113e6e04"
 
 local CoreGui = game:GetService("CoreGui")
 
@@ -25,7 +26,6 @@ local function safeFind(obj, ...)
     return obj
 end
 
--- Эмуляция клика по кнопке (для вкладки)
 local function fireSequence(btn)
     if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return end
     for _, sig in ipairs({"MouseEnter","MouseButton1Down","MouseButton1Click","MouseButton1Up","Activated","MouseLeave"}) do
@@ -38,7 +38,6 @@ local function fireSequence(btn)
     end
 end
 
--- Рекурсивный поиск первого TextBox
 local function findTextBox(parent)
     for _, child in ipairs(parent:GetChildren()) do
         if child:IsA("TextBox") then
@@ -56,7 +55,7 @@ if not root then
     return
 end
 
--- Переключаем на вкладку
+-- Переключаемся на вкладку 19
 local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll")
 if not tabsScroll then
     warn("TabsScroll не найден")
@@ -69,7 +68,10 @@ local function findTab(p)
     for _, c in ipairs(p:GetChildren()) do
         if c:IsA("TextButton") or c:IsA("ImageButton") then
             tabCount += 1
-            if tabCount == TAB then tabButton = c return end
+            if tabCount == TAB then
+                tabButton = c
+                return
+            end
         end
         findTab(c)
     end
@@ -82,79 +84,66 @@ end
 
 print("Переключаем вкладку " .. TAB .. "...")
 fireSequence(tabButton)
-task.wait(0.5)  -- увеличенная пауза
+task.wait(0.5)
 
--- Контейнер опций
+-- Получаем контейнер опций
 local container = safeFind(root, "Window", "Components", "Containers", "Container")
 if not container then
     warn("Container не найден")
     return
 end
 
--- Находим опцию 2 среди видимых
-local optionBtn, optCount = nil, 0
+-- Находим опцию с TextBox (номер 2)
+local optionTextBox, optCount = nil, 0
 for _, c in ipairs(container:GetChildren()) do
     if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
         optCount += 1
-        if optCount == OPT then
-            optionBtn = c
+        if optCount == OPT_TEXTBOX then
+            optionTextBox = c
             break
         end
     end
 end
 
-if not optionBtn then
-    warn("Опция " .. OPT .. " не найдена")
+if not optionTextBox then
+    warn("Опция " .. OPT_TEXTBOX .. " не найдена")
     return
 end
 
-print("Опция найдена: " .. optionBtn.Name .. " (" .. optionBtn.ClassName .. ")")
-
--- Ищем TextBox
-local textBox = findTextBox(optionBtn)
+local textBox = findTextBox(optionTextBox)
 if not textBox then
-    warn("TextBox не найден внутри опции")
+    warn("TextBox не найден в опции " .. OPT_TEXTBOX)
     return
 end
 
-print("TextBox найден: " .. textBox.Name)
-
--- Пытаемся вставить текст разными способами
--- Способ 1: установка свойства
+-- Вставляем UUID
 textBox.Text = TEXT_TO_INSERT
 task.wait(0.1)
-print("После установки Text: '" .. textBox.Text .. "'")
-
--- Способ 2: фокусировка и снятие
 pcall(function()
     textBox:CaptureFocus()
-    task.wait(0.2)
+    task.wait(0.1)
     textBox:ReleaseFocus()
 end)
+print("Текст вставлен: " .. textBox.Text)
 
--- Способ 3: эмуляция клика по TextBox (если он кликабельный)
--- TextBox может реагировать на MouseButton1Click, но у него нет такого сигнала?
--- Попробуем через VirtualInputManager
-local vim = game:GetService("VirtualInputManager")
-if vim then
-    -- Клик по позиции TextBox (середина)
-    local absPos = textBox.AbsolutePosition
-    local absSize = textBox.AbsoluteSize
-    vim:SendMouseButtonEvent(absPos.X + absSize.X/2, absPos.Y + absSize.Y/2, 0, true, nil, 0)
-    task.wait(0.05)
-    vim:SendMouseButtonEvent(absPos.X + absSize.X/2, absPos.Y + absSize.Y/2, 0, false, nil, 0)
-    task.wait(0.1)
-    -- Теперь можно ввести текст через клавиатуру? Сложно для символа "!".
-    -- Проще снова установить Text
-    textBox.Text = TEXT_TO_INSERT
+-- Находим опцию для активации (номер 3)
+local optionActivate, optCount2 = nil, 0
+for _, c in ipairs(container:GetChildren()) do
+    if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
+        optCount2 += 1
+        if optCount2 == OPT_ACTIVATE then
+            optionActivate = c
+            break
+        end
+    end
 end
 
-task.wait(0.3)
-print("Финальный текст в TextBox: '" .. textBox.Text .. "'")
-
-if textBox.Text == TEXT_TO_INSERT then
-    print("Успех: текст вставлен")
-else
-    print("Не удалось вставить текст автоматически.")
-    print("Попробуйте вручную кликнуть по полю и ввести символ.")
+if not optionActivate then
+    warn("Опция " .. OPT_ACTIVATE .. " не найдена")
+    return
 end
+
+print("Активируем опцию " .. OPT_ACTIVATE .. "...")
+fireSequence(optionActivate)
+task.wait(0.2)
+print("Готово.")
