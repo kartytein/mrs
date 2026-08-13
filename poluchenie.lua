@@ -3,7 +3,7 @@
 --app = Flask(__name__)
 
 --# Здесь вы можете указать свой server_id
---SERVER_ID = "H2O2SERVER|iNwbpopSpbDbp3pSpbHbA3pbpb8biba3pbxbp3pFpbxbpopSpbpbpbpjpbxbpKpbpb8bA3pRp7pIpKHVixGtA3ZPp7HtA3NMi3wMZKpSpbkbiKpRpbpbpbpzpbHbi3HIpbkbp3pzpbwbiKpzpbGbi3ptpbkbiKpIpbHtiopbpbGbi3pjpbGtiKptpbkbiopzpbkbp3pMpb7bibptpbkbi3pzpb7biKHzpbGbibpzpbHbiKpMpbGtiKpzpbHbi3HIpbGbAopti3wbi3pVpbpbiKpSpbxbiKHzpbGbpopMpb7bibpFpbktpopzpbxbi3HIpbHbibpti3wbi3pVpbNbiKpzpb7bi3HIpbGbiKpMpb7IpK1x"
+--SERVER_ID = "EXAMPLE123"
 
 --@app.route('/get_server_id', methods=['GET'])
 --def get_server_id():
