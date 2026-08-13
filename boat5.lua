@@ -1,36 +1,32 @@
--- ===== ТРЕКЕР С ИСПОЛЬЗОВАНИЕМ __NAMECALL ДЛЯ REMOTE =====
--- Не хукает каждый Remote, только метатаблицы RemoteEvent/RemoteFunction.
--- Это безопасно и не вызывает краш даже при большом количестве Remote.
-
+local MODE = 1 -- ИЗМЕНИТЕ ЭТО ЗНАЧЕНИЕ ПЕРЕД ЗАПУСКОМ (1-6)
 local teleportService = game:GetService("TeleportService")
 local players = game:GetService("Players")
 local logService = game:GetService("LogService")
 local runService = game:GetService("RunService")
 
--- Функция логирования
+local LOG_FILE = "teleport_mode_" .. MODE .. ".txt"
+
 local function log(msg)
     local timestamp = os.date("%Y-%m-%d %H:%M:%S")
     local line = "[" .. timestamp .. "] " .. msg .. "\n"
     if appendfile then
-        appendfile("teleport_tracker.txt", line)
+        appendfile(LOG_FILE, line)
     else
-        local old = (readfile and readfile("teleport_tracker.txt")) or ""
-        writefile("teleport_tracker.txt", old .. line)
+        local old = (readfile and readfile(LOG_FILE)) or ""
+        writefile(LOG_FILE, old .. line)
     end
 end
 
--- Инициализация файла
-writefile("teleport_tracker.txt", "=== Teleport Tracker (namecall only) ===\n")
-log("Трекер запущен. Используется перехват метатаблиц, не крашит.")
+writefile(LOG_FILE, "=== Mode " .. MODE .. " Started ===\n")
+log("Режим " .. MODE .. " запущен.")
 
--- Флаг защиты от рекурсии
 local isLogging = false
 
--- ========== 1. ПЕРЕХВАТ МЕТОДОВ TELEPORTSERVICE (прямые) ==========
-local teleportMethods = {"Teleport", "TeleportToPlaceInstance", "TeleportToPrivateServer", "TeleportPartyAsync", "TeleportToSpawnByName"}
-
-for _, methodName in ipairs(teleportMethods) do
-    local ok, err = pcall(function()
+-- ========== РЕЖИМ 1: ТОЛЬКО ПРЯМЫЕ ХУКИ TELEPORTSERVICE ==========
+if MODE == 1 then
+    log("Метод: прямые хуки TeleportService")
+    local methods = {"Teleport", "TeleportToPlaceInstance", "TeleportToPrivateServer", "TeleportPartyAsync"}
+    for _, methodName in ipairs(methods) do
         local original = teleportService[methodName]
         if type(original) == "function" then
             hookfunction(original, function(...)
@@ -40,26 +36,20 @@ for _, methodName in ipairs(teleportMethods) do
                 local argStr = ""
                 for i, v in ipairs(args) do
                     if i > 1 then argStr = argStr .. ", " end
-                    if typeof(v) == "Instance" then
-                        argStr = argStr .. tostring(v) .. " [" .. v.ClassName .. "]"
-                    elseif typeof(v) == "table" then
-                        argStr = argStr .. "table:" .. tostring(v)
-                    else
-                        argStr = argStr .. tostring(v)
-                    end
+                    argStr = argStr .. tostring(v)
                 end
-                log("TeleportService." .. methodName .. " вызван: " .. argStr)
+                log("TeleportService." .. methodName .. " -> " .. argStr)
                 isLogging = false
                 return original(...)
             end)
-            log("Хук установлен на TeleportService." .. methodName)
+            log("Хук на " .. methodName .. " установлен")
         end
-    end)
-    if not ok then log("Ошибка хука на " .. methodName .. ": " .. tostring(err)) end
+    end
 end
 
--- ========== 2. ПЕРЕХВАТ game.JobId ЧЕРЕЗ МЕТАТАБЛИЦУ ==========
-local okJob, errJob = pcall(function()
+-- ========== РЕЖИМ 2: ТОЛЬКО ПЕРЕХВАТ game.JobId ЧЕРЕЗ МЕТАТАБЛИЦУ ==========
+if MODE == 2 then
+    log("Метод: game.JobId через метатаблицу")
     local gameMT = getrawmetatable(game)
     if gameMT then
         local oldIndex = rawget(gameMT, "__index")
@@ -68,125 +58,36 @@ local okJob, errJob = pcall(function()
             hookfunction(oldIndex, function(self, key)
                 local result = oldIndex(self, key)
                 if key == "JobId" or key == "jobId" then
-                    log("game.__index: JobId = " .. tostring(result))
+                    log("game.__index JobId = " .. tostring(result))
                 end
                 return result
             end)
-            log("Хук установлен на game.__index (JobId)")
+            log("Хук на game.__index установлен")
         end
         if type(oldNewIndex) == "function" then
             hookfunction(oldNewIndex, function(self, key, value)
                 if key == "JobId" or key == "jobId" then
-                    log("game.__newindex: установить " .. tostring(key) .. " = " .. tostring(value))
+                    log("game.__newindex JobId = " .. tostring(value))
                 end
                 return oldNewIndex(self, key, value)
             end)
-            log("Хук установлен на game.__newindex (JobId)")
-        end
-    end
-end)
-if not okJob then log("Ошибка перехвата game.JobId: " .. tostring(errJob)) end
-
--- ========== 3. ПЕРЕХВАТ REMOTE ЧЕРЕЗ __NAMECALL (ГЛАВНЫЙ МЕТОД) ==========
--- Перехватываем метатаблицы RemoteEvent и RemoteFunction, чтобы ловить FireServer/InvokeServer без хука на каждый объект.
-local function hookRemoteNamecall()
-    local remoteEventMT = getrawmetatable(game:GetService("RemoteEvent"))
-    local remoteFuncMT = getrawmetatable(game:GetService("RemoteFunction"))
-    
-    -- Для RemoteEvent
-    if remoteEventMT then
-        local oldNamecall = rawget(remoteEventMT, "__namecall")
-        if type(oldNamecall) == "function" then
-            hookfunction(oldNamecall, function(self, ...)
-                local method = getnamecallmethod()
-                if method == "FireServer" then
-                    if isLogging then return oldNamecall(self, ...) end
-                    isLogging = true
-                    local args = {...}
-                    -- Логируем только если есть подозрение на телепортацию
-                    local shouldLog = false
-                    local remoteName = string.lower(tostring(self))
-                    if string.find(remoteName, "teleport") or string.find(remoteName, "job") or
-                       string.find(remoteName, "server") or string.find(remoteName, "tp") or
-                       string.find(remoteName, "hop") or string.find(remoteName, "rejoin") then
-                        shouldLog = true
-                    end
-                    for _, v in ipairs(args) do
-                        if type(v) == "string" and string.len(v) > 20 and string.find(v, "%-") then
-                            shouldLog = true
-                            break
-                        end
-                    end
-                    if shouldLog then
-                        local argStr = ""
-                        for i, v in ipairs(args) do
-                            if i > 1 then argStr = argStr .. ", " end
-                            argStr = argStr .. tostring(v)
-                        end
-                        log("RemoteEvent.FireServer: " .. tostring(self) .. " -> " .. argStr)
-                    end
-                    isLogging = false
-                end
-                return oldNamecall(self, ...)
-            end)
-            log("Хук установлен на RemoteEvent.__namecall (FireServer)")
-        end
-    end
-    
-    -- Для RemoteFunction
-    if remoteFuncMT then
-        local oldNamecall = rawget(remoteFuncMT, "__namecall")
-        if type(oldNamecall) == "function" then
-            hookfunction(oldNamecall, function(self, ...)
-                local method = getnamecallmethod()
-                if method == "InvokeServer" then
-                    if isLogging then return oldNamecall(self, ...) end
-                    isLogging = true
-                    local args = {...}
-                    local shouldLog = false
-                    local remoteName = string.lower(tostring(self))
-                    if string.find(remoteName, "teleport") or string.find(remoteName, "job") or
-                       string.find(remoteName, "server") or string.find(remoteName, "tp") or
-                       string.find(remoteName, "hop") or string.find(remoteName, "rejoin") then
-                        shouldLog = true
-                    end
-                    for _, v in ipairs(args) do
-                        if type(v) == "string" and string.len(v) > 20 and string.find(v, "%-") then
-                            shouldLog = true
-                            break
-                        end
-                    end
-                    if shouldLog then
-                        local argStr = ""
-                        for i, v in ipairs(args) do
-                            if i > 1 then argStr = argStr .. ", " end
-                            argStr = argStr .. tostring(v)
-                        end
-                        log("RemoteFunction.InvokeServer: " .. tostring(self) .. " -> " .. argStr)
-                    end
-                    isLogging = false
-                end
-                return oldNamecall(self, ...)
-            end)
-            log("Хук установлен на RemoteFunction.__namecall (InvokeServer)")
+            log("Хук на game.__newindex установлен")
         end
     end
 end
 
-local okRemote, errRemote = pcall(hookRemoteNamecall)
-if not okRemote then log("Ошибка перехвата Remote: " .. tostring(errRemote)) end
-
--- ========== 4. ПЕРЕХВАТ TELEPORTSERVICE ЧЕРЕЗ __NAMECALL (дополнительно) ==========
-local okTS, errTS = pcall(function()
-    local tsMT = getrawmetatable(teleportService)
-    if tsMT then
-        local oldNamecall = rawget(tsMT, "__namecall")
-        if type(oldNamecall) == "function" then
-            hookfunction(oldNamecall, function(self, ...)
+-- ========== РЕЖИМ 3: ТОЛЬКО __NAMECALL ДЛЯ REMOTE ==========
+if MODE == 3 then
+    log("Метод: __namecall для RemoteEvent/RemoteFunction")
+    local remoteEventMT = getrawmetatable(game:GetService("RemoteEvent"))
+    local remoteFuncMT = getrawmetatable(game:GetService("RemoteFunction"))
+    if remoteEventMT then
+        local old = rawget(remoteEventMT, "__namecall")
+        if type(old) == "function" then
+            hookfunction(old, function(self, ...)
                 local method = getnamecallmethod()
-                if method == "Teleport" or method == "TeleportToPlaceInstance" or
-                   method == "TeleportToPrivateServer" or method == "TeleportPartyAsync" then
-                    if isLogging then return oldNamecall(self, ...) end
+                if method == "FireServer" then
+                    if isLogging then return old(self, ...) end
                     isLogging = true
                     local args = {...}
                     local argStr = ""
@@ -194,45 +95,186 @@ local okTS, errTS = pcall(function()
                         if i > 1 then argStr = argStr .. ", " end
                         argStr = argStr .. tostring(v)
                     end
-                    log("TeleportService.__namecall." .. method .. ": " .. argStr)
+                    log("RemoteEvent.FireServer: " .. tostring(self) .. " -> " .. argStr)
                     isLogging = false
                 end
-                return oldNamecall(self, ...)
+                return old(self, ...)
             end)
-            log("Хук установлен на TeleportService.__namecall")
+            log("Хук на RemoteEvent.__namecall установлен")
         end
     end
-end)
-if not okTS then log("Ошибка перехвата TeleportService namecall: " .. tostring(errTS)) end
-
--- ========== 5. ОТСЛЕЖИВАНИЕ СОБЫТИЙ ==========
-local player = players.LocalPlayer
-if player then
-    player.OnTeleport:Connect(function(teleportState)
-        log("player.OnTeleport: " .. tostring(teleportState))
-        log("  Текущий game.JobId: " .. tostring(game.JobId))
-    end)
-    log("Отслеживание player.OnTeleport установлено")
+    if remoteFuncMT then
+        local old = rawget(remoteFuncMT, "__namecall")
+        if type(old) == "function" then
+            hookfunction(old, function(self, ...)
+                local method = getnamecallmethod()
+                if method == "InvokeServer" then
+                    if isLogging then return old(self, ...) end
+                    isLogging = true
+                    local args = {...}
+                    local argStr = ""
+                    for i, v in ipairs(args) do
+                        if i > 1 then argStr = argStr .. ", " end
+                        argStr = argStr .. tostring(v)
+                    end
+                    log("RemoteFunction.InvokeServer: " .. tostring(self) .. " -> " .. argStr)
+                    isLogging = false
+                end
+                return old(self, ...)
+            end)
+            log("Хук на RemoteFunction.__namecall установлен")
+        end
+    end
 end
 
-logService.MessageOut:Connect(function(message, messageType)
-    if string.find(string.lower(message), "teleport") or string.find(string.lower(message), "jobid") then
-        log("LogService: [" .. tostring(messageType) .. "] " .. message)
+-- ========== РЕЖИМ 4: ПЕРЕХВАТ REMOTE С ФИЛЬТРОМ ПО ИМЕНИ (ОГРАНИЧЕННЫЙ) ==========
+if MODE == 4 then
+    log("Метод: перехват Remote с фильтром по имени (максимум 50 объектов)")
+    local count = 0
+    local function shouldHook(remote)
+        local n = string.lower(remote.Name)
+        return string.find(n, "teleport") or string.find(n, "job") or
+               string.find(n, "server") or string.find(n, "tp") or
+               string.find(n, "hop") or string.find(n, "rejoin")
     end
-end)
-log("Отслеживание LogService.MessageOut включено")
+    local function hookOne(remote)
+        if count >= 50 then return end
+        if shouldHook(remote) then
+            count = count + 1
+            if remote:IsA("RemoteEvent") then
+                local fire = remote.FireServer
+                hookfunction(fire, function(self, ...)
+                    if isLogging then return fire(self, ...) end
+                    isLogging = true
+                    local args = {...}
+                    local argStr = ""
+                    for i, v in ipairs(args) do
+                        if i > 1 then argStr = argStr .. ", " end
+                        argStr = argStr .. tostring(v)
+                    end
+                    log("RemoteEvent.FireServer (подозрительный): " .. tostring(remote) .. " -> " .. argStr)
+                    isLogging = false
+                    return fire(self, ...)
+                end)
+            elseif remote:IsA("RemoteFunction") then
+                local inv = remote.InvokeServer
+                hookfunction(inv, function(self, ...)
+                    if isLogging then return inv(self, ...) end
+                    isLogging = true
+                    local args = {...}
+                    local argStr = ""
+                    for i, v in ipairs(args) do
+                        if i > 1 then argStr = argStr .. ", " end
+                        argStr = argStr .. tostring(v)
+                    end
+                    log("RemoteFunction.InvokeServer (подозрительный): " .. tostring(remote) .. " -> " .. argStr)
+                    isLogging = false
+                    return inv(self, ...)
+                end)
+            end
+        end
+    end
+    for _, desc in ipairs(game:GetDescendants()) do
+        if desc:IsA("RemoteEvent") or desc:IsA("RemoteFunction") then
+            hookOne(desc)
+        end
+    end
+    game.DescendantAdded:Connect(function(desc)
+        if desc:IsA("RemoteEvent") or desc:IsA("RemoteFunction") then
+            hookOne(desc)
+        end
+    end)
+    log("Захвачено подозрительных Remote: " .. count)
+end
 
--- ========== 6. ПЕРИОДИЧЕСКАЯ ПРОВЕРКА JOBID ==========
+-- ========== РЕЖИМ 5: ТОЛЬКО СОБЫТИЯ (OnTeleport, LogService) ==========
+if MODE == 5 then
+    log("Метод: только события OnTeleport и LogService")
+    local player = players.LocalPlayer
+    if player then
+        player.OnTeleport:Connect(function(state)
+            log("player.OnTeleport: " .. tostring(state) .. ", JobId=" .. tostring(game.JobId))
+        end)
+        log("OnTeleport отслеживается")
+    end
+    logService.MessageOut:Connect(function(msg, msgType)
+        if string.find(string.lower(msg), "teleport") or string.find(string.lower(msg), "jobid") then
+            log("LogService: [" .. tostring(msgType) .. "] " .. msg)
+        end
+    end)
+    log("LogService отслеживается")
+end
+
+-- ========== РЕЖИМ 6: БЕЗОПАСНАЯ КОМБИНАЦИЯ (1+2+5) ==========
+if MODE == 6 then
+    log("Метод: комбинация TeleportService хуков + game.JobId + события")
+    -- 1: TeleportService
+    local methods = {"Teleport", "TeleportToPlaceInstance", "TeleportToPrivateServer", "TeleportPartyAsync"}
+    for _, methodName in ipairs(methods) do
+        local original = teleportService[methodName]
+        if type(original) == "function" then
+            hookfunction(original, function(...)
+                if isLogging then return original(...) end
+                isLogging = true
+                local args = {...}
+                local argStr = ""
+                for i, v in ipairs(args) do
+                    if i > 1 then argStr = argStr .. ", " end
+                    argStr = argStr .. tostring(v)
+                end
+                log("TeleportService." .. methodName .. " -> " .. argStr)
+                isLogging = false
+                return original(...)
+            end)
+        end
+    end
+    -- 2: game.JobId
+    local gameMT = getrawmetatable(game)
+    if gameMT then
+        local oldIndex = rawget(gameMT, "__index")
+        local oldNewIndex = rawget(gameMT, "__newindex")
+        if type(oldIndex) == "function" then
+            hookfunction(oldIndex, function(self, key)
+                local result = oldIndex(self, key)
+                if key == "JobId" or key == "jobId" then
+                    log("game.__index JobId = " .. tostring(result))
+                end
+                return result
+            end)
+        end
+        if type(oldNewIndex) == "function" then
+            hookfunction(oldNewIndex, function(self, key, value)
+                if key == "JobId" or key == "jobId" then
+                    log("game.__newindex JobId = " .. tostring(value))
+                end
+                return oldNewIndex(self, key, value)
+            end)
+        end
+    end
+    -- 5: события
+    local player = players.LocalPlayer
+    if player then
+        player.OnTeleport:Connect(function(state)
+            log("player.OnTeleport: " .. tostring(state) .. ", JobId=" .. tostring(game.JobId))
+        end)
+    end
+    logService.MessageOut:Connect(function(msg, msgType)
+        if string.find(string.lower(msg), "teleport") or string.find(string.lower(msg), "jobid") then
+            log("LogService: [" .. tostring(msgType) .. "] " .. msg)
+        end
+    end)
+end
+
+-- Периодическая проверка JobId во всех режимах (кроме 5? оставим)
 spawn(function()
     while true do
-        task.wait(5)
-        log("Текущий game.JobId: " .. tostring(game.JobId))
+        task.wait(10)
+        log("Проверка JobId: " .. tostring(game.JobId))
     end
 end)
-log("Периодическая проверка game.JobId запущена")
 
--- ========== ОЖИДАНИЕ ==========
-log("Трекер активен. Выполните телепортацию через хаб.")
+log("Скрипт запущен. Выполните телепортацию через хаб.")
+
 while true do
     task.wait(1)
 end
