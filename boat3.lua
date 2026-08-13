@@ -2,7 +2,7 @@
 -- Меняйте MODE (1-6) и запускайте скрипт заново. После запуска выполните телепортацию через хаб.
 -- Проверьте файл teleport_mode_X.txt (X - номер режима). Если краш - метод не подходит, переходите к следующему.
 
-local MODE = 3 -- ИЗМЕНИТЕ ЭТО ЗНАЧЕНИЕ ПЕРЕД ЗАПУСКОМ (1-6)
+local MODE = 6 -- ИЗМЕНИТЕ ЭТО ЗНАЧЕНИЕ ПЕРЕД ЗАПУСКОМ (1-6)
 
 local teleportService = game:GetService("TeleportService")
 local players = game:GetService("Players")
