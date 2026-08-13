@@ -1,6 +1,6 @@
--- ===== ТРЕКЕР ТЕЛЕПОРТАЦИЙ (ИСПРАВЛЕННЫЙ, С ФИЛЬТРАЦИЕЙ REMOTE) =====
--- Исправлен OnTeleport (теперь принимает enum), добавлен перехват game.JobId,
--- и безопасный перехват Remote вызовов только для подозрительных объектов.
+-- ===== ПОЭТАПНЫЙ ТРЕКЕР ДЛЯ ВЫЯВЛЕНИЯ ПРИЧИНЫ КРАША =====
+-- Каждый метод включается с интервалом 5 секунд, результат логируется.
+-- Если краш происходит, вы увидите, какой этап был включён последним.
 
 local teleportService = game:GetService("TeleportService")
 local players = game:GetService("Players")
@@ -12,88 +12,101 @@ local function log(msg)
     local timestamp = os.date("%Y-%m-%d %H:%M:%S")
     local line = "[" .. timestamp .. "] " .. msg .. "\n"
     if appendfile then
-        appendfile("teleport_tracker.txt", line)
+        appendfile("teleport_tracker_stages.txt", line)
     else
-        local old = (readfile and readfile("teleport_tracker.txt")) or ""
-        writefile("teleport_tracker.txt", old .. line)
+        local old = (readfile and readfile("teleport_tracker_stages.txt")) or ""
+        writefile("teleport_tracker_stages.txt", old .. line)
     end
 end
 
--- Инициализация файла
-writefile("teleport_tracker.txt", "=== Teleport Tracker v2 ===\n")
-log("Трекер запущен (с фильтрацией).")
+-- Инициализация
+writefile("teleport_tracker_stages.txt", "=== Stage Tracker ===\n")
+log("Старт. Ожидание 5 секунд до первого этапа...")
 
--- Флаг для предотвращения рекурсии
+-- Флаг защиты от рекурсии
 local isLogging = false
 
--- ========== ПЕРЕХВАТ МЕТОДОВ TELEPORTSERVICE (без изменений) ==========
+-- ========== ЭТАП 1: ПЕРЕХВАТ TELEPORTSERVICE (ждём 5 сек) ==========
+task.wait(5)
+log("Этап 1: включение TeleportService hooks")
 local teleportMethods = {"Teleport", "TeleportToPlaceInstance", "TeleportToPrivateServer", "TeleportPartyAsync"}
-
 for _, methodName in ipairs(teleportMethods) do
-    local original = teleportService[methodName]
-    if type(original) == "function" then
-        hookfunction(original, function(...)
-            if isLogging then return original(...) end
-            isLogging = true
-            local args = {...}
-            local argStr = ""
-            for i, v in ipairs(args) do
-                if i > 1 then argStr = argStr .. ", " end
-                if typeof(v) == "Instance" then
-                    argStr = argStr .. tostring(v) .. " [" .. v.ClassName .. "]"
-                elseif typeof(v) == "table" then
-                    argStr = argStr .. "table:" .. tostring(v)
-                else
-                    argStr = argStr .. tostring(v)
+    local ok, err = pcall(function()
+        local original = teleportService[methodName]
+        if type(original) == "function" then
+            hookfunction(original, function(...)
+                if isLogging then return original(...) end
+                isLogging = true
+                local args = {...}
+                local argStr = ""
+                for i, v in ipairs(args) do
+                    if i > 1 then argStr = argStr .. ", " end
+                    if typeof(v) == "Instance" then
+                        argStr = argStr .. tostring(v) .. " [" .. v.ClassName .. "]"
+                    elseif typeof(v) == "table" then
+                        argStr = argStr .. "table:" .. tostring(v)
+                    else
+                        argStr = argStr .. tostring(v)
+                    end
                 end
-            end
-            log("TeleportService." .. methodName .. " вызван: " .. argStr)
-            isLogging = false
-            return original(...)
-        end)
-        log("Хук установлен на TeleportService." .. methodName)
+                log("TeleportService." .. methodName .. " вызван: " .. argStr)
+                isLogging = false
+                return original(...)
+            end)
+            log("  Хук установлен на TeleportService." .. methodName)
+        else
+            log("  Не найден метод TeleportService." .. methodName)
+        end
+    end)
+    if not ok then
+        log("  Ошибка при установке хука на " .. methodName .. ": " .. tostring(err))
     end
 end
+log("Этап 1 завершён.")
 
--- ========== ПЕРЕХВАТ ИЗМЕНЕНИЯ game.JobId ==========
-local gameMT = getrawmetatable(game)
-if gameMT then
-    local oldIndex = rawget(gameMT, "__index")
-    local oldNewIndex = rawget(gameMT, "__newindex")
-    
-    if type(oldIndex) == "function" then
-        hookfunction(oldIndex, function(self, key)
-            local result = oldIndex(self, key)
-            if key == "JobId" or key == "jobId" then
-                log("game.__index: JobId = " .. tostring(result))
-            end
-            return result
-        end)
-        log("Хук установлен на game.__index (JobId)")
+-- ========== ЭТАП 2: ПЕРЕХВАТ GAME.JOBID (ждём 5 сек) ==========
+task.wait(5)
+log("Этап 2: включение game.JobId hook")
+local ok, err = pcall(function()
+    local gameMT = getrawmetatable(game)
+    if gameMT then
+        local oldIndex = rawget(gameMT, "__index")
+        local oldNewIndex = rawget(gameMT, "__newindex")
+        if type(oldIndex) == "function" then
+            hookfunction(oldIndex, function(self, key)
+                local result = oldIndex(self, key)
+                if key == "JobId" or key == "jobId" then
+                    log("game.__index: JobId = " .. tostring(result))
+                end
+                return result
+            end)
+            log("  Хук установлен на game.__index (JobId)")
+        end
+        if type(oldNewIndex) == "function" then
+            hookfunction(oldNewIndex, function(self, key, value)
+                if key == "JobId" or key == "jobId" then
+                    log("game.__newindex: установить " .. tostring(key) .. " = " .. tostring(value))
+                end
+                return oldNewIndex(self, key, value)
+            end)
+            log("  Хук установлен на game.__newindex (JobId)")
+        end
+    else
+        log("  Не удалось получить метатаблицу game")
     end
-    
-    if type(oldNewIndex) == "function" then
-        hookfunction(oldNewIndex, function(self, key, value)
-            if key == "JobId" or key == "jobId" then
-                log("game.__newindex: установить " .. tostring(key) .. " = " .. tostring(value))
-            end
-            return oldNewIndex(self, key, value)
-        end)
-        log("Хук установлен на game.__newindex (JobId)")
-    end
+end)
+if not ok then
+    log("  Ошибка на этапе 2: " .. tostring(err))
 end
+log("Этап 2 завершён.")
 
--- ========== ПЕРЕХВАТ REMOTE ВЫЗОВОВ (С ФИЛЬТРАЦИЕЙ) ==========
--- Функция проверки, содержит ли аргумент JobId (строка с дефисами длиной > 20)
+-- ========== ЭТАП 3: ПЕРЕХВАТ REMOTE ПО ИМЕНИ (ждём 5 сек) ==========
+task.wait(5)
+log("Этап 3: включение Remote hooks (фильтр по имени)")
 local function looksLikeJobId(arg)
-    if type(arg) == "string" and string.len(arg) > 20 and string.find(arg, "%-") then
-        return true
-    end
-    return false
+    return type(arg) == "string" and string.len(arg) > 20 and string.find(arg, "%-")
 end
-
--- Функция для хука на конкретном RemoteEvent/RemoteFunction
-local function hookRemote(remote)
+local function hookRemoteByName(remote)
     if remote:IsA("RemoteEvent") then
         local fireServer = remote.FireServer
         if type(fireServer) == "function" then
@@ -101,18 +114,13 @@ local function hookRemote(remote)
                 if isLogging then return fireServer(self, ...) end
                 local args = {...}
                 local shouldLog = false
-                -- Логируем, если имя Remote подозрительное или аргументы содержат JobId
-                if string.find(string.lower(remote.Name), "teleport") or
-                   string.find(string.lower(remote.Name), "job") or
-                   string.find(string.lower(remote.Name), "server") or
-                   string.find(string.lower(remote.Name), "tp") then
+                local name = string.lower(remote.Name)
+                if string.find(name, "teleport") or string.find(name, "job") or
+                   string.find(name, "server") or string.find(name, "tp") then
                     shouldLog = true
                 end
                 for _, v in ipairs(args) do
-                    if looksLikeJobId(v) then
-                        shouldLog = true
-                        break
-                    end
+                    if looksLikeJobId(v) then shouldLog = true break end
                 end
                 if shouldLog then
                     isLogging = true
@@ -134,17 +142,13 @@ local function hookRemote(remote)
                 if isLogging then return invokeServer(self, ...) end
                 local args = {...}
                 local shouldLog = false
-                if string.find(string.lower(remote.Name), "teleport") or
-                   string.find(string.lower(remote.Name), "job") or
-                   string.find(string.lower(remote.Name), "server") or
-                   string.find(string.lower(remote.Name), "tp") then
+                local name = string.lower(remote.Name)
+                if string.find(name, "teleport") or string.find(name, "job") or
+                   string.find(name, "server") or string.find(name, "tp") then
                     shouldLog = true
                 end
                 for _, v in ipairs(args) do
-                    if looksLikeJobId(v) then
-                        shouldLog = true
-                        break
-                    end
+                    if looksLikeJobId(v) then shouldLog = true break end
                 end
                 if shouldLog then
                     isLogging = true
@@ -162,52 +166,117 @@ local function hookRemote(remote)
     end
 end
 
--- Хукаем существующие Remote (только те, что созданы после старта? Хукаем все, но с фильтром внутри)
+-- Хукаем существующие Remote с подозрительными именами
 for _, descendant in ipairs(game:GetDescendants()) do
     if descendant:IsA("RemoteEvent") or descendant:IsA("RemoteFunction") then
-        hookRemote(descendant)
+        local name = string.lower(descendant.Name)
+        if string.find(name, "teleport") or string.find(name, "job") or
+           string.find(name, "server") or string.find(name, "tp") then
+            hookRemoteByName(descendant)
+            log("  Захучен Remote: " .. tostring(descendant))
+        end
     end
 end
 
--- Хукаем новые Remote при создании
-game.DescendantAdded:Connect(function(descendant)
-    if descendant:IsA("RemoteEvent") or descendant:IsA("RemoteFunction") then
-        log("Создан: " .. descendant.ClassName .. " " .. tostring(descendant))
-        hookRemote(descendant)
+-- Ловим новые подозрительные Remote
+game.DescendantAdded:Connect(function(desc)
+    if desc:IsA("RemoteEvent") or desc:IsA("RemoteFunction") then
+        local name = string.lower(desc.Name)
+        if string.find(name, "teleport") or string.find(name, "job") or
+           string.find(name, "server") or string.find(name, "tp") then
+            hookRemoteByName(desc)
+            log("  Захучен новый Remote: " .. tostring(desc))
+        end
     end
 end)
+log("Этап 3 завершён.")
 
--- ========== ИСПРАВЛЕННЫЙ ОБРАБОТЧИК OnTeleport ==========
-local player = players.LocalPlayer
-if player then
-    player.OnTeleport:Connect(function(teleportState)
-        -- teleportState - это Enum.TeleportState, а не таблица
-        log("player.OnTeleport: " .. tostring(teleportState))
-        -- Дополнительно логируем текущий JobId (вдруг уже сменился)
-        log("  Текущий game.JobId: " .. tostring(game.JobId))
+-- ========== ЭТАП 4: ПЕРЕХВАТ ВСЕХ REMOTE С ФИЛЬТРОМ ПО АРГУМЕНТАМ (ждём 5 сек) ==========
+task.wait(5)
+log("Этап 4: включение Remote hooks (фильтр по аргументу JobId)")
+-- Этот этап может вызвать краш, поэтому оборачиваем в pcall и логируем ошибку
+local ok4, err4 = pcall(function()
+    -- Хукаем все существующие Remote
+    for _, descendant in ipairs(game:GetDescendants()) do
+        if descendant:IsA("RemoteEvent") or descendant:IsA("RemoteFunction") then
+            hookRemoteByName(descendant)  -- переиспользуем функцию, внутри фильтр по имени и аргументам
+        end
+    end
+    -- Хукаем новые
+    game.DescendantAdded:Connect(function(desc)
+        if desc:IsA("RemoteEvent") or desc:IsA("RemoteFunction") then
+            hookRemoteByName(desc)
+        end
     end)
-    log("Отслеживание player.OnTeleport установлено")
+end)
+if not ok4 then
+    log("  Ошибка на этапе 4: " .. tostring(err4))
+else
+    log("  Все Remote захучены (с фильтром по аргументам)")
 end
+log("Этап 4 завершён.")
 
--- ========== ОТСЛЕЖИВАНИЕ СООБЩЕНИЙ LOGSERVICE ==========
-logService.MessageOut:Connect(function(message, messageType)
-    if string.find(string.lower(message), "teleport") or string.find(string.lower(message), "jobid") then
-        log("LogService: [" .. tostring(messageType) .. "] " .. message)
+-- ========== ЭТАП 5: ПЕРЕХВАТ ЧЕРЕЗ __NAMECALL МЕТАТАБЛИЦ (ждём 5 сек) ==========
+task.wait(5)
+log("Этап 5: включение namecall hooks")
+local ok5, err5 = pcall(function()
+    local remoteEventMT = getrawmetatable(game:GetService("RemoteEvent"))
+    local remoteFuncMT = getrawmetatable(game:GetService("RemoteFunction"))
+    if remoteEventMT then
+        local oldNamecall = rawget(remoteEventMT, "__namecall")
+        if type(oldNamecall) == "function" then
+            hookfunction(oldNamecall, function(self, ...)
+                local method = getnamecallmethod()
+                if method == "FireServer" then
+                    if isLogging then return oldNamecall(self, ...) end
+                    isLogging = true
+                    local args = {...}
+                    local argStr = ""
+                    for i, v in ipairs(args) do
+                        if i > 1 then argStr = argStr .. ", " end
+                        argStr = argStr .. tostring(v)
+                    end
+                    log("RemoteEvent.FireServer (namecall): " .. tostring(self) .. " -> " .. argStr)
+                    isLogging = false
+                end
+                return oldNamecall(self, ...)
+            end)
+            log("  Хук установлен на RemoteEvent.__namecall")
+        end
+    end
+    if remoteFuncMT then
+        local oldNamecall = rawget(remoteFuncMT, "__namecall")
+        if type(oldNamecall) == "function" then
+            hookfunction(oldNamecall, function(self, ...)
+                local method = getnamecallmethod()
+                if method == "InvokeServer" then
+                    if isLogging then return oldNamecall(self, ...) end
+                    isLogging = true
+                    local args = {...}
+                    local argStr = ""
+                    for i, v in ipairs(args) do
+                        if i > 1 then argStr = argStr .. ", " end
+                        argStr = argStr .. tostring(v)
+                    end
+                    log("RemoteFunction.InvokeServer (namecall): " .. tostring(self) .. " -> " .. argStr)
+                    isLogging = false
+                end
+                return oldNamecall(self, ...)
+            end)
+            log("  Хук установлен на RemoteFunction.__namecall")
+        end
     end
 end)
-log("Отслеживание LogService.MessageOut включено")
+if not ok5 then
+    log("  Ошибка на этапе 5: " .. tostring(err5))
+end
+log("Этап 5 завершён.")
 
--- ========== ПЕРИОДИЧЕСКАЯ ПРОВЕРКА JOBID ==========
-spawn(function()
-    while true do
-        task.wait(5)
-        log("Текущий game.JobId: " .. tostring(game.JobId))
-    end
-end)
-log("Периодическая проверка game.JobId запущена")
+-- ========== ЗАВЕРШАЮЩЕЕ СООБЩЕНИЕ ==========
+log("Все этапы включены. Если краш не произошёл, используйте хаб для телепортации.")
+log("Проверьте лог после краша: последний включённый этап указывает на проблемный метод.")
 
--- ========== ОЖИДАНИЕ ==========
-log("Трекер активен. Выполните телепортацию через хаб.")
+-- Блокирующий цикл, чтобы скрипт не завершался
 while true do
     task.wait(1)
 end
