@@ -21,7 +21,7 @@ local itemNames = {
 }
 
 -- Ник ожидаемого партнёра. Если пустая строка - проверка отключена.
-local tradePartnerName = ""  -- пример: "Steve"
+local tradePartnerName = "WillieFrost6"  -- пример: "Steve"
 
 -- Пути к UI-элементам
 local addButtonPath = {"Main", "Trade", "Container", "1", "Frame", "AddButton"}
