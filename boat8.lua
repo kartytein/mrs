@@ -17,7 +17,7 @@ local itemNames = {
 local tradePartnerName = "WillieFrost6"  -- если пусто, проверка партнёра отключена
 
 local expectedItemsInContainer2 = {
-    "dark",
+    "flame",
     -- названия, которые должны быть в контейнере 2 перед Accept
 }
 
