@@ -1,27 +1,127 @@
 -- ============================================================
--- ПОЛНЫЙ АВТО-ТРЕЙД БЕЗ ТАЙМАУТОВ ОЖИДАНИЯ
--- Ожидание партнёра и условий теперь бесконечное
--- (прерывается только если персонаж покинул сиденье)
+-- ОБЪЕДИНЁННЫЙ СКРИПТ: LoadFruit + Respawn + AutoTrade
+-- Конфигурация получается с Python-сервера каждые 10 секунд
+-- Используется game:HttpGet (как в исходном примере)
+-- load_fruit_items применяется и для LoadFruit, и для проверки второго контейнера
 -- ============================================================
 
-local player = game.Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")  -- для JSONDecode
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
 
--- ====================== КОНФИГУРАЦИЯ ======================
-local itemNames = {
-    "sand",
-    -- добавьте другие названия
-}
+-- ====================== НАСТРОЙКИ ЗАПРОСОВ ======================
+local SERVER_URL = "http://192.168.1.100:8000/get_config"  -- замените на ваш IP
+local POLL_INTERVAL = 10  -- секунд между запросами
 
-local tradePartnerName = "WillieFrost6"  -- если пусто, проверка партнёра отключена
+-- ====================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ КОНФИГУРАЦИИ ======================
+local loadFruitItems = {}   -- список фруктов для LoadFruit и проверки второго контейнера
+local tradeItems = {}       -- предметы для первого контейнера
+local tradePartnerName = "" -- ожидаемый партнёр
 
-local expectedItemsInContainer2 = {
-    "dark",
-    -- названия, которые должны быть в контейнере 2 перед Accept
-}
+-- ====================== ФУНКЦИИ ДЛЯ ЗАПРОСА К СЕРВЕРУ ======================
+local function fetchConfig()
+    local url = SERVER_URL .. "?nickname=" .. HttpService:UrlEncode(player.Name)
+    local success, response = pcall(function()
+        return game:HttpGet(url)  -- используем game:HttpGet как в рабочем примере
+    end)
 
--- Пути к UI-элементам
+    if not success then
+        warn("Ошибка запроса конфигурации:", response)
+        return nil
+    end
+
+    local data = HttpService:JSONDecode(response)
+    if not data or not data.load_fruit_items then
+        warn("Некорректный формат конфигурации")
+        return nil
+    end
+
+    loadFruitItems = data.load_fruit_items or {}
+    tradeItems = data.trade_items or {}
+    tradePartnerName = data.partner_name or ""
+
+    print("Конфигурация получена:", data)
+    return data
+end
+
+-- ====================== ФУНКЦИИ ДЛЯ LOADFRUIT + RESPAWN ======================
+local function formatItemName(name)
+    local lower = name:lower()
+    local cap = lower:sub(1, 1):upper() .. lower:sub(2)
+    return cap .. "-" .. cap
+end
+
+local function invokeLoadFruit(fruitName)
+    local success, result = pcall(function()
+        return ReplicatedStorage.Remotes.CommF_:InvokeServer("LoadFruit", fruitName)
+    end)
+    if success then
+        print("[Успех] LoadFruit для " .. fruitName .. " | Ответ: " .. tostring(result))
+    else
+        warn("[Ошибка] LoadFruit для " .. fruitName .. " | Причина: " .. tostring(result))
+    end
+end
+
+local function respawnCharacter()
+    local char = player.Character
+    if not char then return false end
+    local hum = char:FindFirstChild("Humanoid")
+    if not hum then return false end
+
+    local success, err = pcall(function()
+        hum.Health = 0
+    end)
+
+    if success then
+        print("Респавн выполнен (Health = 0).")
+        return true
+    else
+        warn("Ошибка при установке Health: " .. tostring(err))
+        return false
+    end
+end
+
+local function waitForCharacterRespawn()
+    local oldChar = player.Character
+    local waited = 0
+    while waited < 30 do
+        local char = player.Character
+        if char and char ~= oldChar then
+            return char
+        end
+        task.wait(0.5)
+        waited += 0.5
+    end
+    return nil
+end
+
+-- Выполнение LoadFruit для каждого фрукта с респавном после каждого
+local function processLoadFruit()
+    if #loadFruitItems == 0 then
+        print("Список LoadFruit пуст, пропускаем.")
+        return true
+    end
+
+    for _, item in ipairs(loadFruitItems) do
+        local formatted = formatItemName(item)
+        print("Обрабатываю '" .. item .. "' -> '" .. formatted .. "'")
+        invokeLoadFruit(formatted)
+
+        respawnCharacter()
+        local newChar = waitForCharacterRespawn()
+        if not newChar then
+            warn("Не удалось дождаться респавна для " .. item)
+            return false
+        end
+        task.wait(1)  -- пауза перед следующим фруктом
+    end
+    return true
+end
+
+-- ====================== ФУНКЦИИ ДЛЯ АВТО-ТРЕЙДА ======================
+-- Пути и параметры из исходного скрипта
 local addButtonPath = {"Main", "Trade", "Container", "1", "Frame", "AddButton"}
 local firstContainerPath = {"Main", "Trade", "Container", "FrameAdd", "Frame"}
 local resultContainerPath = {"Main", "Trade", "Container", "1", "Frame"}
@@ -30,11 +130,11 @@ local acceptPath = {"Main", "Trade", "Info", "Accept"}
 local ready1Path = {"Main", "Trade", "Info", "Ready1"}
 local bottomTitlePath = {"Main", "Trade", "BottomTitle"}
 
--- Параметры (таймауты оставлены только для отдельных ожиданий UI)
 local RESULT_TIMEOUT = 30
 local MAX_ATTEMPTS_PER_ITEM = 3
 local READY_TIMEOUT = 30
--- ============================================================
+local ACCEPT_CHECK_INTERVAL = 0.5
+local ACCEPT_WAIT_TIMEOUT = 30
 
 -- Активация кнопки через getconnections
 local function fireSequence(btn)
@@ -83,7 +183,7 @@ local function findParentButton(obj)
     return nil
 end
 
--- Поиск текстового элемента в контейнере по подстроке (регистронезависимо)
+-- Поиск текстового элемента в контейнере по подстроке
 local function findTextElementInContainer(container, search)
     for _, obj in ipairs(container:GetDescendants()) do
         if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
@@ -196,56 +296,35 @@ local function getPercent()
     return percent and tonumber(percent) or nil
 end
 
--- Проверка содержимого контейнера 2
-local function checkContainer2Contents()
-    local container2 = findObjectByPath(playerGui, secondContainerPath)
-    if not container2 then
-        print("Контейнер 2 не найден")
+-- Проверка, что все фрукты из loadFruitItems есть во втором контейнере
+local function checkSecondContainer()
+    local secondContainer = findObjectByPath(playerGui, secondContainerPath)
+    if not secondContainer then
         return false
     end
-
-    local foundTexts = {}
-    local function collectTexts(parent)
-        for _, child in ipairs(parent:GetDescendants()) do
-            if child:IsA("TextLabel") or child:IsA("TextButton") or child:IsA("TextBox") then
-                table.insert(foundTexts, child.Text)
-            end
+    for _, item in ipairs(loadFruitItems) do  -- используем loadFruitItems
+        if not findTextElementInContainer(secondContainer, item) then
+            return false
         end
     end
-    collectTexts(container2)
-
-    print("Содержимое контейнера 2:")
-    for i, t in ipairs(foundTexts) do
-        print("  [" .. i .. "] " .. t)
-    end
-
-    local missing = {}
-    for _, expected in ipairs(expectedItemsInContainer2) do
-        local found = false
-        for _, t in ipairs(foundTexts) do
-            if t and t:lower():find(expected:lower(), 1, true) then
-                found = true
-                break
-            end
-        end
-        if not found then
-            table.insert(missing, expected)
-        end
-    end
-
-    if #missing > 0 then
-        print("В контейнере 2 отсутствуют:")
-        for _, m in ipairs(missing) do
-            print("  - " .. m)
-        end
-        return false
-    else
-        print("Контейнер 2 содержит все ожидаемые предметы.")
-        return true
-    end
+    return true
 end
 
--- Обработка одного предмета
+-- Проверка уведомления о завершении трейда
+local function isTradeCompleted()
+    local notifications = playerGui:FindFirstChild("Notifications")
+    if not notifications then return false end
+    for _, obj in ipairs(notifications:GetDescendants()) do
+        if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
+            if obj.Text and obj.Text:lower():find("trade completed", 1, true) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+-- Обработка одного предмета (первый контейнер)
 local function processItem(searchText)
     for attempt = 1, MAX_ATTEMPTS_PER_ITEM do
         print(string.format("Обработка '%s' (попытка %d/%d)", searchText, attempt, MAX_ATTEMPTS_PER_ITEM))
@@ -256,7 +335,6 @@ local function processItem(searchText)
             task.wait(2)
             continue
         end
-        print("Активирую AddButton...")
         fireSequence(addButton)
 
         local firstContainer = waitForObject(firstContainerPath, 5)
@@ -298,128 +376,159 @@ local function processItem(searchText)
     return false
 end
 
--- Финальная активация Accept с бесконечным ожиданием условий
-local function acceptTrade()
-    print("Ожидание выполнения условий для Accept...")
-    while true do
-        local container2Ok = checkContainer2Contents()
-        local percent = getPercent()
-
-        if container2Ok and percent and percent <= 40 then
-            break
-        end
-
-        -- Проверяем, всё ещё сидим
-        local char = player.Character
-        local hum = char and char:FindFirstChild("Humanoid")
-        if not hum or not hum.Sit or hum.SeatPart == nil then
-            return false
-        end
-
-        task.wait(0.5)
-    end
-
-    local acceptBtn = findObjectByPath(playerGui, acceptPath)
-    if not acceptBtn then
-        print("Кнопка Accept не найдена")
+-- Проверка условий перед accept
+local function checkPreAcceptConditions()
+    local percent = getPercent()
+    if not percent or percent > 40 then
+        print("Процент разницы > 40% (" .. tostring(percent) .. "%), ждём...")
         return false
     end
-
-    print("Активирую Accept...")
-    local ok = fireSequence(acceptBtn)
-    if not ok then
-        print("Не удалось активировать Accept.")
+    if not checkSecondContainer() then
+        print("Второй контейнер не содержит нужные фрукты, ждём...")
         return false
     end
+    return true
+end
 
-    local ready1 = findObjectByPath(playerGui, ready1Path)
-    if not ready1 or not (ready1:IsA("TextLabel") or ready1:IsA("TextButton") or ready1:IsA("TextBox")) then
-        print("Ready1 не найден или не является текстовым элементом")
-        return false
-    end
-
-    print("Ожидаю готовности...")
+-- Ожидание выполнения условий с таймаутом
+local function waitForPreAcceptConditions()
     local waited = 0
-    while waited < READY_TIMEOUT do
-        task.wait(0.5)
-        waited += 0.5
-        if ready1.Text == "Ready!" then
-            print("Готово! Ready1 изменился на 'Ready!'")
+    while waited < ACCEPT_WAIT_TIMEOUT do
+        if checkPreAcceptConditions() then
             return true
         end
+        task.wait(ACCEPT_CHECK_INTERVAL)
+        waited += ACCEPT_CHECK_INTERVAL
     end
-    print("Не удалось дождаться готовности за " .. READY_TIMEOUT .. " секунд.")
-    print("Текущий текст Ready1: " .. ready1.Text)
     return false
 end
 
--- Основной цикл
-print("Запуск авто-трейда...")
+-- Финальная активация Accept и ожидание завершения трейда
+local function acceptAndWaitForCompletion()
+    while true do
+        if not waitForPreAcceptConditions() then
+            print("Условия не выполнены за " .. ACCEPT_WAIT_TIMEOUT .. " сек, выпрыгиваем.")
+            return false
+        end
 
-while true do
-    local tradeTable, mySeat = waitForTradeTableSeat()
-    print("Сижу за TradeTable.")
+        local acceptBtn = findObjectByPath(playerGui, acceptPath)
+        if not acceptBtn then
+            print("Кнопка Accept не найдена")
+            return false
+        end
+        print("Активирую Accept...")
+        fireSequence(acceptBtn)
 
-    local partnerName = getPartnerName(tradeTable, mySeat)
+        local waited = 0
+        local ready1 = findObjectByPath(playerGui, ready1Path)
+        while waited < READY_TIMEOUT do
+            task.wait(0.5)
+            waited += 0.5
 
-    -- Ожидание подходящего партнёра (бесконечно)
-    if tradePartnerName ~= "" then
-        while partnerName ~= tradePartnerName do
-            print(string.format("Партнёр '%s' не совпадает с ожидаемым '%s'. Ожидание...", tostring(partnerName), tradePartnerName))
-
-            -- Если персонаж больше не сидит, выходим из ожидания
-            local char = player.Character
-            local hum = char and char:FindFirstChild("Humanoid")
-            if not hum or not hum.Sit or hum.SeatPart ~= mySeat then
-                break
+            if isTradeCompleted() then
+                print("Трейд завершён (уведомление Trade completed).")
+                return true
             end
 
-            task.wait(0.5)
+            if ready1 and ready1:IsA("TextLabel") then
+                if ready1.Text == "Ready!" then
+                    -- готовность есть, но уведомление не появилось, продолжаем ждать
+                elseif ready1.Text == "Not ready." then
+                    print("Ready1 снова Not ready, повторяем проверку и accept...")
+                    break
+                else
+                    print("Ready1 изменился на '" .. ready1.Text .. "', повторяем.")
+                    break
+                end
+            end
+        end
+
+        print("Повторяем попытку accept...")
+    end
+end
+
+-- Основная логика авто-трейда
+local function processAutoTrade()
+    if #tradeItems == 0 then
+        print("Список предметов для трейда пуст, пропускаем.")
+        return
+    end
+
+    print("Запуск авто-трейда...")
+    while true do
+        -- 1. Ждём, пока сядем за TradeTable
+        local tradeTable, mySeat = waitForTradeTableSeat()
+        print("Сижу за TradeTable.")
+
+        -- 2. Ожидание партнёра
+        local partnerName = nil
+        while partnerName == nil do
             partnerName = getPartnerName(tradeTable, mySeat)
+            if partnerName == nil then
+                print("Второе сиденье пусто, жду партнёра...")
+                task.wait(1)
+            end
+        end
+        print("Партнёр найден: " .. partnerName)
+
+        -- 3. Проверка ника (если задано)
+        if tradePartnerName ~= "" and partnerName ~= tradePartnerName then
+            print(string.format("Партнёр '%s' не совпадает с ожидаемым '%s'. Выпрыгиваю.", partnerName, tradePartnerName))
+            doJump()
+            task.wait(2)
+            continue
+        elseif tradePartnerName == "" then
+            print("Проверка партнёра отключена.")
+        else
+            print("Партнёр подходит: " .. partnerName)
         end
 
-        -- Проверяем, остались ли мы на сиденье и совпадает ли партнёр
-        local char = player.Character
-        local hum = char and char:FindFirstChild("Humanoid")
-        if not hum or not hum.Sit or hum.SeatPart ~= mySeat then
-            continue  -- персонаж покинул сиденье, начинаем заново
+        -- 4. Активация предметов первого контейнера
+        local allSuccess = true
+        for _, name in ipairs(tradeItems) do
+            if not processItem(name) then
+                allSuccess = false
+                break
+            end
         end
-
-        if partnerName ~= tradePartnerName then
-            -- вышли из цикла из-за пропажи партнёра (но мы всё ещё сидим?)
-            -- значит, ждём появления нового партнёра (вернёмся в начало)
+        if not allSuccess then
+            print("Не удалось активировать все предметы.")
+            doJump()
+            task.wait(2)
             continue
         end
 
-        print("Партнёр подходит: " .. partnerName)
-    else
-        print("Проверка партнёра отключена.")
-    end
-
-    -- Активируем предметы
-    local allSuccess = true
-    for _, name in ipairs(itemNames) do
-        if not processItem(name) then
-            allSuccess = false
-            break
+        -- 5. Проверка второго контейнера и value, затем accept и ожидание завершения
+        local tradeDone = acceptAndWaitForCompletion()
+        if tradeDone then
+            print("Трейд успешно завершён.")
+            break  -- выходим из цикла авто-трейда
+        else
+            print("Трейд не завершён, прыгаем и пробуем снова.")
+            doJump()
+            task.wait(2)
         end
     end
+end
 
-    if not allSuccess then
-        print("Не удалось активировать все предметы.")
-        doJump()
-        task.wait(2)
-        continue
-    end
+-- ====================== ОСНОВНОЙ ЦИКЛ ОПРОСА СЕРВЕРА ======================
+print("Скрипт запущен. Ожидание конфигурации с сервера...")
 
-    -- Активируем Accept
-    local success = acceptTrade()
-    if success then
-        print("Трейд завершён успешно.")
+while true do
+    local config = fetchConfig()
+    if config then
+        -- Выполняем LoadFruit + Respawn
+        local success = processLoadFruit()
+        if success then
+            -- Переходим к авто-трейду
+            processAutoTrade()
+        else
+            warn("Ошибка в процессе LoadFruit, пропускаем авто-трейд.")
+        end
+        -- После успешного трейда выходим из цикла опроса (можно изменить)
         break
     else
-        print("Трейд не завершён.")
-        doJump()
-        task.wait(2)
+        print("Конфигурация не получена, повтор через " .. POLL_INTERVAL .. " секунд.")
     end
+    task.wait(POLL_INTERVAL)
 end
