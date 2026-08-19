@@ -1,8 +1,8 @@
 -- ============================================================
--- ОБЪЕДИНЁННЫЙ КЛИЕНТСКИЙ СКРИПТ С ПОДДЕРЖКОЙ ТЕЛЕПОРТА
+-- ОБЪЕДИНЁННЫЙ КЛИЕНТСКИЙ СКРИПТ (исправлен телепорт)
 -- 1. Собирает инвентарь, отправляет на сервер с JobId
 -- 2. Получает конфигурацию (включая teleport_to_job_id для guest)
--- 3. Если нужно, выполняет телепорт по JobId
+-- 3. Если нужно, выполняет телепорт по JobId (через redz-library-v5)
 -- 4. Выполняет LoadFruit + AutoTrade
 -- ============================================================
 
@@ -15,11 +15,11 @@ local CoreGui = game:GetService("CoreGui")
 
 -- ====================== НАСТРОЙКИ ======================
 local SERVER_URL = "http://192.168.31.179:8000"
-local POLL_INTERVAL = 10  -- опрос конфигурации
-local SEND_INVENTORY_INTERVAL = 20  -- периодичность отправки инвентаря
-local TELEPORT_TIMEOUT = 60  -- таймаут ожидания телепорта
+local POLL_INTERVAL = 10
+local SEND_INVENTORY_INTERVAL = 20
+local TELEPORT_TIMEOUT = 60
 
--- ====================== ФУНКЦИИ ДЛЯ СБОРА ИНВЕНТАРЯ ======================
+-- ====================== УНИВЕРСАЛЬНЫЕ ФУНКЦИИ ======================
 local function fireSequence(btn)
     if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return false end
     local signals = {"MouseEnter", "MouseButton1Down", "MouseButton1Click", "MouseButton1Up", "Activated", "MouseLeave"}
@@ -48,6 +48,7 @@ local function findObjectByPath(root, ...)
     return current
 end
 
+-- ====================== СБОР ИНВЕНТАРЯ ======================
 local function activateButtonByPath(pathSegments, description)
     local btn = findObjectByPath(playerGui, table.unpack(pathSegments))
     if not btn then
@@ -146,20 +147,19 @@ local function fetchConfig()
     end
 end
 
--- ====================== ТЕЛЕПОРТ ПО JOB_ID ======================
+-- ====================== ТЕЛЕПОРТ ПО JOB_ID (исправленная версия) ======================
 local function teleportToJobId(targetJobId)
     print("Телепорт на JobId:", targetJobId)
     local TAB = 19
-    local OPT_TEXTBOX = 2
+    local OPT_TEXT = 2
     local OPT_ACTIVATE = 3
-    local TEXT_TO_INSERT = targetJobId
+    local TEXT = targetJobId
 
     local function getRoot()
         for _, child in ipairs(CoreGui:GetChildren()) do
             local obj = child:FindFirstChild("redz-library-v5")
             if obj then return obj end
         end
-        return nil
     end
 
     local function safeFind(obj, ...)
@@ -172,24 +172,21 @@ local function teleportToJobId(targetJobId)
 
     local function findTextBox(parent)
         for _, child in ipairs(parent:GetChildren()) do
-            if child:IsA("TextBox") then
-                return child
-            end
+            if child:IsA("TextBox") then return child end
             local found = findTextBox(child)
             if found then return found end
         end
-        return nil
     end
 
     local root = getRoot()
     if not root then
-        warn("Интерфейс redz-library-v5 не найден, телепорт невозможен")
+        warn("Интерфейс redz-library-v5 не найден")
         return false
     end
 
+    -- Переключаем вкладку
     local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll")
     if not tabsScroll then warn("TabsScroll не найден") return false end
-
     local tabButton, tabCount = nil, 0
     local function findTab(p)
         if tabButton then return end
@@ -206,52 +203,48 @@ local function teleportToJobId(targetJobId)
     end
     findTab(tabsScroll)
     if not tabButton then warn("Вкладка "..TAB.." не найдена") return false end
-
     fireSequence(tabButton)
     task.wait(0.5)
 
+    -- Контейнер опций
     local container = safeFind(root, "Window", "Components", "Containers", "Container")
     if not container then warn("Container не найден") return false end
 
-    local optionTextBox = nil
-    local optCount = 0
+    -- Опция 2: вставка текста
+    local optionText, optCount2 = nil, 0
     for _, c in ipairs(container:GetChildren()) do
         if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
-            optCount += 1
-            if optCount == OPT_TEXTBOX then
-                optionTextBox = c
+            optCount2 += 1
+            if optCount2 == OPT_TEXT then
+                optionText = c
                 break
             end
         end
     end
-    if not optionTextBox then warn("Опция "..OPT_TEXTBOX.." не найдена") return false end
+    if not optionText then warn("Опция "..OPT_TEXT.." не найдена") return false end
+    local textBox = findTextBox(optionText)
+    if textBox then
+        textBox.Text = TEXT
+    else
+        warn("TextBox не найден")
+        return false
+    end
 
-    local textBox = findTextBox(optionTextBox)
-    if not textBox then warn("TextBox не найден") return false end
+    task.wait(0.3)
 
-    textBox.Text = TEXT_TO_INSERT
-    task.wait(0.1)
-    pcall(function()
-        textBox:CaptureFocus()
-        task.wait(0.1)
-        textBox:ReleaseFocus()
-    end)
-
-    local optionActivate = nil
-    local optCount2 = 0
+    -- Опция 3: активация
+    local optionActivate, optCount3 = nil, 0
     for _, c in ipairs(container:GetChildren()) do
         if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
-            optCount2 += 1
-            if optCount2 == OPT_ACTIVATE then
+            optCount3 += 1
+            if optCount3 == OPT_ACTIVATE then
                 optionActivate = c
                 break
             end
         end
     end
     if not optionActivate then warn("Опция "..OPT_ACTIVATE.." не найдена") return false end
-
     fireSequence(optionActivate)
-    task.wait(0.2)
     print("Телепорт активирован.")
     return true
 end
@@ -327,7 +320,7 @@ local function processLoadFruit(loadFruitItems)
     return true
 end
 
--- ====================== АВТО-ТРЕЙД (полные функции) ======================
+-- ====================== АВТО-ТРЕЙД ======================
 local addButtonPath = {"Main", "Trade", "Container", "1", "Frame", "AddButton"}
 local firstContainerPath = {"Main", "Trade", "Container", "FrameAdd", "Frame"}
 local resultContainerPath = {"Main", "Trade", "Container", "1", "Frame"}
@@ -677,7 +670,7 @@ while true do
     -- 2. Ожидание конфигурации
     local config = nil
     local waited = 0
-    while config == nil and waited < 120 do  -- ждём до 2 минут
+    while config == nil and waited < 120 do
         config = fetchConfig()
         if config == nil then
             task.wait(POLL_INTERVAL)
@@ -719,5 +712,5 @@ while true do
         warn("Конфигурация не получена за 2 минуты.")
     end
 
-    task.wait(SEND_INVENTORY_INTERVAL)  -- пауза перед новым циклом
+    task.wait(SEND_INVENTORY_INTERVAL)
 end
