@@ -6,7 +6,7 @@
 local TAB = 19
 local OPT_TEXTBOX = 2      -- опция с полем ввода
 local OPT_ACTIVATE = 3     -- опция, которую нужно активировать
-local TEXT_TO_INSERT = "3ba0b35b-27f3-4494-8274-cfd7113e6e04"
+local TEXT_TO_INSERT = "a6d8c7a9-a708-49bf-b6f9-9715503f4e41"
 
 local CoreGui = game:GetService("CoreGui")
 
