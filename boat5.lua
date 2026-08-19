@@ -1,5 +1,7 @@
 -- ============================================================
--- ПОЛНЫЙ АВТО-ТРЕЙД С ОЖИДАНИЕМ УСЛОВИЙ (30 СЕК)
+-- ПОЛНЫЙ АВТО-ТРЕЙД БЕЗ ТАЙМАУТОВ ОЖИДАНИЯ
+-- Ожидание партнёра и условий теперь бесконечное
+-- (прерывается только если персонаж покинул сиденье)
 -- ============================================================
 
 local player = game.Players.LocalPlayer
@@ -8,14 +10,14 @@ local Players = game:GetService("Players")
 
 -- ====================== КОНФИГУРАЦИЯ ======================
 local itemNames = {
-    "dark",
+    "sand",
     -- добавьте другие названия
 }
 
 local tradePartnerName = "WillieFrost6"  -- если пусто, проверка партнёра отключена
 
 local expectedItemsInContainer2 = {
-    "sand",
+    "dark",
     -- названия, которые должны быть в контейнере 2 перед Accept
 }
 
@@ -28,11 +30,10 @@ local acceptPath = {"Main", "Trade", "Info", "Accept"}
 local ready1Path = {"Main", "Trade", "Info", "Ready1"}
 local bottomTitlePath = {"Main", "Trade", "BottomTitle"}
 
--- Параметры
+-- Параметры (таймауты оставлены только для отдельных ожиданий UI)
 local RESULT_TIMEOUT = 30
 local MAX_ATTEMPTS_PER_ITEM = 3
 local READY_TIMEOUT = 30
-local CONDITION_WAIT_TIMEOUT = 30  -- ожидание выполнения условий перед прыжком
 -- ============================================================
 
 -- Активация кнопки через getconnections
@@ -297,42 +298,25 @@ local function processItem(searchText)
     return false
 end
 
--- Финальная активация Accept с ожиданием условий
+-- Финальная активация Accept с бесконечным ожиданием условий
 local function acceptTrade()
-    -- Ожидание выполнения условий (контейнер 2 и процент) до 30 секунд
-    print("Ожидание подходящих условий для Accept (до 30 сек)...")
-    local waited = 0
-    while waited < CONDITION_WAIT_TIMEOUT do
+    print("Ожидание выполнения условий для Accept...")
+    while true do
         local container2Ok = checkContainer2Contents()
         local percent = getPercent()
+
         if container2Ok and percent and percent <= 40 then
             break
         end
-        task.wait(0.5)
-        waited += 0.5
-        -- Если персонаж больше не сидит, выходим
+
+        -- Проверяем, всё ещё сидим
         local char = player.Character
         local hum = char and char:FindFirstChild("Humanoid")
         if not hum or not hum.Sit or hum.SeatPart == nil then
             return false
         end
-    end
 
-    if waited >= CONDITION_WAIT_TIMEOUT then
-        print("Условия не выполнены за 30 секунд.")
-        return false
-    end
-
-    -- Проверяем ещё раз
-    if not checkContainer2Contents() then
-        print("Проверка контейнера 2 не пройдена.")
-        return false
-    end
-
-    local percent = getPercent()
-    if not percent or percent > 40 then
-        print("Процент разницы >40 или не определён.")
-        return false
+        task.wait(0.5)
     end
 
     local acceptBtn = findObjectByPath(playerGui, acceptPath)
@@ -355,7 +339,7 @@ local function acceptTrade()
     end
 
     print("Ожидаю готовности...")
-    waited = 0
+    local waited = 0
     while waited < READY_TIMEOUT do
         task.wait(0.5)
         waited += 0.5
@@ -378,35 +362,38 @@ while true do
 
     local partnerName = getPartnerName(tradeTable, mySeat)
 
-    -- Если задан ожидаемый партнёр и он не совпадает, ждём до 30 сек
-    if tradePartnerName ~= "" and partnerName ~= tradePartnerName then
-        print(string.format("Партнёр '%s' не совпадает с ожидаемым '%s'. Ожидание 30 сек...", tostring(partnerName), tradePartnerName))
-        local waitStart = tick()
-        local partnerOk = false
-        while tick() - waitStart < CONDITION_WAIT_TIMEOUT do
-            task.wait(0.5)
-            -- Проверяем, всё ещё сидим
+    -- Ожидание подходящего партнёра (бесконечно)
+    if tradePartnerName ~= "" then
+        while partnerName ~= tradePartnerName do
+            print(string.format("Партнёр '%s' не совпадает с ожидаемым '%s'. Ожидание...", tostring(partnerName), tradePartnerName))
+
+            -- Если персонаж больше не сидит, выходим из ожидания
             local char = player.Character
             local hum = char and char:FindFirstChild("Humanoid")
             if not hum or not hum.Sit or hum.SeatPart ~= mySeat then
                 break
             end
+
+            task.wait(0.5)
             partnerName = getPartnerName(tradeTable, mySeat)
-            if partnerName == tradePartnerName then
-                partnerOk = true
-                break
-            end
         end
-        if not partnerOk then
-            print("Нужный партнёр не появился. Выпрыгиваю.")
-            doJump()
-            task.wait(2)
+
+        -- Проверяем, остались ли мы на сиденье и совпадает ли партнёр
+        local char = player.Character
+        local hum = char and char:FindFirstChild("Humanoid")
+        if not hum or not hum.Sit or hum.SeatPart ~= mySeat then
+            continue  -- персонаж покинул сиденье, начинаем заново
+        end
+
+        if partnerName ~= tradePartnerName then
+            -- вышли из цикла из-за пропажи партнёра (но мы всё ещё сидим?)
+            -- значит, ждём появления нового партнёра (вернёмся в начало)
             continue
-        else
-            print("Партнёр подходит: " .. partnerName)
         end
+
+        print("Партнёр подходит: " .. partnerName)
     else
-        print("Проверка партнёра отключена или партнёр подходит.")
+        print("Проверка партнёра отключена.")
     end
 
     -- Активируем предметы
