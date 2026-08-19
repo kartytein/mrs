@@ -9,18 +9,20 @@ local Players = game:GetService("Players")
 -- ====================== КОНФИГУРАЦИЯ ======================
 -- Предметы для первого контейнера (мы добавляем)
 local itemNames = {
-    "sand",
+    "NAME1",
+    "NAME2",
     -- добавьте другие названия
 }
 
 -- Предметы, которые должны быть во втором контейнере (проверка перед accept)
 local itemNames2 = {
-    "dark",
+    "NAME1",
+    "NAME2",
     -- список того, что должно быть у партнёра
 }
 
 -- Ник ожидаемого партнёра. Если пустая строка - проверка отключена.
-local tradePartnerName = "WillieFrost6"  -- например: "Steve"
+local tradePartnerName = ""  -- например: "Steve"
 
 -- Пути
 local addButtonPath = {"Main", "Trade", "Container", "1", "Frame", "AddButton"}
