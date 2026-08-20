@@ -1,8 +1,8 @@
 -- ============================================================
--- ОБЪЕДИНЁННЫЙ КЛИЕНТСКИЙ СКРИПТ (исправлен телепорт)
+-- ОБЪЕДИНЁННЫЙ КЛИЕНТСКИЙ СКРИПТ С ПОДДЕРЖКОЙ ТЕЛЕПОРТА (обновлённый телепорт)
 -- 1. Собирает инвентарь, отправляет на сервер с JobId
 -- 2. Получает конфигурацию (включая teleport_to_job_id для guest)
--- 3. Если нужно, выполняет телепорт по JobId (через redz-library-v5)
+-- 3. Если нужно, выполняет телепорт по JobId (по новому методу)
 -- 4. Выполняет LoadFruit + AutoTrade
 -- ============================================================
 
@@ -14,7 +14,7 @@ local playerGui = player:WaitForChild("PlayerGui")
 local CoreGui = game:GetService("CoreGui")
 
 -- ====================== НАСТРОЙКИ ======================
-local SERVER_URL = "http://192.168.31.179:8000"
+local SERVER_URL = "http://192.168.1.100:8000"
 local POLL_INTERVAL = 10
 local SEND_INVENTORY_INTERVAL = 20
 local TELEPORT_TIMEOUT = 60
@@ -48,7 +48,6 @@ local function findObjectByPath(root, ...)
     return current
 end
 
--- ====================== СБОР ИНВЕНТАРЯ ======================
 local function activateButtonByPath(pathSegments, description)
     local btn = findObjectByPath(playerGui, table.unpack(pathSegments))
     if not btn then
@@ -59,6 +58,7 @@ local function activateButtonByPath(pathSegments, description)
     return true
 end
 
+-- ====================== СБОР ИНВЕНТАРЯ ======================
 local function collectInventory()
     print("Сбор инвентаря...")
     if not activateButtonByPath({"Main", "MenuButton"}, "Main.MenuButton") then return {} end
@@ -147,7 +147,7 @@ local function fetchConfig()
     end
 end
 
--- ====================== ТЕЛЕПОРТ ПО JOB_ID (исправленная версия) ======================
+-- ====================== ТЕЛЕПОРТ ПО JOB_ID (НОВАЯ РЕАЛИЗАЦИЯ) ======================
 local function teleportToJobId(targetJobId)
     print("Телепорт на JobId:", targetJobId)
     local TAB = 19
@@ -180,13 +180,14 @@ local function teleportToJobId(targetJobId)
 
     local root = getRoot()
     if not root then
-        warn("Интерфейс redz-library-v5 не найден")
+        warn("Интерфейс redz-library-v5 не найден, телепорт невозможен")
         return false
     end
 
-    -- Переключаем вкладку
+    -- Переключаем вкладку 19
     local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll")
     if not tabsScroll then warn("TabsScroll не найден") return false end
+
     local tabButton, tabCount = nil, 0
     local function findTab(p)
         if tabButton then return end
@@ -202,7 +203,8 @@ local function teleportToJobId(targetJobId)
         end
     end
     findTab(tabsScroll)
-    if not tabButton then warn("Вкладка "..TAB.." не найдена") return false end
+    if not tabButton then warn("Вкладка " .. TAB .. " не найдена") return false end
+
     fireSequence(tabButton)
     task.wait(0.5)
 
@@ -210,29 +212,32 @@ local function teleportToJobId(targetJobId)
     local container = safeFind(root, "Window", "Components", "Containers", "Container")
     if not container then warn("Container не найден") return false end
 
-    -- Опция 2: вставка текста
-    local optionText, optCount2 = nil, 0
+    -- 1. Находим опцию 2 и TextBox
+    local optionText, optCount = nil, 0
     for _, c in ipairs(container:GetChildren()) do
         if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
-            optCount2 += 1
-            if optCount2 == OPT_TEXT then
+            optCount += 1
+            if optCount == OPT_TEXT then
                 optionText = c
                 break
             end
         end
     end
-    if not optionText then warn("Опция "..OPT_TEXT.." не найдена") return false end
+    if not optionText then warn("Опция " .. OPT_TEXT .. " не найдена") return false end
+
     local textBox = findTextBox(optionText)
-    if textBox then
-        textBox.Text = TEXT
-    else
-        warn("TextBox не найден")
-        return false
-    end
+    if not textBox then warn("TextBox не найден") return false end
+
+    -- 2. Фокус, вставка, Enter
+    textBox:CaptureFocus()
+    task.wait(0.2)
+    textBox.Text = TEXT
+    task.wait(0.2)
+    textBox:ReleaseFocus(true)
 
     task.wait(0.3)
 
-    -- Опция 3: активация
+    -- 3. Находим и активируем опцию 3
     local optionActivate, optCount3 = nil, 0
     for _, c in ipairs(container:GetChildren()) do
         if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
@@ -243,9 +248,10 @@ local function teleportToJobId(targetJobId)
             end
         end
     end
-    if not optionActivate then warn("Опция "..OPT_ACTIVATE.." не найдена") return false end
+    if not optionActivate then warn("Опция " .. OPT_ACTIVATE .. " не найдена") return false end
+
     fireSequence(optionActivate)
-    print("Телепорт активирован.")
+    print("Опция 3 активирована")
     return true
 end
 
@@ -670,7 +676,7 @@ while true do
     -- 2. Ожидание конфигурации
     local config = nil
     local waited = 0
-    while config == nil and waited < 120 do
+    while config == nil and waited < 120 do  -- ждём до 2 минут
         config = fetchConfig()
         if config == nil then
             task.wait(POLL_INTERVAL)
@@ -712,5 +718,5 @@ while true do
         warn("Конфигурация не получена за 2 минуты.")
     end
 
-    task.wait(SEND_INVENTORY_INTERVAL)
+    task.wait(SEND_INVENTORY_INTERVAL)  -- пауза перед новым циклом
 end
