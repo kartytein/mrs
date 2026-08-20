@@ -1,30 +1,332 @@
 -- ============================================================
--- ПОЛНЫЙ АВТО-ТРЕЙД С ПРОВЕРКОЙ ПАРТНЁРА, ВТОРОГО КОНТЕЙНЕРА И ЗАВЕРШЕНИЕМ
+-- ОБЪЕДИНЁННЫЙ КЛИЕНТСКИЙ СКРИПТ С ПОДДЕРЖКОЙ ТЕЛЕПОРТА (обновлённый телепорт)
+-- 1. Собирает инвентарь, отправляет на сервер с JobId
+-- 2. Получает конфигурацию (включая teleport_to_job_id для guest)
+-- 3. Если нужно, выполняет телепорт по JobId (по новому методу)
+-- 4. Выполняет LoadFruit + AutoTrade
 -- ============================================================
 
-local player = game.Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+local CoreGui = game:GetService("CoreGui")
 
--- ====================== КОНФИГУРАЦИЯ ======================
--- Предметы для первого контейнера (мы добавляем)
-local itemNames = {
-    "NAME1",
-    "NAME2",
-    -- добавьте другие названия
-}
+-- ====================== НАСТРОЙКИ ======================
+local SERVER_URL = "http://192.168.31.179:8000"
+local POLL_INTERVAL = 10
+local SEND_INVENTORY_INTERVAL = 20
+local TELEPORT_TIMEOUT = 60
 
--- Предметы, которые должны быть во втором контейнере (проверка перед accept)
-local itemNames2 = {
-    "NAME1",
-    "NAME2",
-    -- список того, что должно быть у партнёра
-}
+-- ====================== УНИВЕРСАЛЬНЫЕ ФУНКЦИИ ======================
+local function fireSequence(btn)
+    if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return false end
+    local signals = {"MouseEnter", "MouseButton1Down", "MouseButton1Click", "MouseButton1Up", "Activated", "MouseLeave"}
+    for _, sigName in ipairs(signals) do
+        local sig = btn[sigName]
+        if sig then
+            local ok, conns = pcall(function() return getconnections(sig) end)
+            if ok and conns then
+                for _, conn in ipairs(conns) do
+                    if conn.Enabled and type(conn.Function) == "function" then
+                        pcall(conn.Function)
+                    end
+                end
+            end
+        end
+    end
+    return true
+end
 
--- Ник ожидаемого партнёра. Если пустая строка - проверка отключена.
-local tradePartnerName = ""  -- например: "Steve"
+local function findObjectByPath(root, ...)
+    local current = root
+    for _, segment in ipairs({...}) do
+        if not current then return nil end
+        current = current:FindFirstChild(segment)
+    end
+    return current
+end
 
--- Пути
+local function activateButtonByPath(pathSegments, description)
+    local btn = findObjectByPath(playerGui, table.unpack(pathSegments))
+    if not btn then
+        warn("Кнопка не найдена: " .. description)
+        return false
+    end
+    fireSequence(btn)
+    return true
+end
+
+-- ====================== СБОР ИНВЕНТАРЯ ======================
+local function collectInventory()
+    print("Сбор инвентаря...")
+    if not activateButtonByPath({"Main", "MenuButton"}, "Main.MenuButton") then return {} end
+    task.wait(1)
+    if not activateButtonByPath({"Main", "InventoryButton"}, "Main.InventoryButton") then return {} end
+    task.wait(1)
+    if not activateButtonByPath({"Inventory", "Inventory", "Main", "NavigationRail", "HoverBox", "UpperBar", "Category2"}, "Category2") then return {} end
+    task.wait(2)
+
+    local tileGrid = findObjectByPath(playerGui, "Inventory", "Inventory", "Main", "PageContent", "TileGrid")
+    if not tileGrid then
+        warn("TileGrid не найден")
+        return {}
+    end
+
+    local fruits = {}
+    for _, child in ipairs(tileGrid:GetChildren()) do
+        if child:IsA("ImageButton") and child.Name:sub(1,5) == "Tile-" then
+            local line1 = nil
+            local details = child:FindFirstChild("Details")
+            if details then
+                line1 = details:FindFirstChild("Line-1")
+            end
+            if not line1 then
+                for _, obj in ipairs(child:GetDescendants()) do
+                    if obj:IsA("TextLabel") then
+                        line1 = obj
+                        break
+                    end
+                end
+            end
+            local text = ""
+            if line1 and line1:IsA("TextLabel") then
+                text = line1.Text
+            end
+            if text and text:find(",") then
+                text = text:sub(1, text:find(",") - 1)
+            end
+            text = text:gsub("%s+$", "")
+            if text ~= "" then
+                table.insert(fruits, text)
+            end
+        end
+    end
+    print("Инвентарь собран:", fruits)
+    return fruits
+end
+
+-- ====================== ОТПРАВКА НА СЕРВЕР ======================
+local function sendInventory(fruits)
+    local fruitsStr = table.concat(fruits, ",")
+    local url = SERVER_URL .. "/send_inventory?nickname=" .. HttpService:UrlEncode(player.Name)
+        .. "&fruits=" .. HttpService:UrlEncode(fruitsStr)
+        .. "&job_id=" .. HttpService:UrlEncode(game.JobId)
+    local success, result = pcall(function()
+        return game:HttpGet(url)
+    end)
+    if success then
+        print("Инвентарь отправлен:", result)
+    else
+        warn("Ошибка отправки инвентаря:", result)
+    end
+end
+
+-- ====================== ПОЛУЧЕНИЕ КОНФИГУРАЦИИ ======================
+local function fetchConfig()
+    local url = SERVER_URL .. "/get_config?nickname=" .. HttpService:UrlEncode(player.Name)
+    local success, response = pcall(function()
+        return game:HttpGet(url)
+    end)
+    if not success then
+        warn("Ошибка запроса конфигурации:", response)
+        return nil
+    end
+
+    local data = HttpService:JSONDecode(response)
+    if data and data.partner_name then
+        print("Конфигурация получена:", data)
+        return data
+    elseif data and data.error then
+        print("Сервер:", data.error)
+        return nil
+    else
+        print("Конфигурация ещё не готова")
+        return nil
+    end
+end
+
+-- ====================== ТЕЛЕПОРТ ПО JOB_ID (НОВАЯ РЕАЛИЗАЦИЯ) ======================
+local function teleportToJobId(targetJobId)
+    print("Телепорт на JobId:", targetJobId)
+    local TAB = 19
+    local OPT_TEXT = 2
+    local OPT_ACTIVATE = 3
+    local TEXT = targetJobId
+
+    local function getRoot()
+        for _, child in ipairs(CoreGui:GetChildren()) do
+            local obj = child:FindFirstChild("redz-library-v5")
+            if obj then return obj end
+        end
+    end
+
+    local function safeFind(obj, ...)
+        for _, name in ipairs({...}) do
+            if not obj then return nil end
+            obj = obj:FindFirstChild(name)
+        end
+        return obj
+    end
+
+    local function findTextBox(parent)
+        for _, child in ipairs(parent:GetChildren()) do
+            if child:IsA("TextBox") then return child end
+            local found = findTextBox(child)
+            if found then return found end
+        end
+    end
+
+    local root = getRoot()
+    if not root then
+        warn("Интерфейс redz-library-v5 не найден, телепорт невозможен")
+        return false
+    end
+
+    -- Переключаем вкладку 19
+    local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll")
+    if not tabsScroll then warn("TabsScroll не найден") return false end
+
+    local tabButton, tabCount = nil, 0
+    local function findTab(p)
+        if tabButton then return end
+        for _, c in ipairs(p:GetChildren()) do
+            if c:IsA("TextButton") or c:IsA("ImageButton") then
+                tabCount += 1
+                if tabCount == TAB then
+                    tabButton = c
+                    return
+                end
+            end
+            findTab(c)
+        end
+    end
+    findTab(tabsScroll)
+    if not tabButton then warn("Вкладка " .. TAB .. " не найдена") return false end
+
+    fireSequence(tabButton)
+    task.wait(0.5)
+
+    -- Контейнер опций
+    local container = safeFind(root, "Window", "Components", "Containers", "Container")
+    if not container then warn("Container не найден") return false end
+
+    -- 1. Находим опцию 2 и TextBox
+    local optionText, optCount = nil, 0
+    for _, c in ipairs(container:GetChildren()) do
+        if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
+            optCount += 1
+            if optCount == OPT_TEXT then
+                optionText = c
+                break
+            end
+        end
+    end
+    if not optionText then warn("Опция " .. OPT_TEXT .. " не найдена") return false end
+
+    local textBox = findTextBox(optionText)
+    if not textBox then warn("TextBox не найден") return false end
+
+    -- 2. Фокус, вставка, Enter
+    textBox:CaptureFocus()
+    task.wait(0.2)
+    textBox.Text = TEXT
+    task.wait(0.2)
+    textBox:ReleaseFocus(true)
+
+    task.wait(0.3)
+
+    -- 3. Находим и активируем опцию 3
+    local optionActivate, optCount3 = nil, 0
+    for _, c in ipairs(container:GetChildren()) do
+        if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
+            optCount3 += 1
+            if optCount3 == OPT_ACTIVATE then
+                optionActivate = c
+                break
+            end
+        end
+    end
+    if not optionActivate then warn("Опция " .. OPT_ACTIVATE .. " не найдена") return false end
+
+    fireSequence(optionActivate)
+    print("Опция 3 активирована")
+    return true
+end
+
+-- Ожидание, пока game.JobId станет целевым
+local function waitForTeleport(targetJobId, timeout)
+    local waited = 0
+    while waited < timeout do
+        if game.JobId == targetJobId then
+            return true
+        end
+        task.wait(1)
+        waited += 1
+    end
+    return false
+end
+
+-- ====================== LOADFRUIT + RESPAWN ======================
+local function formatItemName(name)
+    local lower = name:lower()
+    local cap = lower:sub(1, 1):upper() .. lower:sub(2)
+    return cap .. "-" .. cap
+end
+
+local function invokeLoadFruit(fruitName)
+    local success, result = pcall(function()
+        return ReplicatedStorage.Remotes.CommF_:InvokeServer("LoadFruit", fruitName)
+    end)
+    if success then
+        print("[Успех] LoadFruit для " .. fruitName .. " | Ответ: " .. tostring(result))
+    else
+        warn("[Ошибка] LoadFruit для " .. fruitName .. " | Причина: " .. tostring(result))
+    end
+end
+
+local function respawnCharacter()
+    local char = player.Character
+    if not char then return false end
+    local hum = char:FindFirstChild("Humanoid")
+    if not hum then return false end
+    pcall(function() hum.Health = 0 end)
+    return true
+end
+
+local function waitForCharacterRespawn()
+    local oldChar = player.Character
+    local waited = 0
+    while waited < 30 do
+        local char = player.Character
+        if char and char ~= oldChar then
+            return char
+        end
+        task.wait(0.5)
+        waited += 0.5
+    end
+    return nil
+end
+
+local function processLoadFruit(loadFruitItems)
+    if #loadFruitItems == 0 then
+        print("Список LoadFruit пуст, пропускаем.")
+        return true
+    end
+
+    for _, item in ipairs(loadFruitItems) do
+        local formatted = formatItemName(item)
+        print("Обрабатываю '" .. item .. "' -> '" .. formatted .. "'")
+        invokeLoadFruit(formatted)
+        respawnCharacter()
+        waitForCharacterRespawn()
+        task.wait(1)
+    end
+    return true
+end
+
+-- ====================== АВТО-ТРЕЙД ======================
 local addButtonPath = {"Main", "Trade", "Container", "1", "Frame", "AddButton"}
 local firstContainerPath = {"Main", "Trade", "Container", "FrameAdd", "Frame"}
 local resultContainerPath = {"Main", "Trade", "Container", "1", "Frame"}
@@ -33,50 +335,12 @@ local acceptPath = {"Main", "Trade", "Info", "Accept"}
 local ready1Path = {"Main", "Trade", "Info", "Ready1"}
 local bottomTitlePath = {"Main", "Trade", "BottomTitle"}
 
--- Параметры
 local RESULT_TIMEOUT = 30
 local MAX_ATTEMPTS_PER_ITEM = 3
 local READY_TIMEOUT = 30
-local ACCEPT_CHECK_INTERVAL = 0.5 -- интервал проверки перед accept (после неудачи)
-local ACCEPT_WAIT_TIMEOUT = 30    -- сколько ждать, если условия не выполнены
--- ============================================================
+local ACCEPT_CHECK_INTERVAL = 0.5
+local ACCEPT_WAIT_TIMEOUT = 30
 
--- Активация кнопки через getconnections
-local function fireSequence(btn)
-    if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return false end
-    local signals = {"MouseEnter","MouseButton1Down","MouseButton1Click","MouseButton1Up","Activated","MouseLeave"}
-    for _, sigName in ipairs(signals) do
-        local success, err = pcall(function()
-            local sig = btn[sigName]
-            if sig then
-                local conns = getconnections(sig)
-                if conns and #conns > 0 then
-                    for _, conn in ipairs(conns) do
-                        if conn.Enabled and type(conn.Function) == "function" then
-                            conn.Function()
-                        end
-                    end
-                end
-            end
-        end)
-        if not success then
-            warn("Ошибка при вызове " .. sigName .. ": " .. tostring(err))
-        end
-    end
-    return true
-end
-
--- Поиск объекта по пути
-local function findObjectByPath(root, path)
-    local current = root
-    for _, segment in ipairs(path) do
-        if not current then return nil end
-        current = current:FindFirstChild(segment)
-    end
-    return current
-end
-
--- Поиск родительской кнопки
 local function findParentButton(obj)
     local current = obj
     while current do
@@ -88,7 +352,6 @@ local function findParentButton(obj)
     return nil
 end
 
--- Поиск текстового элемента в контейнере по подстроке
 local function findTextElementInContainer(container, search)
     for _, obj in ipairs(container:GetDescendants()) do
         if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
@@ -100,9 +363,8 @@ local function findTextElementInContainer(container, search)
     return nil
 end
 
--- Поиск элемента-результата в resultContainer
 local function findResultElement(search)
-    local container = findObjectByPath(playerGui, resultContainerPath)
+    local container = findObjectByPath(playerGui, table.unpack(resultContainerPath))
     if not container then return nil end
     for _, obj in ipairs(container:GetDescendants()) do
         if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
@@ -117,11 +379,10 @@ local function findResultElement(search)
     return nil
 end
 
--- Ожидание появления объекта
 local function waitForObject(path, timeout)
     local waited = 0
     while waited < timeout do
-        local obj = findObjectByPath(playerGui, path)
+        local obj = findObjectByPath(playerGui, table.unpack(path))
         if obj then return obj end
         task.wait(0.5)
         waited += 0.5
@@ -129,7 +390,6 @@ local function waitForObject(path, timeout)
     return nil
 end
 
--- Ожидание, пока персонаж сядет на TradeTable
 local function waitForTradeTableSeat()
     while true do
         local char = player.Character
@@ -146,7 +406,6 @@ local function waitForTradeTableSeat()
     end
 end
 
--- Получение ника партнёра на другом сиденье (может вернуть nil)
 local function getPartnerName(tradeTable, mySeat)
     local seats = {}
     for _, part in ipairs(tradeTable:GetDescendants()) do
@@ -178,7 +437,6 @@ local function getPartnerName(tradeTable, mySeat)
     return nil
 end
 
--- Прыжок: выйти из сиденья и подпрыгнуть
 local function doJump()
     local char = player.Character
     if not char then return end
@@ -191,9 +449,8 @@ local function doJump()
     end)
 end
 
--- Проверка процента в BottomTitle
 local function getPercent()
-    local bottomTitle = findObjectByPath(playerGui, bottomTitlePath)
+    local bottomTitle = findObjectByPath(playerGui, table.unpack(bottomTitlePath))
     if not bottomTitle or not (bottomTitle:IsA("TextLabel") or bottomTitle:IsA("TextButton") or bottomTitle:IsA("TextBox")) then
         return nil
     end
@@ -201,13 +458,12 @@ local function getPercent()
     return percent and tonumber(percent) or nil
 end
 
--- Проверка, что все предметы из itemNames2 есть во втором контейнере
-local function checkSecondContainer()
-    local secondContainer = findObjectByPath(playerGui, secondContainerPath)
+local function checkSecondContainer(loadFruitItems)
+    local secondContainer = findObjectByPath(playerGui, table.unpack(secondContainerPath))
     if not secondContainer then
         return false
     end
-    for _, item in ipairs(itemNames2) do
+    for _, item in ipairs(loadFruitItems) do
         if not findTextElementInContainer(secondContainer, item) then
             return false
         end
@@ -215,7 +471,6 @@ local function checkSecondContainer()
     return true
 end
 
--- Проверка уведомления о завершении трейда
 local function isTradeCompleted()
     local notifications = playerGui:FindFirstChild("Notifications")
     if not notifications then return false end
@@ -229,12 +484,11 @@ local function isTradeCompleted()
     return false
 end
 
--- Обработка одного предмета
 local function processItem(searchText)
     for attempt = 1, MAX_ATTEMPTS_PER_ITEM do
         print(string.format("Обработка '%s' (попытка %d/%d)", searchText, attempt, MAX_ATTEMPTS_PER_ITEM))
 
-        local addButton = findObjectByPath(playerGui, addButtonPath)
+        local addButton = findObjectByPath(playerGui, table.unpack(addButtonPath))
         if not addButton then
             warn("AddButton не найден")
             task.wait(2)
@@ -281,26 +535,23 @@ local function processItem(searchText)
     return false
 end
 
--- Функция проверки условий перед accept (value и второй контейнер)
--- Возвращает true, если условия выполнены
-local function checkPreAcceptConditions()
+local function checkPreAcceptConditions(loadFruitItems)
     local percent = getPercent()
     if not percent or percent > 40 then
         print("Процент разницы > 40% (" .. tostring(percent) .. "%), ждём...")
         return false
     end
-    if not checkSecondContainer() then
-        print("Второй контейнер не содержит нужные предметы, ждём...")
+    if not checkSecondContainer(loadFruitItems) then
+        print("Второй контейнер не содержит нужные фрукты, ждём...")
         return false
     end
     return true
 end
 
--- Функция ожидания выполнения условий с таймаутом 30 сек
-local function waitForPreAcceptConditions()
+local function waitForPreAcceptConditions(loadFruitItems)
     local waited = 0
     while waited < ACCEPT_WAIT_TIMEOUT do
-        if checkPreAcceptConditions() then
+        if checkPreAcceptConditions(loadFruitItems) then
             return true
         end
         task.wait(ACCEPT_CHECK_INTERVAL)
@@ -309,18 +560,14 @@ local function waitForPreAcceptConditions()
     return false
 end
 
--- Финальная активация Accept и ожидание завершения трейда
--- Возвращает true только если появилось уведомление "Trade completed"
-local function acceptAndWaitForCompletion()
+local function acceptAndWaitForCompletion(loadFruitItems)
     while true do
-        -- проверяем условия перед accept
-        if not waitForPreAcceptConditions() then
+        if not waitForPreAcceptConditions(loadFruitItems) then
             print("Условия не выполнены за " .. ACCEPT_WAIT_TIMEOUT .. " сек, выпрыгиваем.")
             return false
         end
 
-        -- активируем accept
-        local acceptBtn = findObjectByPath(playerGui, acceptPath)
+        local acceptBtn = findObjectByPath(playerGui, table.unpack(acceptPath))
         if not acceptBtn then
             print("Кнопка Accept не найдена")
             return false
@@ -328,94 +575,148 @@ local function acceptAndWaitForCompletion()
         print("Активирую Accept...")
         fireSequence(acceptBtn)
 
-        -- ждём либо уведомления о завершении, либо сброса Ready1
         local waited = 0
-        local ready1 = findObjectByPath(playerGui, ready1Path)
+        local ready1 = findObjectByPath(playerGui, table.unpack(ready1Path))
         while waited < READY_TIMEOUT do
             task.wait(0.5)
             waited += 0.5
 
-            -- проверяем уведомление о завершении
             if isTradeCompleted() then
                 print("Трейд завершён (уведомление Trade completed).")
                 return true
             end
 
-            -- если Ready1 существует, проверяем его текст
             if ready1 and ready1:IsA("TextLabel") then
                 if ready1.Text == "Ready!" then
-                    -- готовность есть, но уведомление не появилось, продолжаем ждать
+                    -- continue
                 elseif ready1.Text == "Not ready." then
-                    -- сброс, выходим из ожидания, чтобы повторить цикл accept
                     print("Ready1 снова Not ready, повторяем проверку и accept...")
                     break
                 else
-                    -- любое другое изменение, тоже повторим
                     print("Ready1 изменился на '" .. ready1.Text .. "', повторяем.")
                     break
                 end
             end
         end
 
-        -- если вышли из-за таймаута, то продолжаем цикл accept (бесконечно)
         print("Повторяем попытку accept...")
     end
 end
 
+local function processAutoTrade(tradeItems, partnerName, loadFruitItems)
+    if #tradeItems == 0 then
+        print("Список предметов для трейда пуст, пропускаем.")
+        return
+    end
+
+    print("Запуск авто-трейда...")
+    while true do
+        local tradeTable, mySeat = waitForTradeTableSeat()
+        print("Сижу за TradeTable.")
+
+        local partner = nil
+        while partner == nil do
+            partner = getPartnerName(tradeTable, mySeat)
+            if partner == nil then
+                print("Второе сиденье пусто, жду партнёра...")
+                task.wait(1)
+            end
+        end
+        print("Партнёр найден: " .. partner)
+
+        if partnerName ~= "" and partner ~= partnerName then
+            print(string.format("Партнёр '%s' не совпадает с ожидаемым '%s'. Выпрыгиваю.", partner, partnerName))
+            doJump()
+            task.wait(2)
+            continue
+        elseif partnerName == "" then
+            print("Проверка партнёра отключена.")
+        else
+            print("Партнёр подходит: " .. partner)
+        end
+
+        local allSuccess = true
+        for _, name in ipairs(tradeItems) do
+            if not processItem(name) then
+                allSuccess = false
+                break
+            end
+        end
+        if not allSuccess then
+            print("Не удалось активировать все предметы.")
+            doJump()
+            task.wait(2)
+            continue
+        end
+
+        local tradeDone = acceptAndWaitForCompletion(loadFruitItems)
+        if tradeDone then
+            print("Трейд успешно завершён.")
+            break
+        else
+            print("Трейд не завершён, прыгаем и пробуем снова.")
+            doJump()
+            task.wait(2)
+        end
+    end
+end
+
 -- ====================== ОСНОВНОЙ ЦИКЛ ======================
-print("Запуск авто-трейда...")
+print("Скрипт запущен. Начинаем сбор и отправку инвентаря...")
 
 while true do
-    -- 1. Ждём, пока сядем за TradeTable
-    local tradeTable, mySeat = waitForTradeTableSeat()
-    print("Сижу за TradeTable.")
+    -- 1. Сбор инвентаря
+    local inventory = collectInventory()
+    if #inventory > 0 then
+        sendInventory(inventory)
+    else
+        warn("Инвентарь пуст, не отправляем.")
+    end
 
-    -- 2. Ожидание партнёра
-    local partnerName = nil
-    while partnerName == nil do
-        partnerName = getPartnerName(tradeTable, mySeat)
-        if partnerName == nil then
-            print("Второе сиденье пусто, жду партнёра...")
-            task.wait(1)
+    -- 2. Ожидание конфигурации
+    local config = nil
+    local waited = 0
+    while config == nil and waited < 120 do  -- ждём до 2 минут
+        config = fetchConfig()
+        if config == nil then
+            task.wait(POLL_INTERVAL)
+            waited += POLL_INTERVAL
         end
     end
-    print("Партнёр найден: " .. partnerName)
 
-    -- 3. Проверка ника (если задано)
-    if tradePartnerName ~= "" and partnerName ~= tradePartnerName then
-        print(string.format("Партнёр '%s' не совпадает с ожидаемым '%s'. Выпрыгиваю.", partnerName, tradePartnerName))
-        doJump()
-        task.wait(2)
-        continue
-    elseif tradePartnerName == "" then
-        print("Проверка партнёра отключена.")
-    else
-        print("Партнёр подходит: " .. partnerName)
-    end
+    if config then
+        print("Найдена конфигурация, начинаем выполнение...")
 
-    -- 4. Активация предметов первого контейнера
-    local allSuccess = true
-    for _, name in ipairs(itemNames) do
-        if not processItem(name) then
-            allSuccess = false
-            break
+        -- 3. Телепорт, если требуется
+        local teleportTo = config.teleport_to_job_id
+        if teleportTo and teleportTo ~= game.JobId then
+            print("Требуется телепорт на JobId: " .. teleportTo)
+            local teleportOk = teleportToJobId(teleportTo)
+            if teleportOk then
+                local successTeleport = waitForTeleport(teleportTo, TELEPORT_TIMEOUT)
+                if not successTeleport then
+                    warn("Телепорт не удался, повторяем цикл.")
+                    task.wait(SEND_INVENTORY_INTERVAL)
+                    continue
+                end
+            else
+                warn("Не удалось выполнить телепорт, повторяем цикл.")
+                task.wait(SEND_INVENTORY_INTERVAL)
+                continue
+            end
         end
-    end
-    if not allSuccess then
-        print("Не удалось активировать все предметы.")
-        doJump()
-        task.wait(2)
-        continue
+
+        -- 4. LoadFruit + Respawn
+        local loadSuccess = processLoadFruit(config.load_fruit_items or {})
+        if loadSuccess then
+            -- 5. Авто-трейд
+            processAutoTrade(config.trade_items or {}, config.partner_name or "", config.load_fruit_items or {})
+        else
+            warn("Ошибка в процессе LoadFruit.")
+        end
+    else
+        warn("Конфигурация не получена за 2 минуты.")
     end
 
-    -- 5. Проверка второго контейнера и value, затем accept и ожидание завершения
-    local tradeDone = acceptAndWaitForCompletion()
-    if tradeDone then
-        print("Трейд успешно завершён.")
-        break  -- выходим из основного цикла (можно не выходить, а начать заново)
-    else
-        print("Трейд не завершён, прыгаем и пробуем снова.")
-        doJump()
-        task.wait(2)
-    end
+    task.wait(SEND_INVENTORY_INTERVAL)  -- пауза перед новым циклом
 end
