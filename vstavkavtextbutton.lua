@@ -1,21 +1,17 @@
--- ============================================================
--- Вставка UUID в TextBox опции 2 вкладки 19, затем активация опции 3
--- Запускать при уже загруженном хабе (redz-library-v5).
--- ============================================================
-
-local TAB = 19
-local OPT_TEXTBOX = 2      -- опция с полем ввода
-local OPT_ACTIVATE = 3     -- опция, которую нужно активировать
-local TEXT_TO_INSERT = "a6d8c7a9-a708-49bf-b6f9-9715503f4e41"
+-- Совмещённый скрипт: вставка текста в опцию 2, активация опции 3 (вкладка 19)
+-- Хаб уже загружен.
 
 local CoreGui = game:GetService("CoreGui")
+local TAB = 19
+local OPT_TEXT = 2
+local OPT_ACTIVATE = 3
+local TEXT = "08943515-b3b8-4e53-8a14-fc0f866504b4"
 
 local function getRoot()
     for _, child in ipairs(CoreGui:GetChildren()) do
         local obj = child:FindFirstChild("redz-library-v5")
         if obj then return obj end
     end
-    return nil
 end
 
 local function safeFind(obj, ...)
@@ -40,110 +36,62 @@ end
 
 local function findTextBox(parent)
     for _, child in ipairs(parent:GetChildren()) do
-        if child:IsA("TextBox") then
-            return child
-        end
+        if child:IsA("TextBox") then return child end
         local found = findTextBox(child)
         if found then return found end
     end
-    return nil
 end
 
 local root = getRoot()
-if not root then
-    warn("Интерфейс не найден. Загрузите хаб.")
-    return
-end
+if not root then return end
 
--- Переключаемся на вкладку 19
+-- Переключаем вкладку
 local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll")
-if not tabsScroll then
-    warn("TabsScroll не найден")
-    return
-end
-
+if not tabsScroll then return end
 local tabButton, tabCount = nil, 0
 local function findTab(p)
     if tabButton then return end
     for _, c in ipairs(p:GetChildren()) do
         if c:IsA("TextButton") or c:IsA("ImageButton") then
             tabCount += 1
-            if tabCount == TAB then
-                tabButton = c
-                return
-            end
+            if tabCount == TAB then tabButton = c return end
         end
         findTab(c)
     end
 end
 findTab(tabsScroll)
-if not tabButton then
-    warn("Вкладка " .. TAB .. " не найдена")
-    return
-end
-
-print("Переключаем вкладку " .. TAB .. "...")
+if not tabButton then return end
 fireSequence(tabButton)
 task.wait(0.5)
 
--- Получаем контейнер опций
+-- Контейнер опций
 local container = safeFind(root, "Window", "Components", "Containers", "Container")
-if not container then
-    warn("Container не найден")
-    return
-end
+if not container then return end
 
--- Находим опцию с TextBox (номер 2)
-local optionTextBox, optCount = nil, 0
-for _, c in ipairs(container:GetChildren()) do
-    if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
-        optCount += 1
-        if optCount == OPT_TEXTBOX then
-            optionTextBox = c
-            break
-        end
-    end
-end
-
-if not optionTextBox then
-    warn("Опция " .. OPT_TEXTBOX .. " не найдена")
-    return
-end
-
-local textBox = findTextBox(optionTextBox)
-if not textBox then
-    warn("TextBox не найден в опции " .. OPT_TEXTBOX)
-    return
-end
-
--- Вставляем UUID
-textBox.Text = TEXT_TO_INSERT
-task.wait(0.1)
-pcall(function()
-    textBox:CaptureFocus()
-    task.wait(0.1)
-    textBox:ReleaseFocus()
-end)
-print("Текст вставлен: " .. textBox.Text)
-
--- Находим опцию для активации (номер 3)
-local optionActivate, optCount2 = nil, 0
+-- Находим опцию 2 и вставляем текст
+local optionText, optCount2 = nil, 0
 for _, c in ipairs(container:GetChildren()) do
     if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
         optCount2 += 1
-        if optCount2 == OPT_ACTIVATE then
-            optionActivate = c
-            break
-        end
+        if optCount2 == OPT_TEXT then optionText = c break end
     end
 end
-
-if not optionActivate then
-    warn("Опция " .. OPT_ACTIVATE .. " не найдена")
-    return
+if not optionText then return end
+local textBox = findTextBox(optionText)
+if textBox then
+    textBox.Text = TEXT
 end
 
-print("Активируем опцию " .. OPT_ACTIVATE .. "...")
+-- Пауза после вставки
+task.wait(1)
+
+-- Находим опцию 3 и активируем
+local optionActivate, optCount3 = nil, 0
+for _, c in ipairs(container:GetChildren()) do
+    if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
+        optCount3 += 1
+        if optCount3 == OPT_ACTIVATE then optionActivate = c break end
+    end
+end
+if not optionActivate then return end
 fireSequence(optionActivate)
-task.wait(0.2)
-print("Готово.")
