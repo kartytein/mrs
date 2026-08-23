@@ -1,7 +1,7 @@
 -- ============================================================
 -- ПОЛНЫЙ СКРИПТ: ВЫБОР КОМАНДЫ -> ИНВЕНТАРЬ -> СЕРВЕР -> РЕСЕТ -> ПОИСК СТОЛА -> АВТО-ТРЕЙД
--- Исправлено: acceptAndWaitForCompletion возвращает false при неудаче (Ready1 Not ready), 
--- внешний цикл делает пересадку, processItem проверяет уже добавленные предметы.
+-- Исправлено: перед каждым действием трейда проверяется, сидит ли персонаж.
+-- Если нет, выполняется пересадка, и трейд перезапускается с начала.
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -350,6 +350,15 @@ local function waitForSeat(seatPart, timeout)
     return false
 end
 
+-- ====================== ФУНКЦИЯ ПРОВЕРКИ, СИДИТ ЛИ ПЕРСОНАЖ НА НУЖНОМ СИДЕНЬЕ ======================
+local function isSeated(mySeat)
+    local char = player.Character
+    if not char then return false end
+    local hum = char:FindFirstChild("Humanoid")
+    if not hum then return false end
+    return hum.Sit and hum.SeatPart == mySeat
+end
+
 -- ====================== ФУНКЦИЯ ПОЛУЧЕНИЯ ПАРТНЁРА ======================
 local function getPartnerName(tradeTable, mySeat)
     local seats = {}
@@ -398,7 +407,7 @@ local function resetSeatAndWait(mySeat, targetPos)
         end
 
         -- Если уже сидим на нужном сиденье, сразу успех
-        if hum.Sit and hum.SeatPart == mySeat then
+        if isSeated(mySeat) then
             print("Уже сидим на нужном сиденье.")
             return true
         end
@@ -424,7 +433,7 @@ local function resetSeatAndWait(mySeat, targetPos)
         -- Ждём короткое время, проверяя посадку
         local waitTime = 0
         while waitTime < 3 do
-            if hum.Sit and hum.SeatPart == mySeat then
+            if isSeated(mySeat) then
                 print("Пересадка успешна.")
                 return true
             end
@@ -618,8 +627,8 @@ local function waitForPreAcceptConditions(loadFruitItems)
     return false
 end
 
--- Исправленная функция acceptAndWaitForCompletion:
--- теперь возвращает false при любом неудачном исходе, а не зацикливается.
+-- Функция acceptAndWaitForCompletion возвращает true только при успешном завершении трейда,
+-- иначе false (и внутри неё не должно быть бесконечного цикла).
 local function acceptAndWaitForCompletion(loadFruitItems)
     if not waitForPreAcceptConditions(loadFruitItems) then
         print("Условия не выполнены за " .. ACCEPT_WAIT_TIMEOUT .. " сек.")
@@ -741,6 +750,15 @@ while not tradeCompleted do
 
     -- Бесконечный цикл ожидания партнёра и выполнения трейда
     while true do
+        -- Проверяем, сидим ли мы всё ещё на нужном сиденье.
+        if not isSeated(mySeat) then
+            print("Мы не сидим на сиденье. Выполняем пересадку.")
+            if not resetSeatAndWait(mySeat, targetPos) then
+                print("Не удалось пересадиться, выходим из этого стола.")
+                break
+            end
+        end
+
         local partnerNameActual = getPartnerName(tradeTable, mySeat)
         local expectedPartner = config.partner_name or ""
 
@@ -761,6 +779,18 @@ while not tradeCompleted do
             print("Партнёр подходит. Добавляем предметы в первый контейнер.")
             local allItemsAdded = true
             for _, itemName in ipairs(config.trade_items or {}) do
+                -- Проверяем, сидим ли перед добавлением каждого предмета
+                if not isSeated(mySeat) then
+                    print("Встали во время добавления предметов. Пересаживаемся и перезапускаем процесс.")
+                    if not resetSeatAndWait(mySeat, targetPos) then
+                        print("Пересадка не удалась, выходим из стола.")
+                        allItemsAdded = false
+                        break
+                    end
+                    -- Перезапускаем добавление предметов с начала
+                    allItemsAdded = false
+                    break
+                end
                 if not processItem(itemName) then
                     allItemsAdded = false
                     break
@@ -772,8 +802,19 @@ while not tradeCompleted do
                     print("Не удалось пересадиться после ошибки добавления.")
                     break
                 end
+                -- После пересадки возвращаемся к началу внутреннего цикла
+                continue
             else
                 print("Все предметы добавлены, запускаем Accept.")
+                -- Ещё раз убедимся, что сидим
+                if not isSeated(mySeat) then
+                    print("Встали перед Accept. Пересаживаемся и повторяем.")
+                    if not resetSeatAndWait(mySeat, targetPos) then
+                        print("Пересадка не удалась, выходим.")
+                        break
+                    end
+                    continue
+                end
                 local tradeDone = acceptAndWaitForCompletion(config.load_fruit_items or {})
                 if tradeDone then
                     print("Трейд успешно завершён!")
