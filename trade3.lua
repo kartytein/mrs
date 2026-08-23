@@ -1,7 +1,7 @@
 -- ============================================================
 -- ПОЛНЫЙ СКРИПТ: ВЫБОР КОМАНДЫ -> ИНВЕНТАРЬ -> СЕРВЕР -> РЕСЕТ -> ПОИСК СТОЛА -> АВТО-ТРЕЙД
--- Исправлено: перед каждым действием трейда проверяется, сидит ли персонаж.
--- Если нет, выполняется пересадка, и трейд перезапускается с начала.
+-- Исправлено: встроена проверка посадки во все циклы ожидания.
+-- Если персонаж встал, ожидание прерывается, выполняется пересадка, цикл перезапускается.
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -545,7 +545,8 @@ local function isTradeCompleted()
     return false
 end
 
-local function processItem(searchText)
+-- Функция обработки одного предмета с проверкой посадки
+local function processItem(searchText, mySeat, targetPos)
     -- Проверяем, добавлен ли уже предмет
     if findResultElement(searchText) then
         print("Предмет '" .. searchText .. "' уже добавлен.")
@@ -553,6 +554,12 @@ local function processItem(searchText)
     end
 
     for attempt = 1, MAX_ATTEMPTS_PER_ITEM do
+        -- Проверка посадки перед каждой попыткой
+        if not isSeated(mySeat) then
+            print("Персонаж не сидит. Прерываем обработку предмета.")
+            return false -- false сигнализирует о необходимости пересадки
+        end
+
         print(string.format("Обработка '%s' (попытка %d/%d)", searchText, attempt, MAX_ATTEMPTS_PER_ITEM))
 
         local addButton = findObjectByPath(playerGui, table.unpack(addButtonPath))
@@ -590,6 +597,11 @@ local function processItem(searchText)
         print("Ожидание результата...")
         local waitTime = 0
         while waitTime < RESULT_TIMEOUT do
+            -- Проверка посадки во время ожидания
+            if not isSeated(mySeat) then
+                print("Персонаж встал во время ожидания результата. Прерываем.")
+                return false
+            end
             task.wait(0.5)
             waitTime += 0.5
             if findResultElement(searchText) then
@@ -602,22 +614,14 @@ local function processItem(searchText)
     return false
 end
 
-local function checkPreAcceptConditions(loadFruitItems)
-    local percent = getPercent()
-    if not percent or percent > 40 then
-        print("Процент разницы > 40% (" .. tostring(percent) .. "%), ждём...")
-        return false
-    end
-    if not checkSecondContainer(loadFruitItems) then
-        print("Второй контейнер не содержит нужные фрукты, ждём...")
-        return false
-    end
-    return true
-end
-
-local function waitForPreAcceptConditions(loadFruitItems)
+-- Функция проверки условий перед accept с проверкой посадки
+local function waitForPreAcceptConditions(loadFruitItems, mySeat, targetPos)
     local waited = 0
     while waited < ACCEPT_WAIT_TIMEOUT do
+        if not isSeated(mySeat) then
+            print("Персонаж не сидит во время ожидания условий accept.")
+            return false
+        end
         if checkPreAcceptConditions(loadFruitItems) then
             return true
         end
@@ -627,11 +631,10 @@ local function waitForPreAcceptConditions(loadFruitItems)
     return false
 end
 
--- Функция acceptAndWaitForCompletion возвращает true только при успешном завершении трейда,
--- иначе false (и внутри неё не должно быть бесконечного цикла).
-local function acceptAndWaitForCompletion(loadFruitItems)
-    if not waitForPreAcceptConditions(loadFruitItems) then
-        print("Условия не выполнены за " .. ACCEPT_WAIT_TIMEOUT .. " сек.")
+-- Функция accept и ожидания завершения трейда с проверкой посадки
+local function acceptAndWaitForCompletion(loadFruitItems, mySeat, targetPos)
+    if not waitForPreAcceptConditions(loadFruitItems, mySeat, targetPos) then
+        print("Условия не выполнены или персонаж не сидит.")
         return false
     end
 
@@ -646,6 +649,10 @@ local function acceptAndWaitForCompletion(loadFruitItems)
     local waited = 0
     local ready1 = findObjectByPath(playerGui, table.unpack(ready1Path))
     while waited < READY_TIMEOUT do
+        if not isSeated(mySeat) then
+            print("Персонаж встал после Accept. Прерываем.")
+            return false
+        end
         task.wait(0.5)
         waited += 0.5
 
@@ -791,7 +798,7 @@ while not tradeCompleted do
                     allItemsAdded = false
                     break
                 end
-                if not processItem(itemName) then
+                if not processItem(itemName, mySeat, targetPos) then
                     allItemsAdded = false
                     break
                 end
@@ -815,7 +822,7 @@ while not tradeCompleted do
                     end
                     continue
                 end
-                local tradeDone = acceptAndWaitForCompletion(config.load_fruit_items or {})
+                local tradeDone = acceptAndWaitForCompletion(config.load_fruit_items or {}, mySeat, targetPos)
                 if tradeDone then
                     print("Трейд успешно завершён!")
                     tradeCompleted = true
