@@ -1,8 +1,5 @@
 -- ============================================================
 -- ПОЛНЫЙ СКРИПТ: ВЫБОР КОМАНДЫ -> ИНВЕНТАРЬ -> СЕРВЕР -> РЕСЕТ -> ПОИСК СТОЛА -> АВТО-ТРЕЙД
--- Приоритет столов: сначала полностью свободные, затем с одним занятым сиденьем.
--- Игнорируем столы с двумя занятыми сиденьями.
--- После посадки активно ждём нужного партнёра, пересаживаясь при несовпадении.
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -231,9 +228,9 @@ local function processLoadFruit(loadFruitItems)
     return true
 end
 
--- ====================== ШАГ 5: ПОИСК СВОБОДНОГО/ЧАСТИЧНО ЗАНЯТОГО СТОЛА ======================
+-- ====================== ШАГ 5: ПОИСК СТОЛА ======================
 -- Приоритет: полностью свободные столы, затем с одним занятым сиденьем.
--- Возвращает tradeTable, свободное сиденье и признак, полностью ли свободен стол.
+-- Возвращает: tradeTable, freeSeat, wasFullyFree
 local function findTradeTable()
     local tradeTables = {}
     for _, obj in ipairs(Workspace:GetDescendants()) do
@@ -265,22 +262,18 @@ local function findTradeTable()
             end
 
             if occupiedCount == 0 then
-                -- полностью свободен
                 table.insert(fullyFree, {tradeTable = tradeTable, freeSeat = freeSeats[1], wasFullyFree = true})
             elseif occupiedCount == 1 then
-                -- одно занято, одно свободно
                 table.insert(partiallyOccupied, {tradeTable = tradeTable, freeSeat = freeSeats[1], wasFullyFree = false})
             end
-            -- если occupiedCount == 2, игнорируем
+            -- occupiedCount == 2 игнорируем
         end
     end
 
-    -- Сначала полностью свободные
     if #fullyFree > 0 then
         return fullyFree[1].tradeTable, fullyFree[1].freeSeat, fullyFree[1].wasFullyFree
     end
 
-    -- Затем частично занятые
     if #partiallyOccupied > 0 then
         return partiallyOccupied[1].tradeTable, partiallyOccupied[1].freeSeat, partiallyOccupied[1].wasFullyFree
     end
@@ -338,7 +331,7 @@ local function moveToPositionWithJump(targetPosition)
     return false
 end
 
--- ====================== ШАГ 7: ОЖИДАНИЕ ПОСАДКИ НА КОНКРЕТНОЕ СИДЕНЬЕ ======================
+-- ====================== ШАГ 7: ОЖИДАНИЕ ПОСАДКИ ======================
 local function waitForSeat(seatPart, timeout)
     local waited = 0
     while waited < timeout do
@@ -355,7 +348,7 @@ local function waitForSeat(seatPart, timeout)
     return false
 end
 
--- ====================== ФУНКЦИИ ДЛЯ РАБОТЫ С ПАРТНЁРОМ ======================
+-- ====================== ФУНКЦИЯ ПОЛУЧЕНИЯ ПАРТНЁРА ======================
 local function getPartnerName(tradeTable, mySeat)
     local seats = {}
     for _, part in ipairs(tradeTable:GetDescendants()) do
@@ -385,6 +378,47 @@ local function getPartnerName(tradeTable, mySeat)
         end
     end
     return nil
+end
+
+-- ====================== ФУНКЦИЯ ПЕРЕСАДКИ (прыжок, отход, возврат) ======================
+local function resetSeatAndWait(mySeat, targetPos)
+    local char = player.Character
+    if not char then return false end
+    local hum = char:FindFirstChild("Humanoid")
+    if not hum then return false end
+
+    -- Встаём с сиденья
+    pcall(function() hum.Sit = false end)
+    task.wait(0.3)
+
+    -- Прыжок
+    hum.Jump = true
+    task.wait(0.5)
+
+    -- Отходим в случайную сторону на 5 стадов
+    local direction = math.random(1,2) == 1 and 5 or -5
+    local offset = Vector3.new(direction, 0, 0)
+    hum:MoveTo(targetPos + offset)
+    task.wait(0.8)
+
+    -- Возвращаемся к сиденью
+    hum:MoveTo(targetPos)
+    task.wait(0.8)
+
+    -- Ждём, пока снова сядет (до 10 секунд)
+    local waited = 0
+    while waited < 10 do
+        local currentChar = player.Character
+        if currentChar then
+            local currentHum = currentChar:FindFirstChild("Humanoid")
+            if currentHum and currentHum.Sit and currentHum.SeatPart == mySeat then
+                return true
+            end
+        end
+        task.wait(0.5)
+        waited += 0.5
+    end
+    return false
 end
 
 -- ====================== АВТО-ТРЕЙД (полные функции) ======================
@@ -605,32 +639,6 @@ local function acceptAndWaitForCompletion(loadFruitItems)
     end
 end
 
--- ====================== ФУНКЦИЯ ВОССТАНОВЛЕНИЯ (прыжок + колебания) ======================
-local function recoverFromSeat(mySeat, targetPos)
-    print("Выполняю восстановление: встаём, колеблемся и снова садимся.")
-    local char = player.Character
-    if not char then return end
-    local hum = char:FindFirstChild("Humanoid")
-    if not hum then return end
-
-    -- Встаём с сиденья
-    pcall(function() hum.Sit = false end)
-    task.wait(0.2)
-    hum.Jump = true
-    task.wait(0.5)
-
-    -- Колебания вправо/влево
-    local offset = Vector3.new(3, 0, 0)  -- вправо
-    if math.random() > 0.5 then offset = Vector3.new(-3, 0, 0) end -- влево
-    local sidePosition = targetPos + offset
-    humanoid:MoveTo(sidePosition)
-    task.wait(0.5)
-
-    -- Возвращаемся к сиденью
-    humanoid:MoveTo(targetPos)
-    task.wait(0.5)
-end
-
 -- ====================== ОСНОВНОЙ ЦИКЛ ======================
 print("Скрипт запущен.")
 
@@ -675,84 +683,73 @@ end
 -- Шаг 5: основной цикл поиска стола и трейда
 local tradeCompleted = false
 while not tradeCompleted do
-    -- Ищем подходящий стол (полностью свободный или частично занятый)
+    -- Ищем подходящий стол
     local tradeTable, mySeat, wasFullyFree = findTradeTable()
     if not tradeTable then
-        warn("Не найдено подходящего TradeTable.")
+        print("Стол не найден, ждём 5 секунд.")
         task.wait(5)
         continue
     end
 
     local targetPos = mySeat.Position
-    print("Найден стол. Полностью свободный:", wasFullyFree)
+    print("Найден стол. Тип:", wasFullyFree and "полностью свободный" or "одно место занято")
 
     -- Перемещаемся к свободному сиденью
     local arrived = moveToPositionWithJump(targetPos)
     if not arrived then
-        warn("Не удалось добраться до TradeTable, ищем другой.")
+        print("Не удалось добраться, пробуем другой стол.")
         task.wait(2)
         continue
     end
 
-    -- Ожидание посадки
+    -- Садимся (если не сели сразу, пробуем пересадку)
     local seated = waitForSeat(mySeat, 30)
     if not seated then
-        warn("Не удалось сесть, пробуем восстановление.")
-        recoverFromSeat(mySeat, targetPos)
-        -- Повторная попытка посадки
-        seated = waitForSeat(mySeat, 30)
-        if not seated then
-            warn("Повторная посадка не удалась, ищем новый стол.")
+        print("Не сел сразу, пробуем пересадку.")
+        if not resetSeatAndWait(mySeat, targetPos) then
+            print("Пересадка не удалась, ищем новый стол.")
             task.wait(2)
             continue
         end
+        seated = true
     end
 
-    print("Персонаж сел на сиденье.")
+    print("Сидим за столом. Ожидание партнёра...")
 
-    -- Цикл ожидания нужного партнёра и выполнения трейда
-    local currentTradeDone = false
-    while not currentTradeDone do
+    -- Бесконечный цикл ожидания партнёра и выполнения трейда
+    while true do
         local partnerNameActual = getPartnerName(tradeTable, mySeat)
         local expectedPartner = config.partner_name or ""
 
-        print("Текущий партнёр:", partnerNameActual or "нет", "Ожидаемый:", expectedPartner)
+        print("Текущий партнёр:", partnerNameActual or "никого нет", "| ожидаемый:", expectedPartner)
 
-        -- Проверяем партнёра: если ожидаемый не задан, любой подойдёт,
-        -- но если задан и не совпадает, или партнёра нет, то пересаживаемся
-        if expectedPartner ~= "" and (not partnerNameActual or partnerNameActual ~= expectedPartner) then
-            print("Партнёр не совпадает, выполняем восстановление.")
-            recoverFromSeat(mySeat, targetPos)
-            -- Ждём повторной посадки
-            local reseated = waitForSeat(mySeat, 30)
-            if not reseated then
-                warn("Не удалось пересадиться, ищем новый стол.")
-                break  -- выходим из внутреннего цикла, чтобы найти новый стол
+        -- Если партнёр отсутствует (nil), просто ждём
+        if partnerNameActual == nil then
+            task.wait(1)
+        -- Если ожидаемый задан и партнёр не совпадает, пересаживаемся
+        elseif expectedPartner ~= "" and partnerNameActual ~= expectedPartner then
+            print("Партнёр не совпадает, пересаживаемся.")
+            if not resetSeatAndWait(mySeat, targetPos) then
+                print("Не удалось пересадиться, выходим из этого стола.")
+                break  -- выходим, чтобы найти новый стол
             end
         else
-            -- Партнёр подходит (или не задан), запускаем авто-трейд
-            print("Партнёр подходит, начинаю авто-трейд.")
-            currentTradeDone = acceptAndWaitForCompletion(config.load_fruit_items or {})
-
-            if currentTradeDone then
+            -- Партнёр подходит (или проверка отключена), запускаем трейд
+            print("Партнёр подходит. Начинаем авто-трейд.")
+            local tradeDone = acceptAndWaitForCompletion(config.load_fruit_items or {})
+            if tradeDone then
                 print("Трейд успешно завершён!")
                 tradeCompleted = true
                 break
             else
-                -- Трейд не завершён, восстанавливаемся и пробуем снова
-                print("Трейд не завершён, выполняем восстановление.")
-                recoverFromSeat(mySeat, targetPos)
-                local reseated = waitForSeat(mySeat, 30)
-                if not reseated then
-                    warn("Не удалось пересадиться, ищем новый стол.")
+                print("Трейд не удался, пересаживаемся и пробуем снова.")
+                if not resetSeatAndWait(mySeat, targetPos) then
+                    print("Не удалось пересадиться после неудачного трейда.")
                     break
                 end
             end
         end
     end
-
-    -- Если трейд завершён, внешний цикл завершится
-    -- Если нет (break из внутреннего цикла), поищем новый стол
 end
 
 print("Скрипт завершён.")
