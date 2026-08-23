@@ -1,8 +1,5 @@
 -- ============================================================
 -- ПОЛНЫЙ СКРИПТ: ВЫБОР КОМАНДЫ -> ИНВЕНТАРЬ -> СЕРВЕР -> РЕСЕТ -> ПОИСК СТОЛА -> АВТО-ТРЕЙД
--- ИСПРАВЛЕНО: Проверка посадки добавлена во все внутренние ожидания трейда.
--- Если персонаж встал, все проверки немедленно прерываются, выполняется пересадка,
--- и трейд-логика перезапускается с начала.
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -14,7 +11,7 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 -- ====================== НАСТРОЙКИ ======================
-local SERVER_URL = "http://192.168.31.179:8000"  -- ваш IP
+local SERVER_URL = "http://192.168.31.179:8000"
 local SEND_INVENTORY_INTERVAL = 20
 local CONFIG_POLL_INTERVAL = 10
 local MOVE_TIMEOUT = 30
@@ -389,10 +386,12 @@ local function getPartnerName(tradeTable, mySeat)
     return nil
 end
 
--- ====================== ФУНКЦИЯ ПЕРЕСАДКИ (цикл до успешной посадки) ======================
+-- ====================== ФУНКЦИЯ ПЕРЕСАДКИ (С ЧАСТЫМИ КОЛЕБАНИЯМИ) ======================
 local function resetSeatAndWait(mySeat, targetPos)
     print("Начинаю пересадку: буду повторять колебания до полной посадки.")
+    local attempt = 0
     while true do
+        attempt += 1
         local char = player.Character
         if not char then
             warn("Персонаж исчез, пересадка невозможна.")
@@ -409,31 +408,46 @@ local function resetSeatAndWait(mySeat, targetPos)
             return true
         end
 
+        -- Встаём с сиденья (если сидели)
         pcall(function() hum.Sit = false end)
-        task.wait(0.3)
+        task.wait(0.2)
 
+        -- Прыжок
         hum.Jump = true
-        task.wait(0.5)
+        task.wait(0.2)
 
-        local direction = math.random(1,2) == 1 and 5 or -5
-        local offset = Vector3.new(direction, 0, 0)
-        hum:MoveTo(targetPos + offset)
-        task.wait(0.8)
-
-        hum:MoveTo(targetPos)
-        task.wait(0.8)
-
-        local waitTime = 0
-        while waitTime < 3 do
+        -- Цикл колебаний: несколько попыток сесть
+        for i = 1, 5 do
             if isSeated(mySeat) then
-                print("Пересадка успешна.")
+                print("Пересадка успешна (после колебания " .. i .. ").")
                 return true
             end
-            task.wait(0.5)
-            waitTime += 0.5
+
+            -- Случайное направление и дистанция
+            local direction = math.random(1,2) == 1 and 1 or -1
+            local offsetDistance = math.random(3, 6)
+            local offset = Vector3.new(direction * offsetDistance, 0, 0)
+
+            -- Отходим
+            hum:MoveTo(targetPos + offset)
+            task.wait(0.3)
+
+            -- Возвращаемся
+            hum:MoveTo(targetPos)
+            task.wait(0.3)
+
+            -- Проверяем посадку чаще
+            for check = 1, 5 do
+                if isSeated(mySeat) then
+                    print("Пересадка успешна (после проверки " .. check .. ").")
+                    return true
+                end
+                task.wait(0.2)
+            end
         end
 
-        print("Не сел, повторяю колебания...")
+        -- Если после всех колебаний не сели, повторяем внешний цикл
+        print("Не сел после попытки " .. attempt .. ", повторяю колебания...")
     end
 end
 
@@ -593,9 +607,8 @@ local function processItem(searchText)
     return false
 end
 
--- ====================== ВАЖНО: ДОБАВЛЯЕМ ПРОВЕРКУ isSeated ВНУТРИ ВСЕХ ОЖИДАНИЙ ======================
+-- ====================== ДОБАВЛЯЕМ ПРОВЕРКУ isSeated ВНУТРИ ВСЕХ ОЖИДАНИЙ ======================
 local function checkPreAcceptConditions(loadFruitItems, mySeat)
-    -- Проверяем посадку перед началом
     if not isSeated(mySeat) then
         print("Мы не сидим! Прерываем проверку условий.")
         return false
@@ -616,7 +629,6 @@ end
 local function waitForPreAcceptConditions(loadFruitItems, mySeat)
     local waited = 0
     while waited < ACCEPT_WAIT_TIMEOUT do
-        -- Проверяем посадку в каждой итерации
         if not isSeated(mySeat) then
             print("Встали во время ожидания условий. Возвращаем false.")
             return false
@@ -631,7 +643,6 @@ local function waitForPreAcceptConditions(loadFruitItems, mySeat)
 end
 
 local function acceptAndWaitForCompletion(loadFruitItems, mySeat)
-    -- Проверяем посадку перед accept
     if not isSeated(mySeat) then
         print("Не сидим перед Accept. Возвращаем false.")
         return false
@@ -656,7 +667,6 @@ local function acceptAndWaitForCompletion(loadFruitItems, mySeat)
         task.wait(0.5)
         waited += 0.5
 
-        -- Проверяем посадку во время ожидания завершения
         if not isSeated(mySeat) then
             print("Встали во время ожидания завершения трейда.")
             return false
@@ -728,7 +738,6 @@ end
 -- Шаг 5: основной цикл поиска стола и трейда
 local tradeCompleted = false
 while not tradeCompleted do
-    -- Ищем подходящий стол
     local tradeTable, mySeat, wasFullyFree = findTradeTable()
     if not tradeTable then
         print("Стол не найден, ждём 5 секунд.")
@@ -739,7 +748,6 @@ while not tradeCompleted do
     local targetPos = mySeat.Position
     print("Найден стол. Тип:", wasFullyFree and "полностью свободный" or "одно место занято")
 
-    -- Перемещаемся к свободному сиденью
     local arrived = moveToPositionWithJump(targetPos)
     if not arrived then
         print("Не удалось добраться, пробуем другой стол.")
@@ -747,7 +755,6 @@ while not tradeCompleted do
         continue
     end
 
-    -- Садимся (если не сели сразу, пробуем пересадку)
     local seated = waitForSeat(mySeat, 30)
     if not seated then
         print("Не сел сразу, пробуем пересадку.")
@@ -761,16 +768,13 @@ while not tradeCompleted do
 
     print("Сидим за столом. Ожидание партнёра...")
 
-    -- Внутренний цикл: выполняется пока мы сидим, при вставании делает пересадку и начинает заново.
     while not tradeCompleted do
-        -- Проверяем посадку в начале каждой итерации
         if not isSeated(mySeat) then
             print("Обнаружено, что не сидим. Выполняем пересадку.")
             if not resetSeatAndWait(mySeat, targetPos) then
                 print("Не удалось пересадиться, выходим из этого стола.")
                 break
             end
-            -- После пересадки продолжаем цикл (проверка партнера начнётся заново)
         end
 
         local partnerNameActual = getPartnerName(tradeTable, mySeat)
@@ -786,13 +790,10 @@ while not tradeCompleted do
                 print("Не удалось пересадиться, выходим из этого стола.")
                 break
             end
-            -- после пересадки продолжаем цикл (снова проверка партнера)
         else
-            -- Партнёр подходит, добавляем предметы
             print("Партнёр подходит. Добавляем предметы в первый контейнер.")
             local allItemsAdded = true
             for _, itemName in ipairs(config.trade_items or {}) do
-                -- Перед каждым предметом проверяем посадку
                 if not isSeated(mySeat) then
                     print("Встали во время добавления предметов. Пересаживаемся и начинаем заново.")
                     if not resetSeatAndWait(mySeat, targetPos) then
@@ -800,7 +801,6 @@ while not tradeCompleted do
                         allItemsAdded = false
                         break
                     end
-                    -- Так как пересадились, нужно заново проверить партнёра, поэтому выходим из цикла добавления
                     allItemsAdded = false
                     break
                 end
@@ -811,24 +811,19 @@ while not tradeCompleted do
             end
 
             if not allItemsAdded then
-                -- Если добавление не удалось или встали, делаем пересадку и повторяем цикл
                 print("Не удалось добавить все предметы. Пересаживаемся.")
                 if not resetSeatAndWait(mySeat, targetPos) then
                     print("Не удалось пересадиться после ошибки добавления.")
                     break
                 end
-                -- После пересадки continue (вернёмся к проверке партнера)
             else
-                -- Все предметы добавлены, запускаем Accept
                 print("Все предметы добавлены, запускаем Accept.")
-                -- Перед Accept проверяем посадку
                 if not isSeated(mySeat) then
                     print("Встали перед Accept. Пересаживаемся и повторяем.")
                     if not resetSeatAndWait(mySeat, targetPos) then
                         print("Пересадка не удалась, выходим.")
                         break
                     end
-                    -- continue внешний цикл
                 else
                     local tradeDone = acceptAndWaitForCompletion(config.load_fruit_items or {}, mySeat)
                     if tradeDone then
@@ -836,13 +831,11 @@ while not tradeCompleted do
                         tradeCompleted = true
                         break
                     else
-                        -- Трейд не удался или встали. Пересаживаемся и повторяем.
                         print("Трейд не удался или встали. Пересаживаемся и пробуем снова.")
                         if not resetSeatAndWait(mySeat, targetPos) then
                             print("Не удалось пересадиться после неудачного трейда.")
                             break
                         end
-                        -- continue внешний цикл
                     end
                 end
             end
