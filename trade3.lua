@@ -1,5 +1,6 @@
 -- ============================================================
 -- ПОЛНЫЙ СКРИПТ: ВЫБОР КОМАНДЫ -> ИНВЕНТАРЬ -> СЕРВЕР -> РЕСЕТ -> ПОИСК СТОЛА -> АВТО-ТРЕЙД
+-- Исправлено: функция пересадки теперь повторяет колебания до успешной посадки.
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -380,48 +381,62 @@ local function getPartnerName(tradeTable, mySeat)
     return nil
 end
 
--- ====================== ФУНКЦИЯ ПЕРЕСАДКИ (прыжок, отход, возврат) ======================
+-- ====================== ФУНКЦИЯ ПЕРЕСАДКИ (цикл до успешной посадки) ======================
 local function resetSeatAndWait(mySeat, targetPos)
-    local char = player.Character
-    if not char then return false end
-    local hum = char:FindFirstChild("Humanoid")
-    if not hum then return false end
+    print("Начинаю пересадку: буду повторять колебания до полной посадки.")
+    while true do
+        local char = player.Character
+        if not char then
+            warn("Персонаж исчез, пересадка невозможна.")
+            return false
+        end
+        local hum = char:FindFirstChild("Humanoid")
+        if not hum then
+            warn("Humanoid не найден.")
+            return false
+        end
 
-    -- Встаём с сиденья
-    pcall(function() hum.Sit = false end)
-    task.wait(0.3)
+        -- Если уже сидим на нужном сиденье, сразу успех
+        if hum.Sit and hum.SeatPart == mySeat then
+            print("Уже сидим на нужном сиденье.")
+            return true
+        end
 
-    -- Прыжок
-    hum.Jump = true
-    task.wait(0.5)
+        -- Встаём с сиденья (на случай, если сидели на другом)
+        pcall(function() hum.Sit = false end)
+        task.wait(0.3)
 
-    -- Отходим в случайную сторону на 5 стадов
-    local direction = math.random(1,2) == 1 and 5 or -5
-    local offset = Vector3.new(direction, 0, 0)
-    hum:MoveTo(targetPos + offset)
-    task.wait(0.8)
+        -- Прыжок
+        hum.Jump = true
+        task.wait(0.5)
 
-    -- Возвращаемся к сиденью
-    hum:MoveTo(targetPos)
-    task.wait(0.8)
+        -- Отходим в случайную сторону на 5 стадов
+        local direction = math.random(1,2) == 1 and 5 or -5
+        local offset = Vector3.new(direction, 0, 0)
+        hum:MoveTo(targetPos + offset)
+        task.wait(0.8)
 
-    -- Ждём, пока снова сядет (до 10 секунд)
-    local waited = 0
-    while waited < 10 do
-        local currentChar = player.Character
-        if currentChar then
-            local currentHum = currentChar:FindFirstChild("Humanoid")
-            if currentHum and currentHum.Sit and currentHum.SeatPart == mySeat then
+        -- Возвращаемся к сиденью
+        hum:MoveTo(targetPos)
+        task.wait(0.8)
+
+        -- Ждём короткое время, проверяя посадку
+        local waitTime = 0
+        while waitTime < 3 do -- проверяем до 3 секунд после попытки
+            if hum.Sit and hum.SeatPart == mySeat then
+                print("Пересадка успешна.")
                 return true
             end
+            task.wait(0.5)
+            waitTime += 0.5
         end
-        task.wait(0.5)
-        waited += 0.5
+
+        -- Если не сели, повторяем цикл
+        print("Не сел, повторяю колебания...")
     end
-    return false
 end
 
--- ====================== АВТО-ТРЕЙД (полные функции) ======================
+-- ====================== АВТО-ТРЕЙД ======================
 local addButtonPath = {"Main", "Trade", "Container", "1", "Frame", "AddButton"}
 local firstContainerPath = {"Main", "Trade", "Container", "FrameAdd", "Frame"}
 local resultContainerPath = {"Main", "Trade", "Container", "1", "Frame"}
@@ -734,18 +749,34 @@ while not tradeCompleted do
                 break  -- выходим, чтобы найти новый стол
             end
         else
-            -- Партнёр подходит (или проверка отключена), запускаем трейд
-            print("Партнёр подходит. Начинаем авто-трейд.")
-            local tradeDone = acceptAndWaitForCompletion(config.load_fruit_items or {})
-            if tradeDone then
-                print("Трейд успешно завершён!")
-                tradeCompleted = true
-                break
-            else
-                print("Трейд не удался, пересаживаемся и пробуем снова.")
-                if not resetSeatAndWait(mySeat, targetPos) then
-                    print("Не удалось пересадиться после неудачного трейда.")
+            -- Партнёр подходит (или проверка отключена), добавляем предметы и запускаем трейд
+            print("Партнёр подходит. Добавляем предметы в первый контейнер.")
+            local allItemsAdded = true
+            for _, itemName in ipairs(config.trade_items or {}) do
+                if not processItem(itemName) then
+                    allItemsAdded = false
                     break
+                end
+            end
+            if not allItemsAdded then
+                print("Не удалось добавить все предметы, пересаживаемся.")
+                if not resetSeatAndWait(mySeat, targetPos) then
+                    print("Не удалось пересадиться после ошибки добавления.")
+                    break
+                end
+            else
+                print("Все предметы добавлены, запускаем Accept.")
+                local tradeDone = acceptAndWaitForCompletion(config.load_fruit_items or {})
+                if tradeDone then
+                    print("Трейд успешно завершён!")
+                    tradeCompleted = true
+                    break
+                else
+                    print("Трейд не удался, пересаживаемся и пробуем снова.")
+                    if not resetSeatAndWait(mySeat, targetPos) then
+                        print("Не удалось пересадиться после неудачного трейда.")
+                        break
+                    end
                 end
             end
         end
