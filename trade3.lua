@@ -1,6 +1,7 @@
 -- ============================================================
 -- ПОЛНЫЙ СКРИПТ: ВЫБОР КОМАНДЫ -> ИНВЕНТАРЬ -> СЕРВЕР -> РЕСЕТ -> ПОИСК СТОЛА -> АВТО-ТРЕЙД
--- Исправлено: функция пересадки теперь повторяет колебания до успешной посадки.
+-- Исправлено: acceptAndWaitForCompletion возвращает false при неудаче (Ready1 Not ready), 
+-- внешний цикл делает пересадку, processItem проверяет уже добавленные предметы.
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -422,7 +423,7 @@ local function resetSeatAndWait(mySeat, targetPos)
 
         -- Ждём короткое время, проверяя посадку
         local waitTime = 0
-        while waitTime < 3 do -- проверяем до 3 секунд после попытки
+        while waitTime < 3 do
             if hum.Sit and hum.SeatPart == mySeat then
                 print("Пересадка успешна.")
                 return true
@@ -536,6 +537,12 @@ local function isTradeCompleted()
 end
 
 local function processItem(searchText)
+    -- Проверяем, добавлен ли уже предмет
+    if findResultElement(searchText) then
+        print("Предмет '" .. searchText .. "' уже добавлен.")
+        return true
+    end
+
     for attempt = 1, MAX_ATTEMPTS_PER_ITEM do
         print(string.format("Обработка '%s' (попытка %d/%d)", searchText, attempt, MAX_ATTEMPTS_PER_ITEM))
 
@@ -611,47 +618,48 @@ local function waitForPreAcceptConditions(loadFruitItems)
     return false
 end
 
+-- Исправленная функция acceptAndWaitForCompletion:
+-- теперь возвращает false при любом неудачном исходе, а не зацикливается.
 local function acceptAndWaitForCompletion(loadFruitItems)
-    while true do
-        if not waitForPreAcceptConditions(loadFruitItems) then
-            print("Условия не выполнены за " .. ACCEPT_WAIT_TIMEOUT .. " сек.")
-            return false
-        end
-
-        local acceptBtn = findObjectByPath(playerGui, table.unpack(acceptPath))
-        if not acceptBtn then
-            print("Кнопка Accept не найдена")
-            return false
-        end
-        print("Активирую Accept...")
-        fireSequence(acceptBtn)
-
-        local waited = 0
-        local ready1 = findObjectByPath(playerGui, table.unpack(ready1Path))
-        while waited < READY_TIMEOUT do
-            task.wait(0.5)
-            waited += 0.5
-
-            if isTradeCompleted() then
-                print("Трейд завершён (уведомление Trade completed).")
-                return true
-            end
-
-            if ready1 and ready1:IsA("TextLabel") then
-                if ready1.Text == "Ready!" then
-                    -- continue
-                elseif ready1.Text == "Not ready." then
-                    print("Ready1 снова Not ready, повторяем проверку и accept...")
-                    break
-                else
-                    print("Ready1 изменился на '" .. ready1.Text .. "', повторяем.")
-                    break
-                end
-            end
-        end
-
-        print("Повторяем попытку accept...")
+    if not waitForPreAcceptConditions(loadFruitItems) then
+        print("Условия не выполнены за " .. ACCEPT_WAIT_TIMEOUT .. " сек.")
+        return false
     end
+
+    local acceptBtn = findObjectByPath(playerGui, table.unpack(acceptPath))
+    if not acceptBtn then
+        print("Кнопка Accept не найдена")
+        return false
+    end
+    print("Активирую Accept...")
+    fireSequence(acceptBtn)
+
+    local waited = 0
+    local ready1 = findObjectByPath(playerGui, table.unpack(ready1Path))
+    while waited < READY_TIMEOUT do
+        task.wait(0.5)
+        waited += 0.5
+
+        if isTradeCompleted() then
+            print("Трейд завершён (уведомление Trade completed).")
+            return true
+        end
+
+        if ready1 and ready1:IsA("TextLabel") then
+            if ready1.Text == "Ready!" then
+                -- continue
+            elseif ready1.Text == "Not ready." then
+                print("Ready1 снова Not ready, требуется пересадка.")
+                return false
+            else
+                print("Ready1 изменился на '" .. ready1.Text .. "', требуется пересадка.")
+                return false
+            end
+        end
+    end
+
+    print("Таймаут ожидания завершения трейда, требуется пересадка.")
+    return false
 end
 
 -- ====================== ОСНОВНОЙ ЦИКЛ ======================
@@ -746,7 +754,7 @@ while not tradeCompleted do
             print("Партнёр не совпадает, пересаживаемся.")
             if not resetSeatAndWait(mySeat, targetPos) then
                 print("Не удалось пересадиться, выходим из этого стола.")
-                break  -- выходим, чтобы найти новый стол
+                break
             end
         else
             -- Партнёр подходит (или проверка отключена), добавляем предметы и запускаем трейд
