@@ -12,7 +12,7 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 -- ====================== НАСТРОЙКИ ======================
-local SERVER_URL = "http://192.168.1.100:8000"
+local SERVER_URL = "http://192.168.31.179:8000"
 local SEND_INVENTORY_INTERVAL = 20
 local CONFIG_POLL_INTERVAL = 10
 local MOVE_TIMEOUT = 30
@@ -144,6 +144,20 @@ local function sendInventory(fruits)
         print("Инвентарь отправлен:", result)
     else
         warn("Ошибка отправки инвентаря:", result)
+    end
+end
+
+-- ====================== НОВАЯ ФУНКЦИЯ: ОТПРАВКА УСПЕХА ТРЕЙДА ======================
+local function sendTradeSuccess()
+    local url = SERVER_URL .. "/trade_success?nickname=" .. HttpService:UrlEncode(player.Name)
+        .. "&job_id=" .. HttpService:UrlEncode(game.JobId)
+    local success, result = pcall(function()
+        return game:HttpGet(url)
+    end)
+    if success then
+        print("Успех трейда отправлен на сервер:", result)
+    else
+        warn("Ошибка отправки успеха трейда:", result)
     end
 end
 
@@ -869,6 +883,8 @@ while not tradeCompleted do
                     local tradeDone = acceptAndWaitForCompletion(config.load_fruit_items or {}, mySeat)
                     if tradeDone then
                         print("Трейд успешно завершён!")
+                        -- ОТПРАВЛЯЕМ УСПЕХ НА СЕРВЕР
+                        sendTradeSuccess()
                         tradeCompleted = true
                         break
                     else
