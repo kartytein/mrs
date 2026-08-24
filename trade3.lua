@@ -1,5 +1,6 @@
 -- ============================================================
 -- ПОЛНЫЙ СКРИПТ: ВЫБОР КОМАНДЫ -> ИНВЕНТАРЬ -> СЕРВЕР -> РЕСЕТ -> ПОИСК СТОЛА -> АВТО-ТРЕЙД
+-- Приоритет столов: 1) с нужным партнёром, 2) полностью свободные, 3) с любым занятым.
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -11,7 +12,7 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 -- ====================== НАСТРОЙКИ ======================
-local SERVER_URL = "http://192.168.31.179:8000"
+local SERVER_URL = "http://192.168.1.100:8000"
 local SEND_INVENTORY_INTERVAL = 20
 local CONFIG_POLL_INTERVAL = 10
 local MOVE_TIMEOUT = 30
@@ -229,7 +230,8 @@ local function processLoadFruit(loadFruitItems)
 end
 
 -- ====================== ШАГ 5: ПОИСК СТОЛА ======================
-local function findTradeTable()
+-- Приоритет: 1) стол с нужным партнёром, 2) полностью свободный, 3) частично занятый любым.
+local function findTradeTable(expectedPartnerName)
     local tradeTables = {}
     for _, obj in ipairs(Workspace:GetDescendants()) do
         if obj:IsA("Model") and obj.Name == "TradeTable" then
@@ -239,6 +241,7 @@ local function findTradeTable()
 
     local fullyFree = {}
     local partiallyOccupied = {}
+    local withPartner = {}
 
     for _, tradeTable in ipairs(tradeTables) do
         local seats = {}
@@ -251,9 +254,11 @@ local function findTradeTable()
         if #seats >= 2 then
             local occupiedCount = 0
             local freeSeats = {}
+            local occupiedSeat = nil
             for _, seat in ipairs(seats) do
                 if seat.Occupant then
                     occupiedCount += 1
+                    occupiedSeat = seat
                 else
                     table.insert(freeSeats, seat)
                 end
@@ -262,17 +267,44 @@ local function findTradeTable()
             if occupiedCount == 0 then
                 table.insert(fullyFree, {tradeTable = tradeTable, freeSeat = freeSeats[1], wasFullyFree = true})
             elseif occupiedCount == 1 then
-                table.insert(partiallyOccupied, {tradeTable = tradeTable, freeSeat = freeSeats[1], wasFullyFree = false})
+                local occupantName = nil
+                -- ИСПРАВЛЕНО: определяем игрока через Seat.Occupant
+                if occupiedSeat and occupiedSeat.Occupant then
+                    local occupantHumanoid = occupiedSeat.Occupant
+                    if occupantHumanoid:IsA("Humanoid") then
+                        local character = occupantHumanoid.Parent
+                        if character then
+                            local plr = Players:GetPlayerFromCharacter(character)
+                            if plr then
+                                occupantName = plr.Name
+                            end
+                        end
+                    end
+                end
+
+                local entry = {tradeTable = tradeTable, freeSeat = freeSeats[1], wasFullyFree = false, occupantName = occupantName}
+                if expectedPartnerName ~= "" and occupantName and string.lower(occupantName) == string.lower(expectedPartnerName) then
+                    table.insert(withPartner, entry)
+                else
+                    table.insert(partiallyOccupied, entry)
+                end
             end
         end
     end
 
-    if #fullyFree > 0 then
-        return fullyFree[1].tradeTable, fullyFree[1].freeSeat, fullyFree[1].wasFullyFree
+    -- Приоритет 1: стол с нужным партнером
+    if #withPartner > 0 then
+        return withPartner[1].tradeTable, withPartner[1].freeSeat, false
     end
 
+    -- Приоритет 2: полностью свободный
+    if #fullyFree > 0 then
+        return fullyFree[1].tradeTable, fullyFree[1].freeSeat, true
+    end
+
+    -- Приоритет 3: частично занятый (любой)
     if #partiallyOccupied > 0 then
-        return partiallyOccupied[1].tradeTable, partiallyOccupied[1].freeSeat, partiallyOccupied[1].wasFullyFree
+        return partiallyOccupied[1].tradeTable, partiallyOccupied[1].freeSeat, false
     end
 
     return nil, nil, nil
@@ -667,16 +699,19 @@ local function acceptAndWaitForCompletion(loadFruitItems, mySeat)
         task.wait(0.5)
         waited += 0.5
 
-        if not isSeated(mySeat) then
-            print("Встали во время ожидания завершения трейда.")
-            return false
-        end
-
+        -- 1. Сначала проверяем завершение трейда (важно!)
         if isTradeCompleted() then
             print("Трейд завершён (уведомление Trade completed).")
             return true
         end
 
+        -- 2. Только потом проверяем, сидим ли мы
+        if not isSeated(mySeat) then
+            print("Встали во время ожидания завершения трейда.")
+            return false
+        end
+
+        -- 3. Проверяем состояние Ready1
         if ready1 and ready1:IsA("TextLabel") then
             if ready1.Text == "Ready!" then
                 -- continue
@@ -688,6 +723,12 @@ local function acceptAndWaitForCompletion(loadFruitItems, mySeat)
                 return false
             end
         end
+    end
+
+    -- Если вышли по таймауту, но трейд мог завершиться прямо в конце
+    if isTradeCompleted() then
+        print("Трейд завершён (обнаружено после таймаута).")
+        return true
     end
 
     print("Таймаут ожидания завершения трейда, требуется пересадка.")
@@ -738,7 +779,7 @@ end
 -- Шаг 5: основной цикл поиска стола и трейда
 local tradeCompleted = false
 while not tradeCompleted do
-    local tradeTable, mySeat, wasFullyFree = findTradeTable()
+    local tradeTable, mySeat, wasFullyFree = findTradeTable(config.partner_name or "")
     if not tradeTable then
         print("Стол не найден, ждём 5 секунд.")
         task.wait(5)
@@ -746,7 +787,7 @@ while not tradeCompleted do
     end
 
     local targetPos = mySeat.Position
-    print("Найден стол. Тип:", wasFullyFree and "полностью свободный" or "одно место занято")
+    print("Найден стол. Тип:", wasFullyFree and "полностью свободный" or "частично занят (возможно нужный партнёр)")
 
     local arrived = moveToPositionWithJump(targetPos)
     if not arrived then
