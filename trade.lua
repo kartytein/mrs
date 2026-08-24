@@ -268,22 +268,21 @@ local function findTradeTable(expectedPartnerName)
                 table.insert(fullyFree, {tradeTable = tradeTable, freeSeat = freeSeats[1], wasFullyFree = true})
             elseif occupiedCount == 1 then
                 local occupantName = nil
-                -- ИСПРАВЛЕНО: определяем игрока через Seat.Occupant
-                if occupiedSeat and occupiedSeat.Occupant then
-                    local occupantHumanoid = occupiedSeat.Occupant
-                    if occupantHumanoid:IsA("Humanoid") then
-                        local character = occupantHumanoid.Parent
-                        if character then
-                            local plr = Players:GetPlayerFromCharacter(character)
-                            if plr then
+                if occupiedSeat then
+                    for _, plr in ipairs(Players:GetPlayers()) do
+                        local char = plr.Character
+                        if char and char:FindFirstChild("Humanoid") then
+                            local hum = char:FindFirstChild("Humanoid")
+                            if hum and hum.SeatPart == occupiedSeat then
                                 occupantName = plr.Name
+                                break
                             end
                         end
                     end
                 end
 
                 local entry = {tradeTable = tradeTable, freeSeat = freeSeats[1], wasFullyFree = false, occupantName = occupantName}
-                if expectedPartnerName ~= "" and occupantName and string.lower(occupantName) == string.lower(expectedPartnerName) then
+                if expectedPartnerName ~= "" and occupantName == expectedPartnerName then
                     table.insert(withPartner, entry)
                 else
                     table.insert(partiallyOccupied, entry)
@@ -699,19 +698,16 @@ local function acceptAndWaitForCompletion(loadFruitItems, mySeat)
         task.wait(0.5)
         waited += 0.5
 
-        -- 1. Сначала проверяем завершение трейда (важно!)
-        if isTradeCompleted() then
-            print("Трейд завершён (уведомление Trade completed).")
-            return true
-        end
-
-        -- 2. Только потом проверяем, сидим ли мы
         if not isSeated(mySeat) then
             print("Встали во время ожидания завершения трейда.")
             return false
         end
 
-        -- 3. Проверяем состояние Ready1
+        if isTradeCompleted() then
+            print("Трейд завершён (уведомление Trade completed).")
+            return true
+        end
+
         if ready1 and ready1:IsA("TextLabel") then
             if ready1.Text == "Ready!" then
                 -- continue
@@ -723,12 +719,6 @@ local function acceptAndWaitForCompletion(loadFruitItems, mySeat)
                 return false
             end
         end
-    end
-
-    -- Если вышли по таймауту, но трейд мог завершиться прямо в конце
-    if isTradeCompleted() then
-        print("Трейд завершён (обнаружено после таймаута).")
-        return true
     end
 
     print("Таймаут ожидания завершения трейда, требуется пересадка.")
