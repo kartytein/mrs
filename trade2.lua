@@ -12,7 +12,7 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 -- ====================== НАСТРОЙКИ ======================
-local SERVER_URL = "http://192.168.31.179:8000"
+local SERVER_URL = "http://192.168.1.100:8000"
 local SEND_INVENTORY_INTERVAL = 20
 local CONFIG_POLL_INTERVAL = 10
 local MOVE_TIMEOUT = 30
@@ -268,21 +268,22 @@ local function findTradeTable(expectedPartnerName)
                 table.insert(fullyFree, {tradeTable = tradeTable, freeSeat = freeSeats[1], wasFullyFree = true})
             elseif occupiedCount == 1 then
                 local occupantName = nil
-                if occupiedSeat then
-                    for _, plr in ipairs(Players:GetPlayers()) do
-                        local char = plr.Character
-                        if char and char:FindFirstChild("Humanoid") then
-                            local hum = char:FindFirstChild("Humanoid")
-                            if hum and hum.SeatPart == occupiedSeat then
+                -- ИСПРАВЛЕНО: определяем игрока через Seat.Occupant
+                if occupiedSeat and occupiedSeat.Occupant then
+                    local occupantHumanoid = occupiedSeat.Occupant
+                    if occupantHumanoid:IsA("Humanoid") then
+                        local character = occupantHumanoid.Parent
+                        if character then
+                            local plr = Players:GetPlayerFromCharacter(character)
+                            if plr then
                                 occupantName = plr.Name
-                                break
                             end
                         end
                     end
                 end
 
                 local entry = {tradeTable = tradeTable, freeSeat = freeSeats[1], wasFullyFree = false, occupantName = occupantName}
-                if expectedPartnerName ~= "" and occupantName == expectedPartnerName then
+                if expectedPartnerName ~= "" and occupantName and string.lower(occupantName) == string.lower(expectedPartnerName) then
                     table.insert(withPartner, entry)
                 else
                     table.insert(partiallyOccupied, entry)
