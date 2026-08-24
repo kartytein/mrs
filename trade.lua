@@ -17,6 +17,7 @@ local SEND_INVENTORY_INTERVAL = 20
 local CONFIG_POLL_INTERVAL = 10
 local MOVE_TIMEOUT = 30
 local ARRIVE_DISTANCE = 5
+local MAX_RESIT_ATTEMPTS = 10  -- лимит попыток пересадки
 
 -- ====================== УНИВЕРСАЛЬНЫЕ ФУНКЦИИ ======================
 local function fireSequence(btn)
@@ -268,21 +269,21 @@ local function findTradeTable(expectedPartnerName)
                 table.insert(fullyFree, {tradeTable = tradeTable, freeSeat = freeSeats[1], wasFullyFree = true})
             elseif occupiedCount == 1 then
                 local occupantName = nil
-                if occupiedSeat then
-                    for _, plr in ipairs(Players:GetPlayers()) do
-                        local char = plr.Character
-                        if char and char:FindFirstChild("Humanoid") then
-                            local hum = char:FindFirstChild("Humanoid")
-                            if hum and hum.SeatPart == occupiedSeat then
+                if occupiedSeat and occupiedSeat.Occupant then
+                    local occupantHumanoid = occupiedSeat.Occupant
+                    if occupantHumanoid:IsA("Humanoid") then
+                        local character = occupantHumanoid.Parent
+                        if character then
+                            local plr = Players:GetPlayerFromCharacter(character)
+                            if plr then
                                 occupantName = plr.Name
-                                break
                             end
                         end
                     end
                 end
 
                 local entry = {tradeTable = tradeTable, freeSeat = freeSeats[1], wasFullyFree = false, occupantName = occupantName}
-                if expectedPartnerName ~= "" and occupantName == expectedPartnerName then
+                if expectedPartnerName ~= "" and occupantName and string.lower(occupantName) == string.lower(expectedPartnerName) then
                     table.insert(withPartner, entry)
                 else
                     table.insert(partiallyOccupied, entry)
@@ -291,17 +292,14 @@ local function findTradeTable(expectedPartnerName)
         end
     end
 
-    -- Приоритет 1: стол с нужным партнером
     if #withPartner > 0 then
         return withPartner[1].tradeTable, withPartner[1].freeSeat, false
     end
 
-    -- Приоритет 2: полностью свободный
     if #fullyFree > 0 then
         return fullyFree[1].tradeTable, fullyFree[1].freeSeat, true
     end
 
-    -- Приоритет 3: частично занятый (любой)
     if #partiallyOccupied > 0 then
         return partiallyOccupied[1].tradeTable, partiallyOccupied[1].freeSeat, false
     end
@@ -417,11 +415,11 @@ local function getPartnerName(tradeTable, mySeat)
     return nil
 end
 
--- ====================== ФУНКЦИЯ ПЕРЕСАДКИ (С ЧАСТЫМИ КОЛЕБАНИЯМИ) ======================
+-- ====================== ФУНКЦИЯ ПЕРЕСАДКИ (С ОГРАНИЧЕНИЕМ ПОПЫТОК) ======================
 local function resetSeatAndWait(mySeat, targetPos)
     print("Начинаю пересадку: буду повторять колебания до полной посадки.")
     local attempt = 0
-    while true do
+    while attempt < MAX_RESIT_ATTEMPTS do
         attempt += 1
         local char = player.Character
         if not char then
@@ -439,35 +437,28 @@ local function resetSeatAndWait(mySeat, targetPos)
             return true
         end
 
-        -- Встаём с сиденья (если сидели)
         pcall(function() hum.Sit = false end)
         task.wait(0.2)
 
-        -- Прыжок
         hum.Jump = true
         task.wait(0.2)
 
-        -- Цикл колебаний: несколько попыток сесть
         for i = 1, 5 do
             if isSeated(mySeat) then
                 print("Пересадка успешна (после колебания " .. i .. ").")
                 return true
             end
 
-            -- Случайное направление и дистанция
             local direction = math.random(1,2) == 1 and 1 or -1
             local offsetDistance = math.random(3, 6)
             local offset = Vector3.new(direction * offsetDistance, 0, 0)
 
-            -- Отходим
             hum:MoveTo(targetPos + offset)
             task.wait(0.3)
 
-            -- Возвращаемся
             hum:MoveTo(targetPos)
             task.wait(0.3)
 
-            -- Проверяем посадку чаще
             for check = 1, 5 do
                 if isSeated(mySeat) then
                     print("Пересадка успешна (после проверки " .. check .. ").")
@@ -477,9 +468,11 @@ local function resetSeatAndWait(mySeat, targetPos)
             end
         end
 
-        -- Если после всех колебаний не сели, повторяем внешний цикл
         print("Не сел после попытки " .. attempt .. ", повторяю колебания...")
     end
+
+    warn("Достигнут лимит попыток пересадки (" .. MAX_RESIT_ATTEMPTS .. ").")
+    return false
 end
 
 -- ====================== АВТО-ТРЕЙД ======================
@@ -582,7 +575,6 @@ local function isTradeCompleted()
 end
 
 local function processItem(searchText)
-    -- Проверяем, добавлен ли уже предмет
     if findResultElement(searchText) then
         print("Предмет '" .. searchText .. "' уже добавлен.")
         return true
@@ -698,16 +690,19 @@ local function acceptAndWaitForCompletion(loadFruitItems, mySeat)
         task.wait(0.5)
         waited += 0.5
 
-        if not isSeated(mySeat) then
-            print("Встали во время ожидания завершения трейда.")
-            return false
-        end
-
+        -- 1. Сначала проверяем завершение трейда (важно!)
         if isTradeCompleted() then
             print("Трейд завершён (уведомление Trade completed).")
             return true
         end
 
+        -- 2. Только потом проверяем, сидим ли мы
+        if not isSeated(mySeat) then
+            print("Встали во время ожидания завершения трейда.")
+            return false
+        end
+
+        -- 3. Проверяем состояние Ready1
         if ready1 and ready1:IsA("TextLabel") then
             if ready1.Text == "Ready!" then
                 -- continue
@@ -719,6 +714,11 @@ local function acceptAndWaitForCompletion(loadFruitItems, mySeat)
                 return false
             end
         end
+    end
+
+    if isTradeCompleted() then
+        print("Трейд завершён (обнаружено после таймаута).")
+        return true
     end
 
     print("Таймаут ожидания завершения трейда, требуется пересадка.")
@@ -799,12 +799,13 @@ while not tradeCompleted do
 
     print("Сидим за столом. Ожидание партнёра...")
 
+    -- Внутренний цикл для конкретного стола
     while not tradeCompleted do
         if not isSeated(mySeat) then
             print("Обнаружено, что не сидим. Выполняем пересадку.")
             if not resetSeatAndWait(mySeat, targetPos) then
                 print("Не удалось пересадиться, выходим из этого стола.")
-                break
+                break  -- выход во внешний цикл поиска нового стола
             end
         end
 
@@ -816,11 +817,15 @@ while not tradeCompleted do
         if partnerNameActual == nil then
             task.wait(1)
         elseif expectedPartner ~= "" and partnerNameActual ~= expectedPartner then
-            print("Партнёр не совпадает, пересаживаемся.")
-            if not resetSeatAndWait(mySeat, targetPos) then
-                print("Не удалось пересадиться, выходим из этого стола.")
-                break
+            print("Партнёр не совпадает. Встаём и ищем другой стол.")
+            -- Встаём с сиденья
+            local char = player.Character
+            if char and char:FindFirstChild("Humanoid") then
+                local hum = char:FindFirstChild("Humanoid")
+                pcall(function() hum.Sit = false end)
             end
+            task.wait(1)
+            break  -- выходим из внутреннего цикла, чтобы найти другой стол
         else
             print("Партнёр подходит. Добавляем предметы в первый контейнер.")
             local allItemsAdded = true
