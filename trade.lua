@@ -699,16 +699,19 @@ local function acceptAndWaitForCompletion(loadFruitItems, mySeat)
         task.wait(0.5)
         waited += 0.5
 
-        if not isSeated(mySeat) then
-            print("Встали во время ожидания завершения трейда.")
-            return false
-        end
-
+        -- 1. Сначала проверяем завершение трейда (важно!)
         if isTradeCompleted() then
             print("Трейд завершён (уведомление Trade completed).")
             return true
         end
 
+        -- 2. Только потом проверяем, сидим ли мы
+        if not isSeated(mySeat) then
+            print("Встали во время ожидания завершения трейда.")
+            return false
+        end
+
+        -- 3. Проверяем состояние Ready1
         if ready1 and ready1:IsA("TextLabel") then
             if ready1.Text == "Ready!" then
                 -- continue
@@ -720,6 +723,12 @@ local function acceptAndWaitForCompletion(loadFruitItems, mySeat)
                 return false
             end
         end
+    end
+
+    -- Если вышли по таймауту, но трейд мог завершиться прямо в конце
+    if isTradeCompleted() then
+        print("Трейд завершён (обнаружено после таймаута).")
+        return true
     end
 
     print("Таймаут ожидания завершения трейда, требуется пересадка.")
