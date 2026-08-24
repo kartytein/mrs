@@ -12,7 +12,7 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 -- ====================== НАСТРОЙКИ ======================
-local SERVER_URL = "http://192.168.1.100:8000"
+local SERVER_URL = "http://192.168.31.179:8000"
 local SEND_INVENTORY_INTERVAL = 20
 local CONFIG_POLL_INTERVAL = 10
 local MOVE_TIMEOUT = 30
