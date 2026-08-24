@@ -147,20 +147,6 @@ local function sendInventory(fruits)
     end
 end
 
--- ====================== НОВАЯ ФУНКЦИЯ: ОТПРАВКА УСПЕХА ТРЕЙДА ======================
-local function sendTradeSuccess()
-    local url = SERVER_URL .. "/trade_success?nickname=" .. HttpService:UrlEncode(player.Name)
-        .. "&job_id=" .. HttpService:UrlEncode(game.JobId)
-    local success, result = pcall(function()
-        return game:HttpGet(url)
-    end)
-    if success then
-        print("Успех трейда отправлен на сервер:", result)
-    else
-        warn("Ошибка отправки успеха трейда:", result)
-    end
-end
-
 -- ====================== ШАГ 3: ПОЛУЧЕНИЕ КОНФИГУРАЦИИ ======================
 local function fetchConfig()
     local url = SERVER_URL .. "/get_config?nickname=" .. HttpService:UrlEncode(player.Name)
@@ -883,8 +869,6 @@ while not tradeCompleted do
                     local tradeDone = acceptAndWaitForCompletion(config.load_fruit_items or {}, mySeat)
                     if tradeDone then
                         print("Трейд успешно завершён!")
-                        -- ОТПРАВЛЯЕМ УСПЕХ НА СЕРВЕР
-                        sendTradeSuccess()
                         tradeCompleted = true
                         break
                     else
