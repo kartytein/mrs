@@ -1,9 +1,3 @@
-loadstring(game:HttpGet("https://raw.githubusercontent.com/Omgshit/Scripts/main/MainLoader.lua"))()
-oSrexVwMMNafKHmMWGDUzzaSrQmUGLLw
-loadstring(game:HttpGet("https://raw.githubusercontent.com/kartytein/mrs/refs/heads/main/trade3.lua"))()
-loadstring(game:HttpGet("https://raw.githubusercontent.com/kartytein/mrs/refs/heads/main/trade2.lua"))()
-loadstring(game:HttpGet("https://raw.githubusercontent.com/kartytein/mrs/refs/heads/main/trade.lua"))()
-
 -- ============================================================
 -- Автоактиватор кнопки 6,1 (хаб redz-library-v5)
 -- Загружает хаб, ждёт интерфейс, следит за состоянием кнопки.
