@@ -1,6 +1,6 @@
 -- ============================================================
--- ПОЛНЫЙ СКРИПТ: КОМАНДА -> ИНВЕНТАРЬ (СО СКРОЛЛОМ) -> СЕРВЕР ->
--- ТЕЛЕПОРТ ПО JOB_ID (если нужно) -> РЕСЕТ -> ЛОДКА -> АВТО-ТРЕЙД
+-- ПОЛНЫЙ СКРИПТ
+-- Движение к TradeTable через BodyVelocity (как к лодке)
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -86,7 +86,7 @@ local SEND_INVENTORY_INTERVAL = 20
 local CONFIG_POLL_INTERVAL = 10
 local MOVE_TIMEOUT = 60
 local ARRIVE_DISTANCE = 6
-local MOVE_SPEED = 250
+local MOVE_SPEED = 80
 
 local SCROLL_STEP_PIXELS = 10
 local SCROLL_WAIT_TIME = 0.15
@@ -98,7 +98,6 @@ local RETURN_TAB, RETURN_OPT = 3, 1
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
 
--- Вкладка/опции для телепорта по JobId
 local TELEPORT_TAB = 19
 local TELEPORT_OPT_TEXT = 2
 local TELEPORT_OPT_ACTIVATE = 3
@@ -139,7 +138,7 @@ local function waitForObjectByPath(pathTable, timeout, description)
         if obj then return obj end
         task.wait(0.5); waited += 0.5
     end
-    warn("Объект не найден за " .. timeout .. " сек: " .. (description or "unknown"))
+    warn("Объект не найден: " .. (description or "?"))
     return nil
 end
 
@@ -404,18 +403,6 @@ local function findNthOption(container, optIndex)
     return optionBtn
 end
 
-local function getOptionState(tabIndex, optIndex)
-    local root = getRoot() if not root then return nil end
-    local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll") if not tabsScroll then return nil end
-    local tabButton = findNthTabButton(tabsScroll, tabIndex) if not tabButton then return nil end
-    fireSequence(tabButton); task.wait(0.3)
-    local container = safeFind(root, "Window", "Components", "Containers", "Container") if not container then return nil end
-    local optionBtn = findNthOption(container, optIndex) if not optionBtn then return nil end
-    local ind = findIndicatorFrame(optionBtn) if not ind then return nil end
-    local col = tostring(ind.BackgroundColor3)
-    return (col == COLOR_ON and "on") or (col == COLOR_OFF and "off") or nil
-end
-
 local function setOptionState(tabIndex, optIndex, desiredState)
     if desiredState ~= "on" and desiredState ~= "off" then return false end
     local root = getRoot() if not root then return false end
@@ -432,26 +419,19 @@ local function setOptionState(tabIndex, optIndex, desiredState)
 end
 
 -- ====================== ТЕЛЕПОРТ ПО JOB_ID ======================
--- Вкладка 19 -> Опция 2 (TextBox) -> вставить JobId -> Enter -> Опция 3 (активация)
 local function teleportToJobId(targetJobId)
     print("[Teleport] Телепорт на JobId:", targetJobId)
-
-    local root = getRoot()
-    if not root then warn("[Teleport] Хаб не найден"); return false end
-
+    local root = getRoot() if not root then warn("[Teleport] Хаб не найден"); return false end
     local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll")
     if not tabsScroll then warn("[Teleport] TabsScroll не найден"); return false end
 
-    -- 1. Переключаемся на вкладку 19
     local tabButton = findNthTabButton(tabsScroll, TELEPORT_TAB)
     if not tabButton then warn("[Teleport] Вкладка " .. TELEPORT_TAB .. " не найдена"); return false end
-    fireSequence(tabButton)
-    task.wait(0.5)
+    fireSequence(tabButton); task.wait(0.5)
 
     local container = safeFind(root, "Window", "Components", "Containers", "Container")
     if not container then warn("[Teleport] Container не найден"); return false end
 
-    -- 2. Опция 2 — ищем TextBox внутри
     local optionText = findNthOption(container, TELEPORT_OPT_TEXT)
     if not optionText then warn("[Teleport] Опция " .. TELEPORT_OPT_TEXT .. " не найдена"); return false end
 
@@ -466,15 +446,10 @@ local function teleportToJobId(targetJobId)
     local textBox = findTextBox(optionText)
     if not textBox then warn("[Teleport] TextBox не найден"); return false end
 
-    -- Фокус -> вставка -> Enter (ReleaseFocus(true) имитирует Enter)
-    textBox:CaptureFocus()
-    task.wait(0.2)
-    textBox.Text = targetJobId
-    task.wait(0.2)
-    textBox:ReleaseFocus(true)
-    task.wait(0.3)
+    textBox:CaptureFocus(); task.wait(0.2)
+    textBox.Text = targetJobId; task.wait(0.2)
+    textBox:ReleaseFocus(true); task.wait(0.3)
 
-    -- 3. Опция 3 — активируем
     local optionActivate = findNthOption(container, TELEPORT_OPT_ACTIVATE)
     if not optionActivate then warn("[Teleport] Опция " .. TELEPORT_OPT_ACTIVATE .. " не найдена"); return false end
 
@@ -483,107 +458,110 @@ local function teleportToJobId(targetJobId)
     return true
 end
 
--- Ожидание смены JobId (если телепорт сработал, клиент реконнектится — скрипт умрёт;
--- если не сработал — вернём false через таймаут и попробуем снова)
 local function waitForTeleport(targetJobId, timeout)
     local waited = 0
     while waited < timeout do
         if game.JobId == targetJobId then return true end
-        task.wait(1)
-        waited += 1
+        task.wait(1); waited += 1
     end
     return false
 end
 
--- ====================== ЛОДКА ======================
-local bv, moving, moveThread = nil, false, nil
-
-local function stopMove()
-    moving = false
-    if moveThread then task.cancel(moveThread); moveThread = nil end
-    if bv then bv:Destroy(); bv = nil end
-end
-
-local function isInBoat()
-    local char = player.Character if not char then return false end
-    local hum = char:FindFirstChild("Humanoid")
-    if not hum or not hum.Sit or not hum.SeatPart then return false end
-    local model = hum.SeatPart:FindFirstAncestorOfClass("Model")
-    return (model and model:FindFirstChildWhichIsA("VehicleSeat") and true) or false
-end
-
-local function moveBoatToPosition(targetPosition, arriveDistance)
-    arriveDistance = arriveDistance or 20
-    if moving then stopMove() end
-    moving = true
-    moveThread = task.spawn(function()
-        while moving do
-            local char = player.Character
-            local hum = char and char:FindFirstChild("Humanoid")
-            if not hum or hum.Health <= 0 or not isInBoat() then stopMove(); break end
-            local hrp = char:FindFirstChild("HumanoidRootPart")
-            if not hrp then stopMove(); break end
-            local cur = hrp.Position
-            local dx, dz = targetPosition.X - cur.X, targetPosition.Z - cur.Z
-            local dist = math.sqrt(dx*dx + dz*dz)
-            if dist <= arriveDistance then stopMove(); break end
-            local nx, nz = dx/dist, dz/dist
-            local upper = char:FindFirstChild("UpperTorso")
-            if not upper then stopMove(); break end
-            if not bv or not bv.Parent then
-                bv = Instance.new("BodyVelocity")
-                bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-                bv.Parent = upper
+-- ====================== ОТКЛЮЧЕНИЕ КОЛЛИЗИЙ (отдельный поток) ======================
+task.spawn(function()
+    while true do
+        pcall(function()
+            local myChar = player.Character
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                if obj:IsA("BasePart") then
+                    if not (myChar and obj:IsDescendantOf(myChar)) then
+                        obj.CanCollide = false
+                    end
+                end
             end
-            bv.Velocity = Vector3.new(nx * MOVE_SPEED, 0, nz * MOVE_SPEED)
-            pcall(function() hrp.CFrame = CFrame.new(hrp.Position.X, 100, hrp.Position.Z) end)
-            task.wait(0.05)
+        end)
+        task.wait(2)
+    end
+end)
+
+-- ====================== ДВИЖЕНИЕ К СТОЛУ (BodyVelocity, как к лодке) ======================
+-- Тот же принцип, что и движение к VehicleSeat лодки:
+-- BodyVelocity на UpperTorso, только без подъёма по Y.
+local function moveToTradeTableSeat(targetPosition)
+    local character = player.Character or player.CharacterAdded:Wait()
+    local humanoid = character:WaitForChild("Humanoid")
+    local rootPart = character:WaitForChild("HumanoidRootPart")
+    local upper = character:FindFirstChild("UpperTorso")
+    if not upper then return false end
+
+    -- Чистим старый BV
+    local oldBV = upper:FindFirstChildOfClass("BodyVelocity")
+    if oldBV then oldBV:Destroy() end
+
+    local mv = Instance.new("BodyVelocity")
+    mv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    mv.Parent = upper
+
+    local isMoving = true
+    -- Анти-застревание
+    local stuckThread = task.spawn(function()
+        local lastPos = rootPart.Position
+        local stuckSeconds = 0
+        while isMoving do
+            task.wait(1)
+            local c = player.Character
+            if not c then break end
+            local hrp = c:FindFirstChild("HumanoidRootPart")
+            local h = c:FindFirstChild("Humanoid")
+            if not hrp or not h then break end
+            local moved = (hrp.Position - lastPos).Magnitude
+            local toTarget = (hrp.Position - targetPosition).Magnitude
+            if toTarget < ARRIVE_DISTANCE then break end
+            if moved < 1 then
+                stuckSeconds += 1
+                if stuckSeconds >= 2 then
+                    pcall(function() h.Jump = true end)
+                    stuckSeconds = 0
+                end
+            else
+                stuckSeconds = 0
+            end
+            lastPos = hrp.Position
         end
     end)
+
     local waited = 0
     while waited < MOVE_TIMEOUT do
-        local char = player.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            local p = hrp.Position
-            local dx, dz = targetPosition.X - p.X, targetPosition.Z - p.Z
-            if math.sqrt(dx*dx + dz*dz) <= arriveDistance then stopMove(); return true end
-        end
-        task.wait(0.5); waited += 0.5
-    end
-    stopMove()
-    return false
-end
+        local c = player.Character
+        if not c then break end
+        local hrp = c:FindFirstChild("HumanoidRootPart")
+        local h = c:FindFirstChild("Humanoid")
+        if not hrp or not h or h.Health <= 0 then break end
 
-local function travelByBoatToPosition(targetPosition)
-    print("[Boat] Едем к:", targetPosition)
-    if not waitForInterface() then warn("Хаб не готов"); return false end
-    setOptionState(RETURN_TAB, RETURN_OPT, "on")
-    task.wait(0.3)
-    local waited = 0
-    while waited < 60 do
-        if isInBoat() then break end
-        task.wait(0.5); waited += 0.5
-    end
-    if not isInBoat() then
-        warn("[Boat] Не сел"); setOptionState(RETURN_TAB, RETURN_OPT, "off"); return false
-    end
-    setOptionState(BOAT_TAB, BOAT_OPT, "off")
-    setOptionState(RETURN_TAB, RETURN_OPT, "off")
-    task.wait(1)
-    local arrived = moveBoatToPosition(targetPosition, 20)
-    print("[Boat] Прибытие:", arrived)
-    local char = player.Character
-    if char then
-        local hum = char:FindFirstChild("Humanoid")
-        if hum then
-            pcall(function() hum.Sit = false end)
-            task.wait(0.3)
-            hum.Jump = true
+        local cur = hrp.Position
+        local dx = targetPosition.X - cur.X
+        local dz = targetPosition.Z - cur.Z
+        local dist = math.sqrt(dx*dx + dz*dz)
+
+        if dist < ARRIVE_DISTANCE then
+            isMoving = false
+            if mv then mv:Destroy() end
+            task.cancel(stuckThread)
+            return true
         end
+
+        local nx = dx / math.max(dist, 0.001)
+        local nz = dz / math.max(dist, 0.001)
+        mv.Velocity = Vector3.new(nx * MOVE_SPEED, 0, nz * MOVE_SPEED)
+
+        task.wait(0.05)
+        waited += 0.05
     end
-    task.wait(1)
-    return arrived
+
+    isMoving = false
+    if mv then mv:Destroy() end
+    task.cancel(stuckThread)
+    return false
 end
 
 -- ====================== ПОИСК СТОЛА ======================
@@ -630,81 +608,6 @@ local function findTradeTable(expectedPartnerName)
     if #fullyFree > 0 then return fullyFree[1].tradeTable, fullyFree[1].freeSeat, true end
     if #partiallyOccupied > 0 then return partiallyOccupied[1].tradeTable, partiallyOccupied[1].freeSeat, false end
     return nil, nil, nil
-end
-
--- ====================== ПЕШЕЕ ПЕРЕМЕЩЕНИЕ (BodyVelocity) ======================
-local function moveToPositionWithBV(targetPosition)
-    local character = player.Character or player.CharacterAdded:Wait()
-    local humanoid = character:WaitForChild("Humanoid")
-    local rootPart = character:WaitForChild("HumanoidRootPart")
-    local upper = character:FindFirstChild("UpperTorso")
-    if not upper then return false end
-
-    local oldBV = upper:FindFirstChildOfClass("BodyVelocity")
-    if oldBV then oldBV:Destroy() end
-
-    local moveBV = Instance.new("BodyVelocity")
-    moveBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    moveBV.Parent = upper
-
-    local isMoving = true
-    local stuckCoroutine = task.spawn(function()
-        local lastPos = rootPart.Position
-        local stuckSeconds = 0
-        while isMoving do
-            task.wait(1)
-            local c = player.Character
-            if not c then break end
-            local hrp = c:FindFirstChild("HumanoidRootPart")
-            local h = c:FindFirstChild("Humanoid")
-            if not hrp or not h then break end
-            local moved = (hrp.Position - lastPos).Magnitude
-            local toTarget = (hrp.Position - targetPosition).Magnitude
-            if toTarget < ARRIVE_DISTANCE then break end
-            if moved < 1 then
-                stuckSeconds += 1
-                if stuckSeconds >= 2 then
-                    pcall(function() h.Jump = true end)
-                    stuckSeconds = 0
-                end
-            else
-                stuckSeconds = 0
-            end
-            lastPos = hrp.Position
-        end
-    end)
-
-    local waited = 0
-    while waited < MOVE_TIMEOUT do
-        local c = player.Character
-        if not c then break end
-        local hrp = c:FindFirstChild("HumanoidRootPart")
-        local h = c:FindFirstChild("Humanoid")
-        if not hrp or not h or h.Health <= 0 then break end
-
-        local cur = hrp.Position
-        local dx = targetPosition.X - cur.X
-        local dz = targetPosition.Z - cur.Z
-        local dist = math.sqrt(dx*dx + dz*dz)
-
-        if dist < ARRIVE_DISTANCE then
-            isMoving = false
-            if moveBV then moveBV:Destroy() end
-            task.cancel(stuckCoroutine)
-            return true
-        end
-
-        local nx, nz = dx / math.max(dist, 0.001), dz / math.max(dist, 0.001)
-        moveBV.Velocity = Vector3.new(nx * MOVE_SPEED, 0, nz * MOVE_SPEED)
-
-        task.wait(0.05)
-        waited += 0.05
-    end
-
-    isMoving = false
-    if moveBV then moveBV:Destroy() end
-    task.cancel(stuckCoroutine)
-    return false
 end
 
 -- ====================== СИДЕНЬЕ ======================
@@ -921,7 +824,6 @@ end
 print("Скрипт запущен.")
 selectTeam()
 
--- 1. Собираем инвентарь и ждём конфиг
 local config = nil
 while config == nil do
     local inventory = collectInventory()
@@ -941,55 +843,34 @@ end
 
 print("Конфигурация получена.")
 
--- 2. Если нужен телепорт — делаем его СРАЗУ, до ресета и трейда
+-- Телепорт при необходимости
 local teleportTarget = config.teleport_to_job_id
 if teleportTarget and teleportTarget ~= "" and teleportTarget ~= game.JobId then
-    print("[Teleport] Требуется JobId: " .. teleportTarget .. " | текущий: " .. game.JobId)
-
-    local teleportAttempts = 0
-    while teleportAttempts < 5 do
-        teleportAttempts += 1
-        print("[Teleport] Попытка " .. teleportAttempts)
+    print("[Teleport] Требуется JobId: " .. teleportTarget)
+    local attempts = 0
+    while attempts < 5 do
+        attempts += 1
+        print("[Teleport] Попытка " .. attempts)
         local ok = teleportToJobId(teleportTarget)
         if ok then
-            -- Ждём смены JobId; если телепорт сработал, скрипт умрёт при реконнекте.
-            local success = waitForTeleport(teleportTarget, 30)
-            if success then
+            if waitForTeleport(teleportTarget, 30) then
                 print("[Teleport] Успешно перешли на " .. teleportTarget)
                 break
             end
         end
         task.wait(2)
     end
-
-    -- Если дошли сюда — телепорт не удался за отведённое время.
     if game.JobId ~= teleportTarget then
-        warn("[Teleport] Не удалось перейти на JobId " .. teleportTarget .. ", повторяем позже.")
+        warn("[Teleport] Не удалось перейти, повторяем позже.")
         return
     end
 end
 
--- 3. Ресет фруктов
+-- Ресет фруктов
 local loadSuccess = processLoadFruit(config.load_fruit_items or {})
 if not loadSuccess then warn("Ошибка ресета"); return end
 
--- 4. Целевая позиция — TradeTable
-local targetPos = nil
-for _, obj in ipairs(Workspace:GetDescendants()) do
-    if obj:IsA("Model") and obj.Name == "TradeTable" then
-        local base = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
-        if base then targetPos = base.Position; break end
-    end
-end
-
-if targetPos then
-    print("[Travel] Едем к TradeTable:", targetPos)
-    travelByBoatToPosition(targetPos)
-else
-    warn("TradeTable не найден")
-end
-
--- 5. Трейд-цикл
+-- Трейд-цикл
 local tradeCompleted = false
 while not tradeCompleted do
     local tradeTable, mySeat, wasFullyFree = findTradeTable(config.partner_name or "")
@@ -1000,7 +881,8 @@ while not tradeCompleted do
     local tablePos = mySeat.Position
     print("Найден стол. Тип:", wasFullyFree and "свободный" or "частично занят")
 
-    local arrived = moveToPositionWithBV(tablePos)
+    -- ДВИЖЕНИЕ К СТОЛУ (BodyVelocity)
+    local arrived = moveToTradeTableSeat(tablePos)
     if not arrived then print("Не дошли, пробуем другой."); task.wait(2); continue end
 
     if not waitForSeat(mySeat, 30) then
