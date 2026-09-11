@@ -1,7 +1,6 @@
 -- ============================================================
 -- ПОЛНЫЙ СКРИПТ: КОМАНДА -> ИНВЕНТАРЬ (СО СКРОЛЛОМ) -> СЕРВЕР ->
--- РЕСЕТ -> ЛОДКА -> АВТО-ТРЕЙД
--- + ГИБКИЙ ПОИСК КНОПОК HUD (работает на любом персонаже)
+-- ТЕЛЕПОРТ ПО JOB_ID (если нужно) -> РЕСЕТ -> ЛОДКА -> АВТО-ТРЕЙД
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -20,7 +19,7 @@ task.spawn(function()
     end)
 end)
 
--- ====================== УТИЛИТЫ ДЛЯ ХАБА ======================
+-- ====================== УТИЛИТЫ ХАБА ======================
 local function getRoot()
     for _, child in ipairs(CoreGui:GetChildren()) do
         local obj = child:FindFirstChild("redz-library-v5")
@@ -28,7 +27,6 @@ local function getRoot()
     end
     return nil
 end
-
 local function safeFind(obj, ...)
     for _, name in ipairs({...}) do
         if not obj then return nil end
@@ -36,27 +34,20 @@ local function safeFind(obj, ...)
     end
     return obj
 end
-
 local function waitForInterface()
     local root = getRoot()
     if not root then return false end
     return safeFind(root, "Window", "Components", "TabsScroll")
 end
 
--- ====================== БЛОКИРУЮЩЕЕ ОЖИДАНИЕ ХАБА ======================
+-- ====================== ЖДЁМ ХАБ ======================
 do
     local timeout, waited = 90, 0
     while waited < timeout do
-        if waitForInterface() then
-            print("[Startup] Интерфейс хаба загружен.")
-            break
-        end
-        task.wait(0.5)
-        waited += 0.5
+        if waitForInterface() then print("[Startup] Хаб загружен."); break end
+        task.wait(0.5); waited += 0.5
     end
-    if not waitForInterface() then
-        warn("[Startup] Интерфейс хаба не загрузился за 90 сек, продолжаю без хаба.")
-    end
+    if not waitForInterface() then warn("[Startup] Хаб не загрузился.") end
 end
 
 -- ====================== ЖДЁМ ПЕРСОНАЖА ======================
@@ -65,15 +56,11 @@ do
     local waited = 0
     while waited < 60 do
         character = player.Character
-        if character and character:FindFirstChild("Humanoid") and character:FindFirstChild("HumanoidRootPart") then
-            break
-        end
-        task.wait(0.5)
-        waited += 0.5
+        if character and character:FindFirstChild("Humanoid") and character:FindFirstChild("HumanoidRootPart") then break end
+        task.wait(0.5); waited += 0.5
     end
     if not character or not character:FindFirstChild("HumanoidRootPart") then
-        warn("[Startup] Персонаж не загрузился за 60 сек")
-        return
+        warn("[Startup] Персонаж не загрузился"); return
     end
 end
 
@@ -87,15 +74,10 @@ do
             commF = remotes:FindFirstChild("CommF_")
             if commF then break end
         end
-        task.wait(0.5)
-        waited += 0.5
+        task.wait(0.5); waited += 0.5
     end
-    if not commF then
-        warn("[Startup] CommF_ не найден за 60 сек")
-        return
-    end
+    if not commF then warn("[Startup] CommF_ не найден"); return end
 end
-
 task.wait(2)
 
 -- ====================== НАСТРОЙКИ ======================
@@ -103,7 +85,8 @@ local SERVER_URL = "http://192.168.31.89:8000"
 local SEND_INVENTORY_INTERVAL = 20
 local CONFIG_POLL_INTERVAL = 10
 local MOVE_TIMEOUT = 60
-local ARRIVE_DISTANCE = 5
+local ARRIVE_DISTANCE = 6
+local MOVE_SPEED = 250
 
 local SCROLL_STEP_PIXELS = 10
 local SCROLL_WAIT_TIME = 0.15
@@ -115,7 +98,12 @@ local RETURN_TAB, RETURN_OPT = 3, 1
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
 
--- ====================== УНИВЕРСАЛЬНЫЕ ФУНКЦИИ ======================
+-- Вкладка/опции для телепорта по JobId
+local TELEPORT_TAB = 19
+local TELEPORT_OPT_TEXT = 2
+local TELEPORT_OPT_ACTIVATE = 3
+
+-- ====================== ОБЩИЕ ======================
 local function fireSequence(btn)
     if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return false end
     local signals = {"MouseEnter","MouseButton1Down","MouseButton1Click","MouseButton1Up","Activated","MouseLeave"}
@@ -149,19 +137,13 @@ local function waitForObjectByPath(pathTable, timeout, description)
     while waited < timeout do
         local obj = findObjectByPath(playerGui, table.unpack(pathTable))
         if obj then return obj end
-        task.wait(0.5)
-        waited += 0.5
+        task.wait(0.5); waited += 0.5
     end
     warn("Объект не найден за " .. timeout .. " сек: " .. (description or "unknown"))
     return nil
 end
 
--- ====================== ГИБКИЙ ПОИСК КНОПОК HUD ======================
--- Кнопки Menu/Items могут лежать на разной глубине в зависимости от персонажа:
---   HUDRoot.Frame.HUD.Menu.Menu
---   HUDRoot.Frame.HUD.LowerLeftColumn.Menu.Menu
---   HUDRoot.Frame.HUD.<...>.Menu.Menu
--- Поэтому ищем рекурсивно по имени внутри HUDRoot.Frame.HUD.
+-- ====================== HUD КНОПКИ ======================
 local function findHudButtonByName(buttonName)
     local hudRoot = playerGui:FindFirstChild("HUDRoot")
     if not hudRoot then return nil end
@@ -169,7 +151,6 @@ local function findHudButtonByName(buttonName)
     if not frame then return nil end
     local hud = frame:FindFirstChild("HUD")
     if not hud then return nil end
-
     local function search(node)
         for _, child in ipairs(node:GetChildren()) do
             if (child:IsA("TextButton") or child:IsA("ImageButton")) and child.Name == buttonName then
@@ -180,7 +161,6 @@ local function findHudButtonByName(buttonName)
         end
         return nil
     end
-
     return search(hud)
 end
 
@@ -189,14 +169,13 @@ local function waitForHudButton(buttonName, timeout)
     while waited < timeout do
         local btn = findHudButtonByName(buttonName)
         if btn then return btn end
-        task.wait(0.5)
-        waited += 0.5
+        task.wait(0.5); waited += 0.5
     end
     warn("HUD кнопка не найдена: " .. buttonName)
     return nil
 end
 
--- ====================== ШАГ 1: ВЫБОР КОМАНДЫ ======================
+-- ====================== ВЫБОР КОМАНДЫ ======================
 local function selectTeam()
     local success, err = pcall(function()
         local r = ReplicatedStorage:FindFirstChild("Remotes")
@@ -205,12 +184,11 @@ local function selectTeam()
         if not c then error("CommF_ исчез") end
         c:InvokeServer("SetTeam", "Marines")
     end)
-    if success then print("[Team] Marines выбрана")
-    else warn("[Team] Ошибка:", err) end
+    if success then print("[Team] Marines выбрана") else warn("[Team]", err) end
     task.wait(3)
 end
 
--- ====================== ШАГ 2: СБОР ИНВЕНТАРЯ СО СКРОЛЛОМ ======================
+-- ====================== СБОР ИНВЕНТАРЯ ======================
 local function extractTileInfo(tileObject)
     local function getTextFromDetails(details)
         if not details then return nil end
@@ -223,7 +201,6 @@ local function extractTileInfo(tileObject)
         end
         return nil
     end
-
     local details = tileObject:FindFirstChild("Details")
     local text = getTextFromDetails(details)
     if not text then
@@ -232,68 +209,43 @@ local function extractTileInfo(tileObject)
         end
     end
     if not text then return nil end
-
     local cleanText = text
-    if cleanText:find(",") then
-        cleanText = cleanText:sub(1, cleanText:find(",") - 1)
-    end
+    if cleanText:find(",") then cleanText = cleanText:sub(1, cleanText:find(",") - 1) end
     cleanText = cleanText:gsub("%s+$", "")
-
     local tileNumber = tonumber(tileObject.Name:sub(6)) or 0
     return {Name = tileObject.Name, Number = tileNumber, Text = cleanText}
 end
 
--- Рекурсивный поиск кнопки по имени внутри Inventory
 local function findInventoryButtonByName(buttonName)
     local inv = playerGui:FindFirstChild("Inventory")
     if not inv then return nil end
     for _, obj in ipairs(inv:GetDescendants()) do
-        if (obj:IsA("TextButton") or obj:IsA("ImageButton")) and obj.Name == buttonName then
-            return obj
-        end
+        if (obj:IsA("TextButton") or obj:IsA("ImageButton")) and obj.Name == buttonName then return obj end
     end
     return nil
 end
 
 local function collectInventory()
-    print("[Inventory] Открытие меню и инвентаря...")
-
+    print("[Inventory] Открываю меню и инвентарь...")
     local menuButton = waitForHudButton("Menu", 10)
     if not menuButton then return {} end
-    fireSequence(menuButton)
-    task.wait(1.5)
+    fireSequence(menuButton); task.wait(1.5)
 
     local itemsButton = waitForHudButton("Items", 10)
     if not itemsButton then return {} end
-    fireSequence(itemsButton)
-    task.wait(1.5)
+    fireSequence(itemsButton); task.wait(1.5)
 
-    -- Category2 — сначала по фиксированному пути, при неудаче рекурсивно
-    local category2 = waitForObjectByPath(
-        {"Inventory", "Inventory", "Main", "NavigationRail", "Category2"}, 5, "Category2")
-    if not category2 then
-        category2 = findInventoryButtonByName("Category2")
-    end
-    if not category2 then
-        warn("[Inventory] Category2 не найдена")
-        return {}
-    end
-    fireSequence(category2)
-    task.wait(SCROLL_INITIAL_WAIT)
+    local category2 = waitForObjectByPath({"Inventory", "Inventory", "Main", "NavigationRail", "Category2"}, 5, "Category2")
+    if not category2 then category2 = findInventoryButtonByName("Category2") end
+    if not category2 then warn("[Inventory] Category2 не найдена"); return {} end
+    fireSequence(category2); task.wait(SCROLL_INITIAL_WAIT)
 
-    -- TileGrid — сначала по пути, при неудаче рекурсивно
-    local tileGrid = waitForObjectByPath(
-        {"Inventory", "Inventory", "Main", "PageContent", "TileGrid"}, 5, "TileGrid")
+    local tileGrid = waitForObjectByPath({"Inventory", "Inventory", "Main", "PageContent", "TileGrid"}, 5, "TileGrid")
     if not tileGrid then
         local inv = playerGui:FindFirstChild("Inventory")
-        if inv then
-            tileGrid = inv:FindFirstChild("TileGrid", true)
-        end
+        if inv then tileGrid = inv:FindFirstChild("TileGrid", true) end
     end
-    if not tileGrid then
-        warn("[Inventory] TileGrid не найден")
-        return {}
-    end
+    if not tileGrid then warn("[Inventory] TileGrid не найден"); return {} end
 
     local scrollingFrame = nil
     local obj = tileGrid
@@ -301,13 +253,8 @@ local function collectInventory()
         if obj:IsA("ScrollingFrame") then scrollingFrame = obj; break end
         obj = obj.Parent
     end
-    if not scrollingFrame then
-        warn("[Inventory] ScrollingFrame не найден, собираю без скролла")
-    end
 
-    local collected = {}
-    local collectedList = {}
-
+    local collected, collectedList = {}, {}
     local function collectVisibleTiles()
         for _, child in ipairs(tileGrid:GetDescendants()) do
             if child:IsA("ImageButton") and child.Name:sub(1,5) == "Tile-" then
@@ -323,17 +270,11 @@ local function collectInventory()
     if scrollingFrame then
         local canvasAbsoluteY = scrollingFrame.AbsoluteCanvasSize.Y
         local windowAbsoluteY = scrollingFrame.AbsoluteSize.Y
-        print("[Inventory] CanvasSize: " .. canvasAbsoluteY .. " | WindowSize: " .. windowAbsoluteY)
-
         scrollingFrame.CanvasPosition = Vector2.new(0, 0)
         task.wait(SCROLL_INITIAL_WAIT)
         collectVisibleTiles()
-
         local maxScrollY = math.max(0, canvasAbsoluteY - windowAbsoluteY)
-        local currentY = 0
-        local safetyCounter = 0
-        local maxIterations = 1000
-
+        local currentY, safetyCounter, maxIterations = 0, 0, 1000
         while currentY < maxScrollY and safetyCounter < maxIterations do
             currentY = math.min(currentY + SCROLL_STEP_PIXELS, maxScrollY)
             scrollingFrame.CanvasPosition = Vector2.new(0, currentY)
@@ -341,7 +282,6 @@ local function collectInventory()
             collectVisibleTiles()
             safetyCounter += 1
         end
-
         scrollingFrame.CanvasPosition = Vector2.new(0, maxScrollY)
         task.wait(SCROLL_FINAL_WAIT)
         collectVisibleTiles()
@@ -350,12 +290,11 @@ local function collectInventory()
     end
 
     table.sort(collectedList, function(a, b) return a.Number < b.Number end)
-
     local fruits = {}
     for _, tile in ipairs(collectedList) do
         if tile.Text ~= "" then table.insert(fruits, tile.Text) end
     end
-    print("[Inventory] Собрано фруктов: " .. #fruits)
+    print("[Inventory] Собрано: " .. #fruits)
     return fruits
 end
 
@@ -364,22 +303,21 @@ local function sendInventory(fruits)
     local url = SERVER_URL .. "/send_inventory?nickname=" .. HttpService:UrlEncode(player.Name)
         .. "&fruits=" .. HttpService:UrlEncode(fruitsStr)
         .. "&job_id=" .. HttpService:UrlEncode(game.JobId)
-    local success, result = pcall(function() return game:HttpGet(url) end)
-    if success then print("Инвентарь отправлен:", result)
-    else warn("Ошибка отправки инвентаря:", result) end
+    local ok, result = pcall(function() return game:HttpGet(url) end)
+    if ok then print("Инвентарь отправлен:", result) else warn("Ошибка отправки:", result) end
 end
 
 local function fetchConfig()
     local url = SERVER_URL .. "/get_config?nickname=" .. HttpService:UrlEncode(player.Name)
-    local success, response = pcall(function() return game:HttpGet(url) end)
-    if not success then warn("Ошибка запроса конфигурации:", response); return nil end
+    local ok, response = pcall(function() return game:HttpGet(url) end)
+    if not ok then warn("Ошибка запроса конфигурации:", response); return nil end
     local data = HttpService:JSONDecode(response)
-    if data and data.partner_name then print("Конфигурация получена:", data); return data
+    if data and data.partner_name then print("Конфигурация:", data); return data
     elseif data and data.error then print("Сервер:", data.error); return nil
-    else print("Конфигурация ещё не готова"); return nil end
+    else print("Конфигурация не готова"); return nil end
 end
 
--- ====================== ШАГ 4: LOADFRUIT ======================
+-- ====================== LOADFRUIT ======================
 local function formatItemName(name)
     local lower = name:lower()
     local cap = lower:sub(1, 1):upper() .. lower:sub(2)
@@ -387,11 +325,11 @@ local function formatItemName(name)
 end
 
 local function invokeLoadFruit(fruitName)
-    local success, result = pcall(function()
+    local ok, result = pcall(function()
         return ReplicatedStorage.Remotes.CommF_:InvokeServer("LoadFruit", fruitName)
     end)
-    if success then print("[Успех] LoadFruit " .. fruitName .. " | " .. tostring(result))
-    else warn("[Ошибка] LoadFruit " .. fruitName .. " | " .. tostring(result)) end
+    if ok then print("[OK] LoadFruit " .. fruitName .. " | " .. tostring(result))
+    else warn("[ERR] LoadFruit " .. fruitName .. " | " .. tostring(result)) end
 end
 
 local function respawnCharacter()
@@ -409,8 +347,7 @@ local function waitForCharacterRespawn()
     while waited < 30 do
         local char = player.Character
         if char and char ~= oldChar then return char end
-        task.wait(0.5)
-        waited += 0.5
+        task.wait(0.5); waited += 0.5
     end
     return nil
 end
@@ -419,7 +356,7 @@ local function processLoadFruit(loadFruitItems)
     if #loadFruitItems == 0 then return true end
     for _, item in ipairs(loadFruitItems) do
         local formatted = formatItemName(item)
-        print("Обрабатываю '" .. item .. "' -> '" .. formatted .. "'")
+        print("LoadFruit '" .. item .. "' -> '" .. formatted .. "'")
         invokeLoadFruit(formatted)
         respawnCharacter()
         waitForCharacterRespawn()
@@ -428,11 +365,13 @@ local function processLoadFruit(loadFruitItems)
     return true
 end
 
--- ====================== ИНТЕРФЕЙС ХАБА (опции) ======================
+-- ====================== ОПЦИИ ХАБА ======================
 local function findIndicatorFrame(parent)
     for _, child in ipairs(parent:GetChildren()) do
         if child:IsA("Frame") then
-            if tostring(child.BackgroundColor3) == COLOR_ON or tostring(child.BackgroundColor3) == COLOR_OFF then return child end
+            if tostring(child.BackgroundColor3) == COLOR_ON or tostring(child.BackgroundColor3) == COLOR_OFF then
+                return child
+            end
         end
         local found = findIndicatorFrame(child) if found then return found end
     end
@@ -468,12 +407,10 @@ end
 local function getOptionState(tabIndex, optIndex)
     local root = getRoot() if not root then return nil end
     local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll") if not tabsScroll then return nil end
-    local tabButton = findNthTabButton(tabsScroll, tabIndex)
-    if not tabButton then return nil end
-    fireSequence(tabButton) task.wait(0.3)
+    local tabButton = findNthTabButton(tabsScroll, tabIndex) if not tabButton then return nil end
+    fireSequence(tabButton); task.wait(0.3)
     local container = safeFind(root, "Window", "Components", "Containers", "Container") if not container then return nil end
-    local optionBtn = findNthOption(container, optIndex)
-    if not optionBtn then return nil end
+    local optionBtn = findNthOption(container, optIndex) if not optionBtn then return nil end
     local ind = findIndicatorFrame(optionBtn) if not ind then return nil end
     local col = tostring(ind.BackgroundColor3)
     return (col == COLOR_ON and "on") or (col == COLOR_OFF and "off") or nil
@@ -483,20 +420,82 @@ local function setOptionState(tabIndex, optIndex, desiredState)
     if desiredState ~= "on" and desiredState ~= "off" then return false end
     local root = getRoot() if not root then return false end
     local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll") if not tabsScroll then return false end
-    local tabButton = findNthTabButton(tabsScroll, tabIndex)
-    if not tabButton then return false end
-    fireSequence(tabButton) task.wait(0.3)
+    local tabButton = findNthTabButton(tabsScroll, tabIndex) if not tabButton then return false end
+    fireSequence(tabButton); task.wait(0.3)
     local container = safeFind(root, "Window", "Components", "Containers", "Container") if not container then return false end
-    local optionBtn = findNthOption(container, optIndex)
-    if not optionBtn then return false end
+    local optionBtn = findNthOption(container, optIndex) if not optionBtn then return false end
     local indicator = findIndicatorFrame(optionBtn) if not indicator then return false end
     if (tostring(indicator.BackgroundColor3) == COLOR_ON and desiredState == "on") or
        (tostring(indicator.BackgroundColor3) == COLOR_OFF and desiredState == "off") then return true end
-    fireSequence(optionBtn) task.wait(0.1)
+    fireSequence(optionBtn); task.wait(0.1)
     return true
 end
 
--- ====================== ДВИЖЕНИЕ ЛОДКИ ======================
+-- ====================== ТЕЛЕПОРТ ПО JOB_ID ======================
+-- Вкладка 19 -> Опция 2 (TextBox) -> вставить JobId -> Enter -> Опция 3 (активация)
+local function teleportToJobId(targetJobId)
+    print("[Teleport] Телепорт на JobId:", targetJobId)
+
+    local root = getRoot()
+    if not root then warn("[Teleport] Хаб не найден"); return false end
+
+    local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll")
+    if not tabsScroll then warn("[Teleport] TabsScroll не найден"); return false end
+
+    -- 1. Переключаемся на вкладку 19
+    local tabButton = findNthTabButton(tabsScroll, TELEPORT_TAB)
+    if not tabButton then warn("[Teleport] Вкладка " .. TELEPORT_TAB .. " не найдена"); return false end
+    fireSequence(tabButton)
+    task.wait(0.5)
+
+    local container = safeFind(root, "Window", "Components", "Containers", "Container")
+    if not container then warn("[Teleport] Container не найден"); return false end
+
+    -- 2. Опция 2 — ищем TextBox внутри
+    local optionText = findNthOption(container, TELEPORT_OPT_TEXT)
+    if not optionText then warn("[Teleport] Опция " .. TELEPORT_OPT_TEXT .. " не найдена"); return false end
+
+    local function findTextBox(parent)
+        for _, child in ipairs(parent:GetChildren()) do
+            if child:IsA("TextBox") then return child end
+            local found = findTextBox(child)
+            if found then return found end
+        end
+        return nil
+    end
+    local textBox = findTextBox(optionText)
+    if not textBox then warn("[Teleport] TextBox не найден"); return false end
+
+    -- Фокус -> вставка -> Enter (ReleaseFocus(true) имитирует Enter)
+    textBox:CaptureFocus()
+    task.wait(0.2)
+    textBox.Text = targetJobId
+    task.wait(0.2)
+    textBox:ReleaseFocus(true)
+    task.wait(0.3)
+
+    -- 3. Опция 3 — активируем
+    local optionActivate = findNthOption(container, TELEPORT_OPT_ACTIVATE)
+    if not optionActivate then warn("[Teleport] Опция " .. TELEPORT_OPT_ACTIVATE .. " не найдена"); return false end
+
+    fireSequence(optionActivate)
+    print("[Teleport] Опция " .. TELEPORT_OPT_ACTIVATE .. " активирована")
+    return true
+end
+
+-- Ожидание смены JobId (если телепорт сработал, клиент реконнектится — скрипт умрёт;
+-- если не сработал — вернём false через таймаут и попробуем снова)
+local function waitForTeleport(targetJobId, timeout)
+    local waited = 0
+    while waited < timeout do
+        if game.JobId == targetJobId then return true end
+        task.wait(1)
+        waited += 1
+    end
+    return false
+end
+
+-- ====================== ЛОДКА ======================
 local bv, moving, moveThread = nil, false, nil
 
 local function stopMove()
@@ -510,7 +509,7 @@ local function isInBoat()
     local hum = char:FindFirstChild("Humanoid")
     if not hum or not hum.Sit or not hum.SeatPart then return false end
     local model = hum.SeatPart:FindFirstAncestorOfClass("Model")
-    return (model and model:FindFirstChildWhichIsA("VehicleSeat") and true) or false, model, hum.SeatPart
+    return (model and model:FindFirstChildWhichIsA("VehicleSeat") and true) or false
 end
 
 local function moveBoatToPosition(targetPosition, arriveDistance)
@@ -522,18 +521,13 @@ local function moveBoatToPosition(targetPosition, arriveDistance)
             local char = player.Character
             local hum = char and char:FindFirstChild("Humanoid")
             if not hum or hum.Health <= 0 or not isInBoat() then stopMove(); break end
-
             local hrp = char:FindFirstChild("HumanoidRootPart")
             if not hrp then stopMove(); break end
             local cur = hrp.Position
             local dx, dz = targetPosition.X - cur.X, targetPosition.Z - cur.Z
             local dist = math.sqrt(dx*dx + dz*dz)
             if dist <= arriveDistance then stopMove(); break end
-
-            local len = math.max(dist, 0.001)
-            local nx, nz = dx / len, dz / len
-            local vx, vz = nx * 250, nz * 250
-
+            local nx, nz = dx/dist, dz/dist
             local upper = char:FindFirstChild("UpperTorso")
             if not upper then stopMove(); break end
             if not bv or not bv.Parent then
@@ -541,12 +535,11 @@ local function moveBoatToPosition(targetPosition, arriveDistance)
                 bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
                 bv.Parent = upper
             end
-            bv.Velocity = Vector3.new(vx, 0, vz)
+            bv.Velocity = Vector3.new(nx * MOVE_SPEED, 0, nz * MOVE_SPEED)
             pcall(function() hrp.CFrame = CFrame.new(hrp.Position.X, 100, hrp.Position.Z) end)
             task.wait(0.05)
         end
     end)
-
     local waited = 0
     while waited < MOVE_TIMEOUT do
         local char = player.Character
@@ -556,39 +549,30 @@ local function moveBoatToPosition(targetPosition, arriveDistance)
             local dx, dz = targetPosition.X - p.X, targetPosition.Z - p.Z
             if math.sqrt(dx*dx + dz*dz) <= arriveDistance then stopMove(); return true end
         end
-        task.wait(0.5)
-        waited += 0.5
+        task.wait(0.5); waited += 0.5
     end
     stopMove()
     return false
 end
 
 local function travelByBoatToPosition(targetPosition)
-    print("[Boat] Путешествие к:", targetPosition)
-    if not waitForInterface() then warn("Интерфейс хаба не найден"); return false end
-
+    print("[Boat] Едем к:", targetPosition)
+    if not waitForInterface() then warn("Хаб не готов"); return false end
     setOptionState(RETURN_TAB, RETURN_OPT, "on")
     task.wait(0.3)
-
     local waited = 0
     while waited < 60 do
         if isInBoat() then break end
-        task.wait(0.5)
-        waited += 0.5
+        task.wait(0.5); waited += 0.5
     end
     if not isInBoat() then
-        warn("[Boat] Не удалось сесть")
-        setOptionState(RETURN_TAB, RETURN_OPT, "off")
-        return false
+        warn("[Boat] Не сел"); setOptionState(RETURN_TAB, RETURN_OPT, "off"); return false
     end
-
     setOptionState(BOAT_TAB, BOAT_OPT, "off")
     setOptionState(RETURN_TAB, RETURN_OPT, "off")
     task.wait(1)
-
     local arrived = moveBoatToPosition(targetPosition, 20)
     print("[Boat] Прибытие:", arrived)
-
     local char = player.Character
     if char then
         local hum = char:FindFirstChild("Humanoid")
@@ -608,9 +592,7 @@ local function findTradeTable(expectedPartnerName)
     for _, obj in ipairs(Workspace:GetDescendants()) do
         if obj:IsA("Model") and obj.Name == "TradeTable" then table.insert(tradeTables, obj) end
     end
-
     local fullyFree, partiallyOccupied, withPartner = {}, {}, {}
-
     for _, tradeTable in ipairs(tradeTables) do
         local seats = {}
         for _, part in ipairs(tradeTable:GetDescendants()) do
@@ -628,10 +610,10 @@ local function findTradeTable(expectedPartnerName)
                 local occupantName = nil
                 if occupiedSeat then
                     for _, plr in ipairs(Players:GetPlayers()) do
-                        local char = plr.Character
-                        if char then
-                            local hum = char:FindFirstChild("Humanoid")
-                            if hum and hum.SeatPart == occupiedSeat then occupantName = plr.Name; break end
+                        local c = plr.Character
+                        if c then
+                            local h = c:FindFirstChild("Humanoid")
+                            if h and h.SeatPart == occupiedSeat then occupantName = plr.Name; break end
                         end
                     end
                 end
@@ -644,49 +626,88 @@ local function findTradeTable(expectedPartnerName)
             end
         end
     end
-
     if #withPartner > 0 then return withPartner[1].tradeTable, withPartner[1].freeSeat, false end
     if #fullyFree > 0 then return fullyFree[1].tradeTable, fullyFree[1].freeSeat, true end
     if #partiallyOccupied > 0 then return partiallyOccupied[1].tradeTable, partiallyOccupied[1].freeSeat, false end
     return nil, nil, nil
 end
 
--- ====================== ПЕРЕМЕЩЕНИЕ ПЕШКОМ ======================
-local function moveToPositionWithJump(targetPosition)
+-- ====================== ПЕШЕЕ ПЕРЕМЕЩЕНИЕ (BodyVelocity) ======================
+local function moveToPositionWithBV(targetPosition)
     local character = player.Character or player.CharacterAdded:Wait()
     local humanoid = character:WaitForChild("Humanoid")
     local rootPart = character:WaitForChild("HumanoidRootPart")
-    humanoid:MoveTo(targetPosition)
+    local upper = character:FindFirstChild("UpperTorso")
+    if not upper then return false end
+
+    local oldBV = upper:FindFirstChildOfClass("BodyVelocity")
+    if oldBV then oldBV:Destroy() end
+
+    local moveBV = Instance.new("BodyVelocity")
+    moveBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    moveBV.Parent = upper
 
     local isMoving = true
-    local stuckCheckCoroutine = task.spawn(function()
-        local lastPosition = rootPart.Position
+    local stuckCoroutine = task.spawn(function()
+        local lastPos = rootPart.Position
         local stuckSeconds = 0
         while isMoving do
             task.wait(1)
-            local cp = rootPart.Position
-            local dm = (cp - lastPosition).Magnitude
-            local dt = (cp - targetPosition).Magnitude
-            if dt < ARRIVE_DISTANCE then break end
-            if dm < 1 then
+            local c = player.Character
+            if not c then break end
+            local hrp = c:FindFirstChild("HumanoidRootPart")
+            local h = c:FindFirstChild("Humanoid")
+            if not hrp or not h then break end
+            local moved = (hrp.Position - lastPos).Magnitude
+            local toTarget = (hrp.Position - targetPosition).Magnitude
+            if toTarget < ARRIVE_DISTANCE then break end
+            if moved < 1 then
                 stuckSeconds += 1
-                if stuckSeconds >= 2 then humanoid.Jump = true; stuckSeconds = 0 end
-            else stuckSeconds = 0 end
-            lastPosition = cp
+                if stuckSeconds >= 2 then
+                    pcall(function() h.Jump = true end)
+                    stuckSeconds = 0
+                end
+            else
+                stuckSeconds = 0
+            end
+            lastPos = hrp.Position
         end
     end)
 
     local waited = 0
     while waited < MOVE_TIMEOUT do
-        if (rootPart.Position - targetPosition).Magnitude < ARRIVE_DISTANCE then
-            isMoving = false; task.cancel(stuckCheckCoroutine); return true
+        local c = player.Character
+        if not c then break end
+        local hrp = c:FindFirstChild("HumanoidRootPart")
+        local h = c:FindFirstChild("Humanoid")
+        if not hrp or not h or h.Health <= 0 then break end
+
+        local cur = hrp.Position
+        local dx = targetPosition.X - cur.X
+        local dz = targetPosition.Z - cur.Z
+        local dist = math.sqrt(dx*dx + dz*dz)
+
+        if dist < ARRIVE_DISTANCE then
+            isMoving = false
+            if moveBV then moveBV:Destroy() end
+            task.cancel(stuckCoroutine)
+            return true
         end
-        task.wait(0.5); waited += 0.5
+
+        local nx, nz = dx / math.max(dist, 0.001), dz / math.max(dist, 0.001)
+        moveBV.Velocity = Vector3.new(nx * MOVE_SPEED, 0, nz * MOVE_SPEED)
+
+        task.wait(0.05)
+        waited += 0.05
     end
-    isMoving = false; task.cancel(stuckCheckCoroutine)
+
+    isMoving = false
+    if moveBV then moveBV:Destroy() end
+    task.cancel(stuckCoroutine)
     return false
 end
 
+-- ====================== СИДЕНЬЕ ======================
 local function waitForSeat(seatPart, timeout)
     local waited = 0
     while waited < timeout do
@@ -718,10 +739,10 @@ local function getPartnerName(tradeTable, mySeat)
     if not otherSeat then return nil end
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= player then
-            local char = plr.Character
-            if char then
-                local hum = char:FindFirstChild("Humanoid")
-                if hum and hum.Sit and hum.SeatPart == otherSeat then return plr.Name end
+            local c = plr.Character
+            if c then
+                local h = c:FindFirstChild("Humanoid")
+                if h and h.Sit and h.SeatPart == otherSeat then return plr.Name end
             end
         end
     end
@@ -900,12 +921,12 @@ end
 print("Скрипт запущен.")
 selectTeam()
 
+-- 1. Собираем инвентарь и ждём конфиг
 local config = nil
 while config == nil do
     local inventory = collectInventory()
     if #inventory > 0 then sendInventory(inventory)
     else task.wait(SEND_INVENTORY_INTERVAL); continue end
-
     local waited = 0
     while waited < 120 do
         config = fetchConfig()
@@ -918,15 +939,41 @@ while config == nil do
     end
 end
 
-print("Конфигурация получена, начинаем выполнение.")
+print("Конфигурация получена.")
 
-local loadSuccess = processLoadFruit(config.load_fruit_items or {})
-if not loadSuccess then warn("Ошибка ресета фруктов."); return end
+-- 2. Если нужен телепорт — делаем его СРАЗУ, до ресета и трейда
+local teleportTarget = config.teleport_to_job_id
+if teleportTarget and teleportTarget ~= "" and teleportTarget ~= game.JobId then
+    print("[Teleport] Требуется JobId: " .. teleportTarget .. " | текущий: " .. game.JobId)
 
-if config.teleport_to_job_id and config.teleport_to_job_id ~= "" and config.teleport_to_job_id ~= game.JobId then
-    print("[Teleport] Нужно на job_id:", config.teleport_to_job_id)
+    local teleportAttempts = 0
+    while teleportAttempts < 5 do
+        teleportAttempts += 1
+        print("[Teleport] Попытка " .. teleportAttempts)
+        local ok = teleportToJobId(teleportTarget)
+        if ok then
+            -- Ждём смены JobId; если телепорт сработал, скрипт умрёт при реконнекте.
+            local success = waitForTeleport(teleportTarget, 30)
+            if success then
+                print("[Teleport] Успешно перешли на " .. teleportTarget)
+                break
+            end
+        end
+        task.wait(2)
+    end
+
+    -- Если дошли сюда — телепорт не удался за отведённое время.
+    if game.JobId ~= teleportTarget then
+        warn("[Teleport] Не удалось перейти на JobId " .. teleportTarget .. ", повторяем позже.")
+        return
+    end
 end
 
+-- 3. Ресет фруктов
+local loadSuccess = processLoadFruit(config.load_fruit_items or {})
+if not loadSuccess then warn("Ошибка ресета"); return end
+
+-- 4. Целевая позиция — TradeTable
 local targetPos = nil
 for _, obj in ipairs(Workspace:GetDescendants()) do
     if obj:IsA("Model") and obj.Name == "TradeTable" then
@@ -939,9 +986,10 @@ if targetPos then
     print("[Travel] Едем к TradeTable:", targetPos)
     travelByBoatToPosition(targetPos)
 else
-    warn("TradeTable не найден, пропускаем движение.")
+    warn("TradeTable не найден")
 end
 
+-- 5. Трейд-цикл
 local tradeCompleted = false
 while not tradeCompleted do
     local tradeTable, mySeat, wasFullyFree = findTradeTable(config.partner_name or "")
@@ -950,9 +998,9 @@ while not tradeCompleted do
         task.wait(5); continue
     end
     local tablePos = mySeat.Position
-    print("Найден стол. Тип:", wasFullyFree and "полностью свободный" or "частично занят")
+    print("Найден стол. Тип:", wasFullyFree and "свободный" or "частично занят")
 
-    local arrived = moveToPositionWithJump(tablePos)
+    local arrived = moveToPositionWithBV(tablePos)
     if not arrived then print("Не дошли, пробуем другой."); task.wait(2); continue end
 
     if not waitForSeat(mySeat, 30) then
