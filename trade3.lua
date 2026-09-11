@@ -1,7 +1,7 @@
 -- ============================================================
 -- ПОЛНЫЙ СКРИПТ: КОМАНДА -> ИНВЕНТАРЬ (СО СКРОЛЛОМ) -> СЕРВЕР ->
 -- РЕСЕТ -> ЛОДКА -> АВТО-ТРЕЙД
--- + БЛОКИРУЮЩЕЕ ОЖИДАНИЕ ЗАГРУЗКИ ХАБА
+-- + ГИБКИЙ ПОИСК КНОПОК HUD (работает на любом персонаже)
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -40,7 +40,7 @@ end
 local function waitForInterface()
     local root = getRoot()
     if not root then return false end
-    return safeFind(root, "Window", "Components", "TabsScroll)") or safeFind(root, "Window", "Components", "TabsScroll")
+    return safeFind(root, "Window", "Components", "TabsScroll")
 end
 
 -- ====================== БЛОКИРУЮЩЕЕ ОЖИДАНИЕ ХАБА ======================
@@ -115,11 +115,6 @@ local RETURN_TAB, RETURN_OPT = 3, 1
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
 
--- ====================== ПУТИ КНОПОК ======================
-local PATH_MENU_BUTTON      = {"HUDRoot", "Frame", "HUD", "LowerLeftColumn", "Menu", "Menu"}
-local PATH_INVENTORY_BUTTON = {"HUDRoot", "Frame", "HUD", "LowerLeftColumn", "Menu", "Items"}
-local PATH_CATEGORY         = {"Inventory", "Inventory", "Main", "NavigationRail", "Category2"}
-
 -- ====================== УНИВЕРСАЛЬНЫЕ ФУНКЦИИ ======================
 local function fireSequence(btn)
     if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return false end
@@ -161,10 +156,44 @@ local function waitForObjectByPath(pathTable, timeout, description)
     return nil
 end
 
-local function activateButtonByPath(pathTable, description)
-    local btn = waitForObjectByPath(pathTable, 10, description)
-    if not btn then return false end
-    return fireSequence(btn)
+-- ====================== ГИБКИЙ ПОИСК КНОПОК HUD ======================
+-- Кнопки Menu/Items могут лежать на разной глубине в зависимости от персонажа:
+--   HUDRoot.Frame.HUD.Menu.Menu
+--   HUDRoot.Frame.HUD.LowerLeftColumn.Menu.Menu
+--   HUDRoot.Frame.HUD.<...>.Menu.Menu
+-- Поэтому ищем рекурсивно по имени внутри HUDRoot.Frame.HUD.
+local function findHudButtonByName(buttonName)
+    local hudRoot = playerGui:FindFirstChild("HUDRoot")
+    if not hudRoot then return nil end
+    local frame = hudRoot:FindFirstChild("Frame")
+    if not frame then return nil end
+    local hud = frame:FindFirstChild("HUD")
+    if not hud then return nil end
+
+    local function search(node)
+        for _, child in ipairs(node:GetChildren()) do
+            if (child:IsA("TextButton") or child:IsA("ImageButton")) and child.Name == buttonName then
+                return child
+            end
+            local found = search(child)
+            if found then return found end
+        end
+        return nil
+    end
+
+    return search(hud)
+end
+
+local function waitForHudButton(buttonName, timeout)
+    local waited = 0
+    while waited < timeout do
+        local btn = findHudButtonByName(buttonName)
+        if btn then return btn end
+        task.wait(0.5)
+        waited += 0.5
+    end
+    warn("HUD кнопка не найдена: " .. buttonName)
+    return nil
 end
 
 -- ====================== ШАГ 1: ВЫБОР КОМАНДЫ ======================
@@ -214,17 +243,57 @@ local function extractTileInfo(tileObject)
     return {Name = tileObject.Name, Number = tileNumber, Text = cleanText}
 end
 
+-- Рекурсивный поиск кнопки по имени внутри Inventory
+local function findInventoryButtonByName(buttonName)
+    local inv = playerGui:FindFirstChild("Inventory")
+    if not inv then return nil end
+    for _, obj in ipairs(inv:GetDescendants()) do
+        if (obj:IsA("TextButton") or obj:IsA("ImageButton")) and obj.Name == buttonName then
+            return obj
+        end
+    end
+    return nil
+end
+
 local function collectInventory()
     print("[Inventory] Открытие меню и инвентаря...")
-    if not activateButtonByPath(PATH_MENU_BUTTON, "MenuButton") then return {} end
+
+    local menuButton = waitForHudButton("Menu", 10)
+    if not menuButton then return {} end
+    fireSequence(menuButton)
     task.wait(1.5)
-    if not activateButtonByPath(PATH_INVENTORY_BUTTON, "InventoryButton") then return {} end
+
+    local itemsButton = waitForHudButton("Items", 10)
+    if not itemsButton then return {} end
+    fireSequence(itemsButton)
     task.wait(1.5)
-    if not activateButtonByPath(PATH_CATEGORY, "Category") then return {} end
+
+    -- Category2 — сначала по фиксированному пути, при неудаче рекурсивно
+    local category2 = waitForObjectByPath(
+        {"Inventory", "Inventory", "Main", "NavigationRail", "Category2"}, 5, "Category2")
+    if not category2 then
+        category2 = findInventoryButtonByName("Category2")
+    end
+    if not category2 then
+        warn("[Inventory] Category2 не найдена")
+        return {}
+    end
+    fireSequence(category2)
     task.wait(SCROLL_INITIAL_WAIT)
 
-    local tileGrid = waitForObjectByPath({"Inventory", "Inventory", "Main", "PageContent", "TileGrid"}, 10, "TileGrid")
-    if not tileGrid then return {} end
+    -- TileGrid — сначала по пути, при неудаче рекурсивно
+    local tileGrid = waitForObjectByPath(
+        {"Inventory", "Inventory", "Main", "PageContent", "TileGrid"}, 5, "TileGrid")
+    if not tileGrid then
+        local inv = playerGui:FindFirstChild("Inventory")
+        if inv then
+            tileGrid = inv:FindFirstChild("TileGrid", true)
+        end
+    end
+    if not tileGrid then
+        warn("[Inventory] TileGrid не найден")
+        return {}
+    end
 
     local scrollingFrame = nil
     local obj = tileGrid
