@@ -1,9 +1,10 @@
 -- ============================================================
 -- Флоу: 6,1 → dragon talon → island → 2,4 → mastery>500 → 6,1
--- Реализовано через ТОЧНО такой же setOptionState() с конфликтами,
--- как в твоём рабочем AutoFarm-скрипте (5,6 / 5,10 / 3,1).
--- Именно механизм conflict-опции решает проблему stale singleton:
--- перед включением целевой опции ПРИНУДИТЕЛЬНО выключается конфликт.
+-- Структура ОДИН В ОДИН как в твоём AutoFarm-скрипте:
+--   - один while true do
+--   - if / elseif по state
+--   - setOptionState(..., conflict) на каждой стадии
+--   - task.wait у каждой стадии
 -- ============================================================
 
 task.spawn(function()
@@ -81,12 +82,9 @@ local function getOptionState(tabIndex, optIndex)
     return (col == COLOR_ON and "on") or (col == COLOR_OFF and "off") or nil
 end
 
--- ТОЧНАЯ КОПИЯ из твоего AutoFarm-скрипта
 local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, conflictOpt)
     if desiredState ~= "on" and desiredState ~= "off" then return false end
     local root = getRoot() if not root then return false end
-
-    -- ЕСЛИ ВКЛЮЧАЕМ И ЕСТЬ КОНФЛИКТ — сначала принудительно выключаем конфликт
     if desiredState == "on" and conflictTab and conflictOpt then
         if getOptionState(conflictTab, conflictOpt) == "on" then
             local cfRoot = getRoot()
@@ -123,7 +121,6 @@ local function setOptionState(tabIndex, optIndex, desiredState, conflictTab, con
             end
         end
     end
-
     local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll") if not tabsScroll then return false end
     local tabButton, tabCount = nil, 0
     local function findTab(p)
@@ -183,61 +180,54 @@ local function getMastery()
 end
 
 -- ============================================================
--- ОСНОВНОЙ ЦИКЛ (single while, стадии как в AutoFarm-скрипте)
+-- ОСНОВНОЙ ЦИКЛ (структура как в AutoFarm-скрипте)
 -- ============================================================
-
 local state = "WAIT_TALON"
-log("Скрипт запущен. Стадия: WAIT_TALON")
+log("Скрипт запущен.")
 
 while true do
     if state == "WAIT_TALON" then
-        -- держим 6,1 включённой (конфликт — 2,4)
         setOptionState(MAIN_TAB, MAIN_OPT, "on", FARM_TAB, FARM_OPT)
         if hasDragonTalon() then
-            log("Dragon talon есть → WAIT_ISLAND")
+            log("Dragon talon есть")
             state = "WAIT_ISLAND"
         end
+        task.wait(3)
 
     elseif state == "WAIT_ISLAND" then
-        -- продолжаем держать 6,1
         setOptionState(MAIN_TAB, MAIN_OPT, "on", FARM_TAB, FARM_OPT)
         if isOnIsland() then
-            log("На острове → SWITCH_TO_FARM")
+            log("На острове")
             state = "SWITCH_TO_FARM"
         end
+        task.wait(3)
 
     elseif state == "SWITCH_TO_FARM" then
-        -- выключаем 6,1, включаем 2,4 (конфликт — 6,1)
-        log("Выключаю 6,1...")
         setOptionState(MAIN_TAB, MAIN_OPT, "off")
         task.wait(0.5)
-        log("Включаю 2,4...")
         setOptionState(FARM_TAB, FARM_OPT, "on", MAIN_TAB, MAIN_OPT)
         state = "WAIT_MASTERY"
+        task.wait(0.2)
 
     elseif state == "WAIT_MASTERY" then
-        -- держим 2,4 (конфликт — 6,1)
         setOptionState(FARM_TAB, FARM_OPT, "on", MAIN_TAB, MAIN_OPT)
         local m = getMastery() or 0
         log("Mastery: " .. tostring(m))
         if m > 500 then
-            log("Mastery > 500 → SWITCH_BACK")
+            log("Mastery > 500")
             state = "SWITCH_BACK"
         end
+        task.wait(3)
 
     elseif state == "SWITCH_BACK" then
-        -- выключаем 2,4, включаем 6,1 (конфликт — 2,4)
-        log("Выключаю 2,4...")
         setOptionState(FARM_TAB, FARM_OPT, "off")
         task.wait(0.5)
-        log("Включаю 6,1...")
         setOptionState(MAIN_TAB, MAIN_OPT, "on", FARM_TAB, FARM_OPT)
         state = "KEEP_MAIN"
+        task.wait(0.2)
 
     elseif state == "KEEP_MAIN" then
-        -- финально держим 6,1 (конфликт — 2,4), как оригинальный скрипт
         setOptionState(MAIN_TAB, MAIN_OPT, "on", FARM_TAB, FARM_OPT)
+        task.wait(3)
     end
-
-    task.wait(3)
 end
