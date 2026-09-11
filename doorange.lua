@@ -3,12 +3,12 @@
 -- КОНФИГ
 -- ============================================================
 local BLACKLIST = {
-    "EdwardThornton360",        -- собственный ник (игнорируется автоматически)
     "PhilipHenry11750",
+    "EdwardThornton360",
 }
 
-local BELT_SCAN_INTERVAL         = 30          -- период автоскана пояса (сек)
-local YELLOW_WHITE_TIMEOUT       = 30 * 60     -- 30 минут без обновления пояса
+local BELT_SCAN_INTERVAL         = 30
+local YELLOW_WHITE_TIMEOUT       = 30 * 60
 local SERVER_URL                 = "http://192.168.31.89:8000"
 local BELT_ORDER                 = {"White","Yellow","Orange","Green","Blue","Purple","Red","Black"}
 
@@ -25,7 +25,7 @@ local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 local State = {
-    currentBelt     = "Unknown",   -- Unknown / None / White / Yellow / Orange / ...
+    currentBelt     = "Unknown",
     beltChangedAt   = tick(),
     beltScanPaused  = false,
     running         = true,
@@ -37,6 +37,7 @@ local State = {
 local function fireSequence(btn)
     if not btn then return false end
     if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return false end
+    local fired = false
     local signals = {"MouseEnter","MouseButton1Down","MouseButton1Click","MouseButton1Up","Activated","MouseLeave"}
     for _, sigName in ipairs(signals) do
         local sig = btn[sigName]
@@ -46,12 +47,13 @@ local function fireSequence(btn)
                 for _, conn in ipairs(conns) do
                     if conn.Enabled and type(conn.Function) == "function" then
                         pcall(conn.Function)
+                        fired = true
                     end
                 end
             end
         end
     end
-    return true
+    return fired
 end
 
 local function findObjectByPath(root, ...)
@@ -64,11 +66,10 @@ local function findObjectByPath(root, ...)
 end
 
 -- ============================================================
--- БЛЭКЛИСТ: санитизация (убираем себя из списка)
+-- БЛЭКЛИСТ
 -- ============================================================
 local function sanitizeBlacklist(list)
-    local clean = {}
-    local seen = {}
+    local clean, seen = {}, {}
     for _, name in ipairs(list) do
         if type(name) == "string" and name ~= "" and name ~= player.Name and not seen[name] then
             seen[name] = true
@@ -80,14 +81,11 @@ end
 
 BLACKLIST = sanitizeBlacklist(BLACKLIST)
 
--- Возвращает имя первого найденного забаненного игрока (кроме себя)
 local function getBlacklistedPlayer()
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= player then -- сравнение по объекту надёжнее, чем по имени
+        if plr ~= player then
             for _, bad in ipairs(BLACKLIST) do
-                if plr.Name == bad then
-                    return plr.Name
-                end
+                if plr.Name == bad then return plr.Name end
             end
         end
     end
@@ -95,7 +93,7 @@ local function getBlacklistedPlayer()
 end
 
 -- ============================================================
--- ЗАГРУЗКА ХАБА (один раз)
+-- ЗАГРУЗКА ХАБА
 -- ============================================================
 task.spawn(function()
     pcall(function()
@@ -104,40 +102,67 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- БЕЛТ-СКАНЕР (возвращает "None" если пояса нет, nil при ошибке)
+-- БЕЛТ-СКАНЕР
 -- ============================================================
+-- Проверка: открыт ли инвентарь (по видимости Main внутри Inventory)
 local function isInventoryOpen()
-    local inv = playerGui:FindFirstChild("Inventory")
-    if not inv then return false end
-    local inner = inv:FindFirstChild("Inventory")
-    if not inner then return false end
-    return inner.Visible == true
+    local main = findObjectByPath(playerGui, "Inventory", "Inventory", "Main")
+    if not main then return false end
+    if not main:IsA("GuiObject") then return false end
+    return main.Visible == true
+end
+
+-- Открытие инвентаря. Возвращает true если удалось.
+local function ensureInventoryOpen()
+    if isInventoryOpen() then return true end
+
+    local menuBtn = findObjectByPath(playerGui, "Main", "MenuButton")
+    if not menuBtn then return false end
+    fireSequence(menuBtn); task.wait(1.0)
+
+    local invBtn = findObjectByPath(playerGui, "Main", "InventoryButton")
+    if not invBtn then return false end
+    fireSequence(invBtn); task.wait(1.5)
+
+    -- Даже если isInventoryOpen не сработал, попробуем найти Inventory напрямую
+    if isInventoryOpen() then return true end
+    local invGui = playerGui:FindFirstChild("Inventory")
+    if invGui and invGui:FindFirstChild("Inventory") then return true end
+    return false
 end
 
 local function doBeltScan()
-    if not isInventoryOpen() then
-        local menuBtn = findObjectByPath(playerGui, "Main", "MenuButton")
-        if not menuBtn then return nil end
-        fireSequence(menuBtn); task.wait(1.2)
-        local invBtn = findObjectByPath(playerGui, "Main", "InventoryButton")
-        if not invBtn then return nil end
-        fireSequence(invBtn); task.wait(1.2)
+    print("[BeltScan] >>> старт скана")
+
+    -- 1. Открываем инвентарь
+    if not ensureInventoryOpen() then
+        warn("[BeltScan] не удалось открыть инвентарь")
+        return nil
     end
 
-    local cat3 = findObjectByPath(playerGui, "Inventory", "Inventory", "Main", "NavigationRail", "HoverBox", "UpperBar", "Category3")
-    if not cat3 then return nil end
-    fireSequence(cat3); task.wait(0.5)
+    -- 2. Ждём пока появятся ключевые элементы инвентаря
+    local waited = 0
+    local cat3, tileGrid
+    while waited < 10 do
+        cat3 = findObjectByPath(playerGui, "Inventory", "Inventory", "Main", "NavigationRail", "HoverBox", "UpperBar", "Category3")
+        tileGrid = findObjectByPath(playerGui, "Inventory", "Inventory", "Main", "PageContent", "TileGrid")
+        if cat3 and tileGrid then break end
+        task.wait(0.5); waited += 0.5
+    end
+    if not cat3 then warn("[BeltScan] Category3 не найдена"); return nil end
+    if not tileGrid then warn("[BeltScan] TileGrid не найден"); return nil end
 
-    local tileGrid = findObjectByPath(playerGui, "Inventory", "Inventory", "Main", "PageContent", "TileGrid")
-    if not tileGrid then return nil end
+    -- 3. Открываем Category3
+    fireSequence(cat3); task.wait(0.6)
 
+    -- 4. Ищем ScrollingFrame
     local scrollingFrame = nil
     local obj = tileGrid
     while obj do
         if obj:IsA("ScrollingFrame") then scrollingFrame = obj; break end
         obj = obj.Parent
     end
-    if not scrollingFrame then return nil end
+    if not scrollingFrame then warn("[BeltScan] ScrollingFrame не найден"); return nil end
 
     local collected, collectedList = {}, {}
     local function extractTileInfo(tileObject)
@@ -220,9 +245,49 @@ local function doBeltScan()
         end
     end
 
-    if highestBelt then return highestBelt end
-    return "None"
+    local result = highestBelt or "None"
+    print("[BeltScan] <<< результат: " .. result .. " (тайлов: " .. #collectedList .. ")")
+    return result
 end
+
+-- Фоновый поток сканера: сначала ждём загрузку игры, потом крутим цикл
+task.spawn(function()
+    -- Ждём персонажа
+    if not player.Character then
+        print("[BeltScan] ждём персонажа...")
+        player.CharacterAdded:Wait()
+    end
+
+    -- Ждём, пока прогрузится Main.MenuButton
+    local waited = 0
+    while waited < 90 do
+        if findObjectByPath(playerGui, "Main", "MenuButton") then break end
+        task.wait(1); waited += 1
+    end
+    print("[BeltScan] инициализация готова (ждали " .. waited .. "с)")
+
+    -- Небольшая пауза, чтобы игра/хаб устаканились
+    task.wait(3)
+
+    while State.running do
+        if not State.beltScanPaused then
+            local ok, belt = pcall(doBeltScan)
+            if not ok then
+                warn("[BeltScan] ошибка в скане: " .. tostring(belt))
+            elseif belt then
+                if belt ~= State.currentBelt then
+                    State.currentBelt   = belt
+                    State.beltChangedAt = tick()
+                    print("[BeltScan] Новый режим: " .. belt)
+                else
+                    -- обновляем время последнего УСПЕШНОГО скана
+                    State.beltChangedAt = tick()
+                end
+            end
+        end
+        task.wait(BELT_SCAN_INTERVAL)
+    end
+end)
 
 -- ============================================================
 -- СЕРВЕР-ХОП
@@ -319,11 +384,6 @@ local function safeFind(obj, ...)
         obj = obj:FindFirstChild(name)
     end
     return obj
-end
-
-local function waitForInterface()
-    if not getRoot() then return false end
-    return safeFind(getRoot(), "Window", "Components", "TabsScroll") ~= nil
 end
 
 local function findIndicatorFrame(parent)
@@ -426,26 +486,6 @@ local function setOption(tabIndex, optIndex, wantOn)
 end
 
 -- ============================================================
--- СКАНЕР ПОЯСА — фоновый поток
--- ============================================================
-task.spawn(function()
-    task.wait(8)
-    while State.running do
-        if not State.beltScanPaused then
-            local ok, belt = pcall(doBeltScan)
-            if ok and belt then
-                if belt ~= State.currentBelt then
-                    State.currentBelt   = belt
-                    State.beltChangedAt = tick()
-                    print("[BeltScan] Новый режим: " .. belt)
-                end
-            end
-        end
-        task.wait(BELT_SCAN_INTERVAL)
-    end
-end)
-
--- ============================================================
 -- РЕЖИМ "NO BELT"
 -- ============================================================
 local function hasDragonTalon()
@@ -546,7 +586,6 @@ end
 -- ============================================================
 local function runOrangeMode()
     print("[Mode:Orange] трейд-режим запущен")
-
     State.beltScanPaused = true
 
     local SEND_INVENTORY_INTERVAL = 20
@@ -1253,7 +1292,6 @@ local function runOrangeMode()
         return false
     end
 
-    -- ===== ОСНОВНОЙ ЦИКЛ ТРЕЙДА =====
     print("[Orange] Старт трейд-процедуры")
     selectTeam()
 
@@ -1411,7 +1449,6 @@ end
 -- ============================================================
 task.wait(5)
 
--- Проверка блэклиста на старте
 do
     local bad = getBlacklistedPlayer()
     if bad then
@@ -1423,9 +1460,9 @@ end
 
 print("[Main] Ждём первый скан пояса...")
 local waitStart = tick()
-while State.currentBelt == "Unknown" and tick() - waitStart < 120 do task.wait(1) end
+while State.currentBelt == "Unknown" and tick() - waitStart < 180 do task.wait(1) end
 if State.currentBelt == "Unknown" then
-    warn("[Main] Не удалось определить пояс за 120 сек — смена сервера")
+    warn("[Main] Не удалось определить пояс за 180 сек — смена сервера")
     serverHop()
     return
 end
