@@ -1,8 +1,7 @@
 -- ============================================================
 -- ПОЛНЫЙ СКРИПТ: КОМАНДА -> ИНВЕНТАРЬ (СО СКРОЛЛОМ) -> СЕРВЕР ->
 -- РЕСЕТ -> ЛОДКА -> АВТО-ТРЕЙД
--- Обновлены пути кнопок + полный сбор тайлов со скроллом
--- + Исправлен старт (ждём персонажа, Remotes, PlayerGui, хаб в фоне)
+-- + БЛОКИРУЮЩЕЕ ОЖИДАНИЕ ЗАГРУЗКИ ХАБА
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -12,6 +11,7 @@ local Workspace = game:GetService("Workspace")
 local CoreGui = game:GetService("CoreGui")
 
 local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
 
 -- ====================== ХАБ В ФОНЕ ======================
 task.spawn(function()
@@ -20,16 +20,48 @@ task.spawn(function()
     end)
 end)
 
--- ====================== ЖДЁМ БАЗОВЫЕ ОБЪЕКТЫ ======================
-local playerGui = player:WaitForChild("PlayerGui", 60)
-if not playerGui then
-    warn("[Startup] PlayerGui не появился")
-    return
+-- ====================== УТИЛИТЫ ДЛЯ ХАБА ======================
+local function getRoot()
+    for _, child in ipairs(CoreGui:GetChildren()) do
+        local obj = child:FindFirstChild("redz-library-v5")
+        if obj then return obj end
+    end
+    return nil
 end
 
--- Ждём персонажа
-local character = player.Character or player.CharacterAdded:Wait()
+local function safeFind(obj, ...)
+    for _, name in ipairs({...}) do
+        if not obj then return nil end
+        obj = obj:FindFirstChild(name)
+    end
+    return obj
+end
+
+local function waitForInterface()
+    local root = getRoot()
+    if not root then return false end
+    return safeFind(root, "Window", "Components", "TabsScroll)") or safeFind(root, "Window", "Components", "TabsScroll")
+end
+
+-- ====================== БЛОКИРУЮЩЕЕ ОЖИДАНИЕ ХАБА ======================
 do
+    local timeout, waited = 90, 0
+    while waited < timeout do
+        if waitForInterface() then
+            print("[Startup] Интерфейс хаба загружен.")
+            break
+        end
+        task.wait(0.5)
+        waited += 0.5
+    end
+    if not waitForInterface() then
+        warn("[Startup] Интерфейс хаба не загрузился за 90 сек, продолжаю без хаба.")
+    end
+end
+
+-- ====================== ЖДЁМ ПЕРСОНАЖА ======================
+do
+    local character = player.Character or player.CharacterAdded:Wait()
     local waited = 0
     while waited < 60 do
         character = player.Character
@@ -45,9 +77,9 @@ do
     end
 end
 
--- Ждём Remotes и CommF_
-local remotes, commF
+-- ====================== ЖДЁМ REMOTES ======================
 do
+    local remotes, commF
     local waited = 0
     while waited < 60 do
         remotes = ReplicatedStorage:FindFirstChild("Remotes")
@@ -64,7 +96,7 @@ do
     end
 end
 
-task.wait(3)
+task.wait(2)
 
 -- ====================== НАСТРОЙКИ ======================
 local SERVER_URL = "http://192.168.31.89:8000"
@@ -73,13 +105,11 @@ local CONFIG_POLL_INTERVAL = 10
 local MOVE_TIMEOUT = 60
 local ARRIVE_DISTANCE = 5
 
--- Прокрутка инвентаря
 local SCROLL_STEP_PIXELS = 10
 local SCROLL_WAIT_TIME = 0.15
 local SCROLL_INITIAL_WAIT = 0.5
 local SCROLL_FINAL_WAIT = 1.0
 
--- Настройки лодки
 local BOAT_TAB, BOAT_OPT, ISLAND_OPT = 5, 6, 10
 local RETURN_TAB, RETURN_OPT = 3, 1
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
@@ -151,7 +181,7 @@ local function selectTeam()
     task.wait(3)
 end
 
--- ====================== ШАГ 2: ПОЛНЫЙ СБОР ИНВЕНТАРЯ СО СКРОЛЛОМ ======================
+-- ====================== ШАГ 2: СБОР ИНВЕНТАРЯ СО СКРОЛЛОМ ======================
 local function extractTileInfo(tileObject)
     local function getTextFromDetails(details)
         if not details then return nil end
@@ -329,16 +359,7 @@ local function processLoadFruit(loadFruitItems)
     return true
 end
 
--- ====================== ИНТЕРФЕЙС ХАБА ======================
-local function getRoot()
-    for _, child in ipairs(CoreGui:GetChildren()) do
-        local obj = child:FindFirstChild("redz-library-v5")
-        if obj then return obj end
-    end
-end
-local function safeFind(obj, ...) for _, name in ipairs({...}) do if not obj then return nil end obj = obj:FindFirstChild(name) end return obj end
-local function waitForInterface() return getRoot() and safeFind(getRoot(), "Window", "Components", "TabsScroll") end
-
+-- ====================== ИНТЕРФЕЙС ХАБА (опции) ======================
 local function findIndicatorFrame(parent)
     for _, child in ipairs(parent:GetChildren()) do
         if child:IsA("Frame") then
@@ -348,28 +369,41 @@ local function findIndicatorFrame(parent)
     end
 end
 
-local function getOptionState(tabIndex, optIndex)
-    local root = getRoot() if not root then return nil end
-    local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll") if not tabsScroll then return nil end
+local function findNthTabButton(tabsScroll, tabIndex)
     local tabButton, tabCount = nil, 0
-    local function findTab(p)
+    local function rec(p)
         if tabButton then return end
         for _, c in ipairs(p:GetChildren()) do
             if c:IsA("TextButton") or c:IsA("ImageButton") then
-                tabCount += 1; if tabCount == tabIndex then tabButton = c return end
+                tabCount += 1
+                if tabCount == tabIndex then tabButton = c; return end
             end
-            findTab(c)
+            rec(c)
         end
     end
-    findTab(tabsScroll) if not tabButton then return nil end
-    fireSequence(tabButton) task.wait(0.3)
-    local container = safeFind(root, "Window", "Components", "Containers", "Container") if not container then return nil end
+    rec(tabsScroll)
+    return tabButton
+end
+
+local function findNthOption(container, optIndex)
     local optionBtn, optCount = nil, 0
     for _, c in ipairs(container:GetChildren()) do
         if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
-            optCount += 1; if optCount == optIndex then optionBtn = c break end
+            optCount += 1
+            if optCount == optIndex then optionBtn = c; break end
         end
     end
+    return optionBtn
+end
+
+local function getOptionState(tabIndex, optIndex)
+    local root = getRoot() if not root then return nil end
+    local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll") if not tabsScroll then return nil end
+    local tabButton = findNthTabButton(tabsScroll, tabIndex)
+    if not tabButton then return nil end
+    fireSequence(tabButton) task.wait(0.3)
+    local container = safeFind(root, "Window", "Components", "Containers", "Container") if not container then return nil end
+    local optionBtn = findNthOption(container, optIndex)
     if not optionBtn then return nil end
     local ind = findIndicatorFrame(optionBtn) if not ind then return nil end
     local col = tostring(ind.BackgroundColor3)
@@ -380,25 +414,11 @@ local function setOptionState(tabIndex, optIndex, desiredState)
     if desiredState ~= "on" and desiredState ~= "off" then return false end
     local root = getRoot() if not root then return false end
     local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll") if not tabsScroll then return false end
-    local tabButton, tabCount = nil, 0
-    local function findTab(p)
-        if tabButton then return end
-        for _, c in ipairs(p:GetChildren()) do
-            if c:IsA("TextButton") or c:IsA("ImageButton") then
-                tabCount += 1; if tabCount == tabIndex then tabButton = c return end
-            end
-            findTab(c)
-        end
-    end
-    findTab(tabsScroll) if not tabButton then return false end
+    local tabButton = findNthTabButton(tabsScroll, tabIndex)
+    if not tabButton then return false end
     fireSequence(tabButton) task.wait(0.3)
     local container = safeFind(root, "Window", "Components", "Containers", "Container") if not container then return false end
-    local optionBtn, optCount = nil, 0
-    for _, c in ipairs(container:GetChildren()) do
-        if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
-            optCount += 1; if optCount == optIndex then optionBtn = c break end
-        end
-    end
+    local optionBtn = findNthOption(container, optIndex)
     if not optionBtn then return false end
     local indicator = findIndicatorFrame(optionBtn) if not indicator then return false end
     if (tostring(indicator.BackgroundColor3) == COLOR_ON and desiredState == "on") or
@@ -834,12 +854,10 @@ print("Конфигурация получена, начинаем выполн�
 local loadSuccess = processLoadFruit(config.load_fruit_items or {})
 if not loadSuccess then warn("Ошибка ресета фруктов."); return end
 
--- Телепорт по job_id (заглушка — вставь вызов хаба, если он есть)
 if config.teleport_to_job_id and config.teleport_to_job_id ~= "" and config.teleport_to_job_id ~= game.JobId then
     print("[Teleport] Нужно на job_id:", config.teleport_to_job_id)
 end
 
--- Целевая позиция: первая TradeTable
 local targetPos = nil
 for _, obj in ipairs(Workspace:GetDescendants()) do
     if obj:IsA("Model") and obj.Name == "TradeTable" then
