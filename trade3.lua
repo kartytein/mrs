@@ -3,7 +3,7 @@
 -- 1) Команда -> инвентарь -> сервер
 -- 2) Телепорт по JobId (если нужно)
 -- 3) Ресет фруктов
--- 4) Перемещение к waypoint -> к TradeTable (BodyVelocity, как к VehicleSeat)
+-- 4) Движение к waypoint -> к сиденью TradeTable (BodyVelocity как к лодке)
 -- 5) Авто-трейд
 -- ============================================================
 
@@ -44,7 +44,6 @@ local function waitForInterface()
     return safeFind(root, "Window", "Components", "TabsScroll")
 end
 
--- ====================== ЖДЁМ ХАБ ======================
 do
     local timeout, waited = 90, 0
     while waited < timeout do
@@ -54,7 +53,6 @@ do
     if not waitForInterface() then warn("[Startup] Хаб не загрузился.") end
 end
 
--- ====================== ЖДЁМ ПЕРСОНАЖА ======================
 do
     local character = player.Character or player.CharacterAdded:Wait()
     local waited = 0
@@ -68,7 +66,6 @@ do
     end
 end
 
--- ====================== ЖДЁМ REMOTES ======================
 do
     local remotes, commF
     local waited = 0
@@ -91,6 +88,7 @@ local CONFIG_POLL_INTERVAL = 10
 local MOVE_TIMEOUT = 60
 local ARRIVE_DISTANCE = 6
 local MOVE_SPEED = 80
+local SPEED_Y = -2   -- лёгкое давление вниз, как у лодки
 
 local SCROLL_STEP_PIXELS = 10
 local SCROLL_WAIT_TIME = 0.15
@@ -104,7 +102,6 @@ local TELEPORT_TAB = 19
 local TELEPORT_OPT_TEXT = 2
 local TELEPORT_OPT_ACTIVATE = 3
 
--- Waypoint — точка сбора, куда идём ПЕРЕД поиском стола
 local WAYPOINT_POSITION = Vector3.new(-12549.7, 337.5, -7501.1)
 
 -- ====================== ОБЩИЕ ======================
@@ -474,14 +471,24 @@ task.spawn(function()
     end
 end)
 
--- ====================== ДВИЖЕНИЕ (BodyVelocity, как к VehicleSeat) ======================
+-- ====================== ДВИЖЕНИЕ (ТОЧНО КАК К ЛОДКЕ) ======================
+-- Тело: BodyVelocity на UpperTorso.
+-- Y: фиксируем через CFrame (targetY), лёгкое давление вниз SPEED_Y.
+-- X/Z: скорость по направлению к цели.
+-- Если рядом с сиденьем — отключаем BV и через Humanoid:MoveTo толкаем в него,
+-- тогда Roblox сам посадит персонажа на Seat/VehicleSeat.
 local function moveToPosition(targetPosition)
+    local targetX = targetPosition.X
+    local targetZ = targetPosition.Z
+    local targetY = targetPosition.Y + 3   -- HRP сидящего/стоящего примерно на 3 стада выше «пола» сиденья
+
     local character = player.Character or player.CharacterAdded:Wait()
     local humanoid = character:WaitForChild("Humanoid")
     local rootPart = character:WaitForChild("HumanoidRootPart")
     local upper = character:FindFirstChild("UpperTorso")
     if not upper then return false end
 
+    -- Чистим старый BV
     local oldBV = upper:FindFirstChildOfClass("BodyVelocity")
     if oldBV then oldBV:Destroy() end
 
@@ -489,8 +496,15 @@ local function moveToPosition(targetPosition)
     mv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     mv.Parent = upper
 
+    -- Начальный снап Y — как в лодке
+    do
+        local p = rootPart.Position
+        if math.abs(p.Y - targetY) > 0.5 then
+            rootPart.CFrame = CFrame.new(p.X, targetY, p.Z)
+        end
+    end
+
     local isMoving = true
-    -- Анти-застревание (прыжок)
     local stuckThread = task.spawn(function()
         local lastPos = rootPart.Position
         local stuckSeconds = 0
@@ -502,8 +516,8 @@ local function moveToPosition(targetPosition)
             local h = c:FindFirstChild("Humanoid")
             if not hrp or not h then break end
             local moved = (hrp.Position - lastPos).Magnitude
-            local toTarget = (hrp.Position - targetPosition).Magnitude
-            if toTarget < ARRIVE_DISTANCE then break end
+            local toTarget = (Vector3.new(targetX, targetY, targetZ) - hrp.Position).Magnitude
+            if toTarget < ARRIVE_DISTANCE or h.Sit then break end
             if moved < 1 then
                 stuckSeconds += 1
                 if stuckSeconds >= 2 then
@@ -525,21 +539,37 @@ local function moveToPosition(targetPosition)
         local h = c:FindFirstChild("Humanoid")
         if not hrp or not h or h.Health <= 0 then break end
 
-        local cur = hrp.Position
-        local dx = targetPosition.X - cur.X
-        local dz = targetPosition.Z - cur.Z
-        local dist = math.sqrt(dx*dx + dz*dz)
-
-        if dist < ARRIVE_DISTANCE then
+        -- Если уже сидим — успех
+        if h.Sit then
             isMoving = false
             if mv then mv:Destroy() end
             task.cancel(stuckThread)
             return true
         end
 
+        local cur = hrp.Position
+        local dx = targetX - cur.X
+        local dz = targetZ - cur.Z
+        local dist = math.sqrt(dx*dx + dz*dz)
+
+        if dist < ARRIVE_DISTANCE then
+            -- Близко к сиденью: убираем BV и толкаем Humanoid:MoveTo — Roblox посадит сам
+            isMoving = false
+            if mv then mv:Destroy() end
+            task.cancel(stuckThread)
+            pcall(function() h:MoveTo(Vector3.new(targetX, cur.Y, targetZ)) end)
+            return true
+        end
+
         local nx = dx / math.max(dist, 0.001)
         local nz = dz / math.max(dist, 0.001)
-        mv.Velocity = Vector3.new(nx * MOVE_SPEED, 0, nz * MOVE_SPEED)
+        mv.Velocity = Vector3.new(nx * MOVE_SPEED, SPEED_Y, nz * MOVE_SPEED)
+
+        -- Y-фиксация (как в лодке)
+        local p = hrp.Position
+        if math.abs(p.Y - targetY) > 0.5 then
+            hrp.CFrame = CFrame.new(p.X, targetY, p.Z)
+        end
 
         task.wait(0.05)
         waited += 0.05
@@ -858,14 +888,11 @@ end
 local loadSuccess = processLoadFruit(config.load_fruit_items or {})
 if not loadSuccess then warn("Ошибка ресета"); return end
 
--- 4. Сначала идём к waypoint
+-- 4. Сначала waypoint
 print("[Travel] Идём к waypoint:", WAYPOINT_POSITION)
 local reachedWaypoint = moveToPosition(WAYPOINT_POSITION)
-if reachedWaypoint then
-    print("[Travel] Дошли до waypoint")
-else
-    warn("[Travel] Не дошли до waypoint, продолжаем всё равно")
-end
+if reachedWaypoint then print("[Travel] Дошли до waypoint")
+else warn("[Travel] Не дошли до waypoint, продолжаем") end
 task.wait(1)
 
 -- 5. Трейд-цикл
@@ -879,9 +906,20 @@ while not tradeCompleted do
     local tablePos = mySeat.Position
     print("Найден стол. Тип:", wasFullyFree and "свободный" or "частично занят")
 
-    -- ДВИЖЕНИЕ К СТОЛУ (BodyVelocity)
+    -- ДВИЖЕНИЕ К СИДЕНЬЮ (BodyVelocity + Y-фиксация + MoveTo)
     local arrived = moveToPosition(tablePos)
     if not arrived then print("Не дошли, пробуем другой."); task.wait(2); continue end
+
+    -- После BV-движения даём Humanoid:MoveTo ещё раз на саму точку сиденья
+    do
+        local c = player.Character
+        if c then
+            local h = c:FindFirstChild("Humanoid")
+            if h and not h.Sit then
+                pcall(function() h:MoveTo(tablePos) end)
+            end
+        end
+    end
 
     if not waitForSeat(mySeat, 30) then
         if not resetSeatAndWait(mySeat, tablePos) then task.wait(2); continue end
