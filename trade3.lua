@@ -2,6 +2,7 @@
 -- ПОЛНЫЙ СКРИПТ: КОМАНДА -> ИНВЕНТАРЬ (СО СКРОЛЛОМ) -> СЕРВЕР ->
 -- РЕСЕТ -> ЛОДКА -> АВТО-ТРЕЙД
 -- Обновлены пути кнопок + полный сбор тайлов со скроллом
+-- + Исправлен старт (ждём персонажа, Remotes, PlayerGui, хаб в фоне)
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -11,7 +12,59 @@ local Workspace = game:GetService("Workspace")
 local CoreGui = game:GetService("CoreGui")
 
 local player = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
+
+-- ====================== ХАБ В ФОНЕ ======================
+task.spawn(function()
+    pcall(function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/Omgshit/Scripts/main/MainLoader.lua"))()
+    end)
+end)
+
+-- ====================== ЖДЁМ БАЗОВЫЕ ОБЪЕКТЫ ======================
+local playerGui = player:WaitForChild("PlayerGui", 60)
+if not playerGui then
+    warn("[Startup] PlayerGui не появился")
+    return
+end
+
+-- Ждём персонажа
+local character = player.Character or player.CharacterAdded:Wait()
+do
+    local waited = 0
+    while waited < 60 do
+        character = player.Character
+        if character and character:FindFirstChild("Humanoid") and character:FindFirstChild("HumanoidRootPart") then
+            break
+        end
+        task.wait(0.5)
+        waited += 0.5
+    end
+    if not character or not character:FindFirstChild("HumanoidRootPart") then
+        warn("[Startup] Персонаж не загрузился за 60 сек")
+        return
+    end
+end
+
+-- Ждём Remotes и CommF_
+local remotes, commF
+do
+    local waited = 0
+    while waited < 60 do
+        remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        if remotes then
+            commF = remotes:FindFirstChild("CommF_")
+            if commF then break end
+        end
+        task.wait(0.5)
+        waited += 0.5
+    end
+    if not commF then
+        warn("[Startup] CommF_ не найден за 60 сек")
+        return
+    end
+end
+
+task.wait(3)
 
 -- ====================== НАСТРОЙКИ ======================
 local SERVER_URL = "http://192.168.31.89:8000"
@@ -32,10 +85,10 @@ local RETURN_TAB, RETURN_OPT = 3, 1
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
 
--- ====================== НОВЫЕ ПУТИ КНОПОК ======================
+-- ====================== ПУТИ КНОПОК ======================
 local PATH_MENU_BUTTON      = {"HUDRoot", "Frame", "HUD", "LowerLeftColumn", "Menu", "Menu"}
 local PATH_INVENTORY_BUTTON = {"HUDRoot", "Frame", "HUD", "LowerLeftColumn", "Menu", "Items"}
-local PATH_CATEGORY         = {"Inventory", "Inventory", "Main", "NavigationRail", "Category2"} -- по умолчанию Category2 (фрукты)
+local PATH_CATEGORY         = {"Inventory", "Inventory", "Main", "NavigationRail", "Category2"}
 
 -- ====================== УНИВЕРСАЛЬНЫЕ ФУНКЦИИ ======================
 local function fireSequence(btn)
@@ -87,19 +140,18 @@ end
 -- ====================== ШАГ 1: ВЫБОР КОМАНДЫ ======================
 local function selectTeam()
     local success, err = pcall(function()
-        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-        if not remotes then error("Remotes не найдены") end
-        local commF = remotes:FindFirstChild("CommF_")
-        if not commF then error("CommF_ не найден") end
-        commF:InvokeServer("SetTeam", "Marines")
-        print("Команда Marines выбрана")
+        local r = ReplicatedStorage:FindFirstChild("Remotes")
+        if not r then error("Remotes исчезли") end
+        local c = r:FindFirstChild("CommF_")
+        if not c then error("CommF_ исчез") end
+        c:InvokeServer("SetTeam", "Marines")
     end)
-    if not success then warn("Ошибка выбора команды:", err) end
+    if success then print("[Team] Marines выбрана")
+    else warn("[Team] Ошибка:", err) end
     task.wait(3)
 end
 
 -- ====================== ШАГ 2: ПОЛНЫЙ СБОР ИНВЕНТАРЯ СО СКРОЛЛОМ ======================
--- Извлекает данные из тайла: предпочитает Line-1, потом Line-2, потом любой TextLabel
 local function extractTileInfo(tileObject)
     local function getTextFromDetails(details)
         if not details then return nil end
@@ -141,7 +193,6 @@ local function collectInventory()
     if not activateButtonByPath(PATH_CATEGORY, "Category") then return {} end
     task.wait(SCROLL_INITIAL_WAIT)
 
-    -- Ищем TileGrid и ScrollingFrame
     local tileGrid = waitForObjectByPath({"Inventory", "Inventory", "Main", "PageContent", "TileGrid"}, 10, "TileGrid")
     if not tileGrid then return {} end
 
@@ -152,7 +203,7 @@ local function collectInventory()
         obj = obj.Parent
     end
     if not scrollingFrame then
-        warn("ScrollingFrame не найден, собираю без скролла")
+        warn("[Inventory] ScrollingFrame не найден, собираю без скролла")
     end
 
     local collected = {}
@@ -783,11 +834,9 @@ print("Конфигурация получена, начинаем выполн�
 local loadSuccess = processLoadFruit(config.load_fruit_items or {})
 if not loadSuccess then warn("Ошибка ресета фруктов."); return end
 
--- Телепорт по job_id, если требуется
+-- Телепорт по job_id (заглушка — вставь вызов хаба, если он есть)
 if config.teleport_to_job_id and config.teleport_to_job_id ~= "" and config.teleport_to_job_id ~= game.JobId then
     print("[Teleport] Нужно на job_id:", config.teleport_to_job_id)
-    -- Здесь можно вызывать внешний модуль телепорта, если он есть в хабе.
-    -- Оставляем заглушку, чтобы не сломать основной поток.
 end
 
 -- Целевая позиция: первая TradeTable
