@@ -1,11 +1,11 @@
 -- ============================================================
--- Сценарий: 6,1 → dragon talon → island → 2,4 → mastery > 500 → 6,1
+-- Сценарий: 6,1 → dragon talon → island → 2,4 → mastery>500 → 6,1
 -- ============================================================
 
--- 1. Загружаем хаб в фоне
+-- 1. Загружаем хаб в фоне (ТОЧНО как в исходнике)
 task.spawn(function()
     pcall(function()
-        loadstring(game:HttpGet("https://raw.githubusercontent.com/Omgshit/Scripts/MainLoader.lua"))()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/Omgshit/Scripts/main/MainLoader.lua"))()
     end)
 end)
 
@@ -13,11 +13,10 @@ local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
--- Настройки кнопок (6,1) и (2,4)
-local TAB_MAIN, OPT_MAIN = 6, 1
-local TAB_SEC,  OPT_SEC  = 2, 4
+-- Настройки: вкладка/опция
+local TAB_MAIN, OPT_MAIN = 6, 1   -- 6,1 (фарм dragon talon / остров)
+local TAB_SEC,  OPT_SEC  = 2, 4   -- 2,4 (мастери)
 
--- Цвета индикатора
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
 
@@ -34,6 +33,7 @@ local function getRoot()
     return nil
 end
 
+-- Безопасный поиск цепочки
 local function safeFind(obj, ...)
     for _, name in ipairs({...}) do
         if not obj then return nil end
@@ -42,6 +42,7 @@ local function safeFind(obj, ...)
     return obj
 end
 
+-- Ожидание полной загрузки интерфейса
 local function waitForInterface()
     if not getRoot() then return false end
     return safeFind(getRoot(), "Window", "Components", "TabsScroll") ~= nil
@@ -51,7 +52,7 @@ log("Ожидание интерфейса хаба...")
 repeat task.wait(0.5) until waitForInterface()
 log("Интерфейс готов.")
 
--- Эмуляция клика
+-- Эмуляция клика по кнопке
 local function fireSequence(btn)
     if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return end
     local signals = {"MouseEnter","MouseButton1Down","MouseButton1Click","MouseButton1Up","Activated","MouseLeave"}
@@ -65,7 +66,7 @@ local function fireSequence(btn)
     end
 end
 
--- Индикатор (цветной Frame) внутри кнопки
+-- Поиск индикатора (цветного Frame)
 local function findIndicatorFrame(parent)
     for _, child in ipairs(parent:GetChildren()) do
         if child:IsA("Frame") then
@@ -78,8 +79,8 @@ local function findIndicatorFrame(parent)
     return nil
 end
 
--- Вкладка по индексу
-local function findTabByIndex(root, tabIndex)
+-- Найти вкладку по индексу
+local function findTab(root, tabIndex)
     local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll")
     if not tabsScroll then return nil end
     local tabButton, count = nil, 0
@@ -97,8 +98,8 @@ local function findTabByIndex(root, tabIndex)
     return tabButton
 end
 
--- Опция по индексу в текущем контейнере
-local function findOptionByIndex(root, optIndex)
+-- Найти опцию по индексу в активном контейнере
+local function findOption(root, optIndex)
     local container = safeFind(root, "Window", "Components", "Containers", "Container")
     if not container then return nil end
     local optionBtn, count = nil, 0
@@ -111,15 +112,15 @@ local function findOptionByIndex(root, optIndex)
     return optionBtn
 end
 
--- Состояние кнопки: "on" / "off" / nil
+-- Получить состояние кнопки: "on" / "off" / nil
 local function getOptionState(tabIndex, optIndex)
     local root = getRoot()
     if not root then return nil end
-    local tabButton = findTabByIndex(root, tabIndex)
+    local tabButton = findTab(root, tabIndex)
     if not tabButton then return nil end
     fireSequence(tabButton)
     task.wait(0.3)
-    local optionBtn = findOptionByIndex(root, optIndex)
+    local optionBtn = findOption(root, optIndex)
     if not optionBtn then return nil end
     local indicator = findIndicatorFrame(optionBtn)
     if not indicator then return nil end
@@ -129,7 +130,7 @@ local function getOptionState(tabIndex, optIndex)
     return nil
 end
 
--- Установить желаемое состояние кнопки
+-- Установить состояние: wantOn = true/false
 local function setOption(tabIndex, optIndex, wantOn)
     local state = getOptionState(tabIndex, optIndex)
     if state == nil then return false end
@@ -138,18 +139,20 @@ local function setOption(tabIndex, optIndex, wantOn)
     end
     local root = getRoot()
     if not root then return false end
-    local tabButton = findTabByIndex(root, tabIndex)
+    local tabButton = findTab(root, tabIndex)
     if not tabButton then return false end
     fireSequence(tabButton)
     task.wait(0.3)
-    local optionBtn = findOptionByIndex(root, optIndex)
+    local optionBtn = findOption(root, optIndex)
     if not optionBtn then return false end
     fireSequence(optionBtn)
     task.wait(0.15)
     return true
 end
 
--- -------- Проверки путей --------
+-- ============================================================
+-- Проверки путей
+-- ============================================================
 
 local function hasDragonTalon()
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
@@ -160,8 +163,7 @@ local function hasDragonTalon()
 end
 
 local function isOnIsland()
-    local ws = workspace
-    local world = ws:FindFirstChild("_WorldOrigin")
+    local world = workspace:FindFirstChild("_WorldOrigin")
     if not world then return false end
     local sounds = world:FindFirstChild("Sounds")
     if not sounds then return false end
@@ -184,7 +186,7 @@ end
 -- Основной сценарий
 -- ============================================================
 
--- Шаг 1: dragon talon
+-- Шаг 1: dragon talon (включаем 6,1 пока не появится)
 log("Проверка dragon talon...")
 if not hasDragonTalon() then
     log("Dragon talon нет — включаю 6,1 и жду...")
@@ -195,31 +197,31 @@ if not hasDragonTalon() then
 end
 log("Dragon talon есть.")
 
--- Шаг 2: остров (нужен активный 6,1)
+-- Шаг 2: остров (6,1 остаётся активной)
 log("Проверка острова...")
 if not isOnIsland() then
     setOption(TAB_MAIN, OPT_MAIN, true)
-    log("Не на острове — жду появления звука...")
+    log("Не на острове — жду...")
     repeat task.wait(2) until isOnIsland()
 end
 log("На острове.")
 
--- Шаг 3: выключить 6,1 → включить 2,4
+-- Шаг 3: выключаем 6,1 → включаем 2,4
 log("Отключаю 6,1, включаю 2,4...")
 setOption(TAB_MAIN, OPT_MAIN, false)
 task.wait(0.5)
 setOption(TAB_SEC, OPT_SEC, true)
 
--- Шаг 4: ждать mastery > 500
+-- Шаг 4: ждём mastery > 500
 log("Ожидание mastery > 500...")
 local mastery = 0
 repeat
     task.wait(2)
     mastery = getMastery() or 0
-    log("Mastery: " .. mastery)
+    log("Mastery: " .. tostring(mastery))
 until mastery > 500
 
--- Шаг 5: выключить 2,4 → включить 6,1
+-- Шаг 5: выключаем 2,4 → включаем 6,1
 log("Mastery > 500. Отключаю 2,4, включаю 6,1...")
 setOption(TAB_SEC, OPT_SEC, false)
 task.wait(0.5)
