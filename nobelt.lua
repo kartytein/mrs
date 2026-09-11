@@ -1,7 +1,7 @@
 -- ============================================================
 -- Флоу: 6,1 → dragon talon → island → 2,4 → mastery>500 → 6,1
--- Активация 6,1 сделана ТОЧНО как в оригинальном скрипте:
--- цикл с getOptionState() + enableOption() каждые 3 сек.
+-- В конце используем "слепой" toggle по кнопке (fireSequence),
+-- не полагаясь на индикатор — в начале это работает, в конце нет.
 -- ============================================================
 
 task.spawn(function()
@@ -17,11 +17,8 @@ local LocalPlayer = Players.LocalPlayer
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
 
-local function log(msg)
-    pcall(function() warn("[Auto] " .. msg) end)
-end
+local function log(msg) pcall(function() warn("[Auto] " .. msg) end) end
 
--- ---------- функции из оригинала ----------
 local function getRoot()
     for _, child in ipairs(CoreGui:GetChildren()) do
         local obj = child:FindFirstChild("redz-library-v5")
@@ -72,147 +69,86 @@ local function findIndicatorFrame(parent)
     return nil
 end
 
--- ===== getOptionState (копия из оригинала, параметризована) =====
-local function getOptionState(tabIndex, optIndex)
-    local root = getRoot()
-    if not root then return nil end
+-- ===== общие помощники поиска кнопок =====
+local function findTabByIndex(root, tabIndex)
     local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll")
     if not tabsScroll then return nil end
-    local tabButton, tabCount = nil, 0
-    local function findTab(p)
+    local tabButton, count = nil, 0
+    local function scan(p)
         if tabButton then return end
         for _, c in ipairs(p:GetChildren()) do
             if c:IsA("TextButton") or c:IsA("ImageButton") then
-                tabCount += 1
-                if tabCount == tabIndex then tabButton = c return end
+                count += 1
+                if count == tabIndex then tabButton = c return end
             end
-            findTab(c)
+            scan(c)
         end
     end
-    findTab(tabsScroll)
+    scan(tabsScroll)
+    return tabButton
+end
+
+local function findOptionByIndex(root, optIndex)
+    local container = safeFind(root, "Window", "Components", "Containers", "Container")
+    if not container then return nil end
+    local optionBtn, count = nil, 0
+    for _, c in ipairs(container:GetChildren()) do
+        if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
+            count += 1
+            if count == optIndex then optionBtn = c break end
+        end
+    end
+    return optionBtn
+end
+
+-- ===== getOptionState / enableOption (как в оригинале) =====
+local function getOptionState(tabIndex, optIndex)
+    local root = getRoot()
+    if not root then return nil end
+    local tabButton = findTabByIndex(root, tabIndex)
     if not tabButton then return nil end
     fireSequence(tabButton)
     task.wait(0.3)
-    local container = safeFind(root, "Window", "Components", "Containers", "Container")
-    if not container then return nil end
-    local optionBtn, optCount = nil, 0
-    for _, c in ipairs(container:GetChildren()) do
-        if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
-            optCount += 1
-            if optCount == optIndex then optionBtn = c break end
-        end
-    end
+    local optionBtn = findOptionByIndex(root, optIndex)
     if not optionBtn then return nil end
     local indicator = findIndicatorFrame(optionBtn)
     if not indicator then return nil end
     local col = tostring(indicator.BackgroundColor3)
     if col == COLOR_ON then return "on"
-    elseif col == COLOR_OFF then return "off"
-    else return nil
-    end
+    elseif col == COLOR_OFF then return "off" end
+    return nil
 end
 
--- ===== enableOption (копия из оригинала, параметризована) =====
 local function enableOption(tabIndex, optIndex)
     local state = getOptionState(tabIndex, optIndex)
     if state == "on" then return true end
     if state ~= "off" then return false end
     local root = getRoot()
     if not root then return false end
-    local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll")
-    if not tabsScroll then return false end
-    local tabButton, tabCount = nil, 0
-    local function findTab(p)
-        if tabButton then return end
-        for _, c in ipairs(p:GetChildren()) do
-            if c:IsA("TextButton") or c:IsA("ImageButton") then
-                tabCount += 1
-                if tabCount == tabIndex then tabButton = c return end
-            end
-            findTab(c)
-        end
-    end
-    findTab(tabsScroll)
+    local tabButton = findTabByIndex(root, tabIndex)
     if not tabButton then return false end
     fireSequence(tabButton)
     task.wait(0.3)
-    local container = safeFind(root, "Window", "Components", "Containers", "Container")
-    if not container then return false end
-    local optionBtn, optCount = nil, 0
-    for _, c in ipairs(container:GetChildren()) do
-        if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
-            optCount += 1
-            if optCount == optIndex then optionBtn = c break end
-        end
-    end
+    local optionBtn = findOptionByIndex(root, optIndex)
     if not optionBtn then return false end
     fireSequence(optionBtn)
     task.wait(0.1)
     return true
 end
 
--- ===== disableOption (зеркало enableOption, но переключает off) =====
-local function disableOption(tabIndex, optIndex)
-    local state = getOptionState(tabIndex, optIndex)
-    if state == "off" then return true end
-    if state ~= "on" then return false end
+-- ===== СЛЕПОЙ toggle: жмёт по кнопке всегда, игнорируя индикатор =====
+local function blindToggle(tabIndex, optIndex)
     local root = getRoot()
     if not root then return false end
-    local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll")
-    if not tabsScroll then return false end
-    local tabButton, tabCount = nil, 0
-    local function findTab(p)
-        if tabButton then return end
-        for _, c in ipairs(p:GetChildren()) do
-            if c:IsA("TextButton") or c:IsA("ImageButton") then
-                tabCount += 1
-                if tabCount == tabIndex then tabButton = c return end
-            end
-            findTab(c)
-        end
-    end
-    findTab(tabsScroll)
+    local tabButton = findTabByIndex(root, tabIndex)
     if not tabButton then return false end
     fireSequence(tabButton)
-    task.wait(0.3)
-    local container = safeFind(root, "Window", "Components", "Containers", "Container")
-    if not container then return false end
-    local optionBtn, optCount = nil, 0
-    for _, c in ipairs(container:GetChildren()) do
-        if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
-            optCount += 1
-            if optCount == optIndex then optionBtn = c break end
-        end
-    end
+    task.wait(0.4)
+    local optionBtn = findOptionByIndex(root, optIndex)
     if not optionBtn then return false end
     fireSequence(optionBtn)
-    task.wait(0.1)
+    task.wait(0.25)
     return true
-end
-
--- ============================================================
--- ЛУП ОЖИДАНИЯ — точная копия оригинального while-loop,
--- но с выходом по условию predicate()
--- ============================================================
-local function waitWithKeepOn(tabIndex, optIndex, predicate, timeout)
-    timeout = timeout or 900 -- 15 минут
-    local startTime = tick()
-    while true do
-        local state = getOptionState(tabIndex, optIndex)
-        if state == "off" then
-            enableOption(tabIndex, optIndex)
-        elseif state == "on" then
-            -- всё ок
-        else
-            log("Кнопка не найдена, ожидание...")
-        end
-        if predicate() then return true end
-        if tick() - startTime > timeout then
-            log("Таймаут ожидания.")
-            return false
-        end
-        task.wait(3)
-    end
 end
 
 -- ============================================================
@@ -246,35 +182,63 @@ local function getMastery()
     return tonumber(string.match(lbl.Text or "", "%d+"))
 end
 
+-- ===== Луп как в оригинале, но с выходом по условию =====
+local function waitWithKeepOn(tabIndex, optIndex, predicate, timeout)
+    timeout = timeout or 900
+    local startTime = tick()
+    while true do
+        local state = getOptionState(tabIndex, optIndex)
+        if state == "off" then
+            enableOption(tabIndex, optIndex)
+        elseif state == "on" then
+            -- ok
+        else
+            log("Кнопка не найдена, ожидание...")
+        end
+        if predicate() then return true end
+        if tick() - startTime > timeout then log("Таймаут.") return false end
+        task.wait(3)
+    end
+end
+
 -- ============================================================
 -- ОСНОВНОЙ ФЛОУ
 -- ============================================================
 
 -- Шаг 1: dragon talon
-log("Шаг 1: проверка dragon talon...")
+log("Шаг 1: dragon talon...")
 if not hasDragonTalon() then
-    log("Dragon talon нет — держу 6,1 включённой, жду...")
+    log("Нет — держу 6,1, жду...")
     waitWithKeepOn(6, 1, hasDragonTalon)
 end
 log("Dragon talon есть.")
 
--- Шаг 2: остров (6,1 всё ещё держим)
-log("Шаг 2: проверка острова...")
+-- Шаг 2: остров
+log("Шаг 2: остров...")
 if not isOnIsland() then
     log("Не на острове — держу 6,1, жду...")
     waitWithKeepOn(6, 1, isOnIsland)
 end
 log("На острове.")
 
--- Шаг 3: выключаем 6,1 и включаем 2,4
-log("Шаг 3: отключаю 6,1...")
-disableOption(6, 1)
-task.wait(0.5)
+-- Шаг 3: жёстко выключаем 6,1 (слепой toggle), затем включаем 2,4
+log("Шаг 3: слепо выключаю 6,1...")
+blindToggle(6, 1)
+task.wait(1)
 log("Включаю 2,4...")
-enableOption(2, 4)
+-- 2,4 может быть уже активна визуально — жмём слепо, чтобы точно запустить
+blindToggle(2, 4)
+task.wait(1)
+-- если 2,4 визуально off — жмём ещё раз
+for i = 1, 3 do
+    local s = getOptionState(2, 4)
+    if s == "on" then break end
+    blindToggle(2, 4)
+    task.wait(1)
+end
 
 -- Шаг 4: ждём mastery > 500
-log("Шаг 4: ожидание mastery > 500...")
+log("Шаг 4: mastery > 500...")
 local mastery = 0
 repeat
     task.wait(2)
@@ -282,11 +246,19 @@ repeat
     log("Mastery: " .. tostring(mastery))
 until mastery > 500
 
--- Шаг 5: выключаем 2,4, включаем 6,1
-log("Шаг 5: отключаю 2,4...")
-disableOption(2, 4)
-task.wait(0.5)
-log("Включаю 6,1...")
-enableOption(6, 1)
+-- Шаг 5: слепо выключаем 2,4, слепо включаем 6,1
+log("Шаг 5: слепо выключаю 2,4...")
+blindToggle(2, 4)
+task.wait(1.5)
+log("Слепо включаю 6,1...")
+blindToggle(6, 1)
+task.wait(1)
+-- добиваем, если визуально ещё off
+for i = 1, 3 do
+    local s = getOptionState(6, 1)
+    if s == "on" then break end
+    blindToggle(6, 1)
+    task.wait(1)
+end
 
 log("Готово.")
