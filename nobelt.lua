@@ -1,13 +1,7 @@
 -- ============================================================
--- Дело в том, что в твоём рабочем скрипте ГЛАВНЫЙ цикл всё время
--- крутит getOptionState(6,1) + fireSequence(tab6). Этот постоянный
--- клик по вкладке 6 и держит опцию реально активной (не только визуально).
--- Когда я переключал переменные на 2,4 или «умно» форсил — цикл ломался,
--- и hub считал кнопку "on", но функционально она не работала.
---
--- Решение: ОДИН бесконечный цикл как у тебя. Меняю только TAB/OPT
--- переменные, но НИКОГДА не останавливаю паттерн
--- "getOptionState → if off → enableOption → wait(3)".
+-- Флоу: 6,1 → dragon talon → island → 2,4 → mastery>500 → 6,1
+-- Один бесконечный цикл (как в оригинале). Смена цели — через TAB/OPT.
+-- Финал: принудительный сброс 6,1 → включение → верификация → hold.
 -- ============================================================
 
 task.spawn(function()
@@ -20,7 +14,7 @@ local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
--- ТЕКУЩИЕ цели — меняются по ходу флоу, но цикл один и тот же
+-- Текущая цель (меняется по стадиям)
 local TAB = 6
 local OPT = 1
 
@@ -81,7 +75,7 @@ local function findIndicatorFrame(parent)
     return nil
 end
 
--- === getOptionState — БУКВАЛЬНО как в твоём скрипте ===
+-- === getOptionState — как в оригинале (кликает по вкладке) ===
 local function getOptionState(tabIndex, optIndex)
     local root = getRoot()
     if not root then return nil end
@@ -121,7 +115,7 @@ local function getOptionState(tabIndex, optIndex)
     end
 end
 
--- === enableOption — БУКВАЛЬНО как в твоём скрипте (использует TAB, OPT) ===
+-- === enableOption — как в оригинале (читает глобальные TAB/OPT) ===
 local function enableOption()
     local state = getOptionState(TAB, OPT)
     if state == "on" then return true end
@@ -160,7 +154,7 @@ local function enableOption()
     return true
 end
 
--- === disableOption — зеркало (только переключение off) ===
+-- === disableOption — зеркало (читает глобальные TAB/OPT) ===
 local function disableOption()
     local state = getOptionState(TAB, OPT)
     if state == "off" then return true end
@@ -229,11 +223,17 @@ local function getMastery()
 end
 
 -- ============================================================
--- ЕДИНЫЙ БЕСКОНЕЧНЫЙ ЦИКЛ (ровно как у тебя).
--- Просто меняю TAB/OPT в нужные моменты.
+-- ЕДИНЫЙ ЦИКЛ
 -- ============================================================
-
-local stage = 1 -- 1: talon, 2: island, 3: switch to 2,4, 4: wait mastery, 5: switch back to 6,1
+local stage = 1
+-- 1: talon (6,1)
+-- 2: island (6,1)
+-- 3: выключить 6,1
+-- 4: включить 2,4 и ждать mastery > 500
+-- 5: выключить 2,4
+-- 6: сброс 6,1 (если on — выключаем) → включение
+-- 7: верификация 6,1
+-- 8: hold
 
 log("Скрипт запущен. Стадия 1: dragon talon")
 
@@ -241,7 +241,6 @@ while true do
     local state = getOptionState(TAB, OPT)
 
     if stage == 1 then
-        -- держим 6,1 пока не появится dragon talon
         if state == "off" then
             log("6,1 off — включаю...")
             enableOption()
@@ -256,7 +255,6 @@ while true do
         end
 
     elseif stage == 2 then
-        -- продолжаем держать 6,1 пока не окажемся на острове
         if state == "off" then
             enableOption()
         elseif state == "on" then
@@ -265,18 +263,16 @@ while true do
             log("6,1 не найдена, ожидание...")
         end
         if isOnIsland() then
-            log("На острове → стадия 3 (переключаюсь на 2,4)")
+            log("На острове → стадия 3 (выключаю 6,1)")
             stage = 3
         end
 
     elseif stage == 3 then
-        -- выключаю 6,1
         if state == "on" then
             log("Выключаю 6,1...")
             disableOption()
         elseif state == "off" then
-            -- 6,1 выключена → переключаемся на 2,4
-            log("6,1 off → переключаю цель на 2,4")
+            log("6,1 off → стадия 4 (2,4)")
             TAB, OPT = 2, 4
             stage = 4
         else
@@ -284,7 +280,6 @@ while true do
         end
 
     elseif stage == 4 then
-        -- держу 2,4 пока mastery не станет > 500
         if state == "off" then
             log("2,4 off — включаю...")
             enableOption()
@@ -301,13 +296,11 @@ while true do
         end
 
     elseif stage == 5 then
-        -- выключаю 2,4
         if state == "on" then
             log("Выключаю 2,4...")
             disableOption()
         elseif state == "off" then
-            -- 2,4 выключена → возвращаем цель на 6,1
-            log("2,4 off → переключаю цель на 6,1")
+            log("2,4 off → стадия 6 (возврат на 6,1 со сбросом)")
             TAB, OPT = 6, 1
             stage = 6
         else
@@ -315,19 +308,33 @@ while true do
         end
 
     elseif stage == 6 then
-        -- финально держим 6,1 включённой
-        if state == "off" then
+        -- После вкладки 2 индикатор 6,1 может показывать stale "on".
+        -- Сначала принудительно сбрасываем, потом включаем.
+        if state == "on" then
+            log("6,1 показывает on (возможно stale) — сбрасываю...")
+            disableOption()
+        elseif state == "off" then
             log("6,1 off — включаю...")
             enableOption()
-        elseif state == "on" then
-            log("6,1 включена. Готово.")
             stage = 7
         else
             log("6,1 не найдена, ожидание...")
         end
 
     elseif stage == 7 then
-        -- просто держим 6,1 (как твой оригинальный скрипт)
+        -- Верификация: реально ли on?
+        if state == "off" then
+            log("6,1 снова off — возврат в stage 6")
+            stage = 6
+        elseif state == "on" then
+            log("6,1 стабильно включена.")
+            stage = 8
+        else
+            log("6,1 не найдена, ждём...")
+        end
+
+    elseif stage == 8 then
+        -- hold как оригинальный скрипт
         if state == "off" then
             enableOption()
         end
