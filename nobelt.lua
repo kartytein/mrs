@@ -1,10 +1,13 @@
 -- ============================================================
--- Понял в чём дело. В твоём рабочем скрипте ничего не форсится:
--- он просто крутит while-цикл каждые 3 сек и ждёт, пока хаб
--- сам всё прогрузит (state == nil → просто ждём).
--- Я же форсил клики ДО того, как элементы появились, и это ломало.
--- Теперь КАЖДАЯ стадия — это ТОЧНО ТАКОЙ ЖЕ цикл, что и твой.
--- Продвижение только по подтверждённому игровому состоянию.
+-- Дело в том, что в твоём рабочем скрипте ГЛАВНЫЙ цикл всё время
+-- крутит getOptionState(6,1) + fireSequence(tab6). Этот постоянный
+-- клик по вкладке 6 и держит опцию реально активной (не только визуально).
+-- Когда я переключал переменные на 2,4 или «умно» форсил — цикл ломался,
+-- и hub считал кнопку "on", но функционально она не работала.
+--
+-- Решение: ОДИН бесконечный цикл как у тебя. Меняю только TAB/OPT
+-- переменные, но НИКОГДА не останавливаю паттерн
+-- "getOptionState → if off → enableOption → wait(3)".
 -- ============================================================
 
 task.spawn(function()
@@ -17,10 +20,16 @@ local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
+-- ТЕКУЩИЕ цели — меняются по ходу флоу, но цикл один и тот же
+local TAB = 6
+local OPT = 1
+
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
 
-local function log(msg) pcall(function() warn("[Auto] " .. msg) end) end
+local function log(msg)
+    pcall(function() warn("[Auto] " .. msg) end)
+end
 
 local function getRoot()
     for _, child in ipairs(CoreGui:GetChildren()) do
@@ -112,9 +121,9 @@ local function getOptionState(tabIndex, optIndex)
     end
 end
 
--- === enableOption — БУКВАЛЬНО как в твоём скрипте, но с параметрами ===
-local function enableOption(tabIndex, optIndex)
-    local state = getOptionState(tabIndex, optIndex)
+-- === enableOption — БУКВАЛЬНО как в твоём скрипте (использует TAB, OPT) ===
+local function enableOption()
+    local state = getOptionState(TAB, OPT)
     if state == "on" then return true end
     if state ~= "off" then return false end
     local root = getRoot()
@@ -127,7 +136,7 @@ local function enableOption(tabIndex, optIndex)
         for _, c in ipairs(p:GetChildren()) do
             if c:IsA("TextButton") or c:IsA("ImageButton") then
                 tabCount += 1
-                if tabCount == tabIndex then tabButton = c return end
+                if tabCount == TAB then tabButton = c return end
             end
             findTab(c)
         end
@@ -142,7 +151,7 @@ local function enableOption(tabIndex, optIndex)
     for _, c in ipairs(container:GetChildren()) do
         if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
             optCount += 1
-            if optCount == optIndex then optionBtn = c break end
+            if optCount == OPT then optionBtn = c break end
         end
     end
     if not optionBtn then return false end
@@ -151,8 +160,11 @@ local function enableOption(tabIndex, optIndex)
     return true
 end
 
--- === toggleOption — принудительный клик (для выключения) ===
-local function toggleOption(tabIndex, optIndex)
+-- === disableOption — зеркало (только переключение off) ===
+local function disableOption()
+    local state = getOptionState(TAB, OPT)
+    if state == "off" then return true end
+    if state ~= "on" then return false end
     local root = getRoot()
     if not root then return false end
     local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll")
@@ -163,7 +175,7 @@ local function toggleOption(tabIndex, optIndex)
         for _, c in ipairs(p:GetChildren()) do
             if c:IsA("TextButton") or c:IsA("ImageButton") then
                 tabCount += 1
-                if tabCount == tabIndex then tabButton = c return end
+                if tabCount == TAB then tabButton = c return end
             end
             findTab(c)
         end
@@ -178,7 +190,7 @@ local function toggleOption(tabIndex, optIndex)
     for _, c in ipairs(container:GetChildren()) do
         if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
             optCount += 1
-            if optCount == optIndex then optionBtn = c break end
+            if optCount == OPT then optionBtn = c break end
         end
     end
     if not optionBtn then return false end
@@ -217,110 +229,109 @@ local function getMastery()
 end
 
 -- ============================================================
--- СТАДИИ. Каждая — цикл ровно как в твоём рабочем скрипте:
---   getOptionState → если off → enableOption → task.wait(3)
--- Если state == nil — НЕ форсим, просто ждём следующий тик.
+-- ЕДИНЫЙ БЕСКОНЕЧНЫЙ ЦИКЛ (ровно как у тебя).
+-- Просто меняю TAB/OPT в нужные моменты.
 -- ============================================================
 
--- СТАДИЯ 1: держим 6,1, пока dragon talon не появится
-log("Стадия 1: dragon talon...")
-while true do
-    local state = getOptionState(6, 1)
-    if state == "off" then
-        log("6,1 off — включаю...")
-        enableOption(6, 1)
-    elseif state == "on" then
-        -- ok
-    else
-        log("6,1 не найдена, ждём полной прогрузки...")
-    end
-    if hasDragonTalon() then break end
-    task.wait(3)
-end
-log("Dragon talon есть.")
+local stage = 1 -- 1: talon, 2: island, 3: switch to 2,4, 4: wait mastery, 5: switch back to 6,1
 
--- СТАДИЯ 2: держим 6,1, пока не окажемся на острове
-log("Стадия 2: остров...")
-while true do
-    local state = getOptionState(6, 1)
-    if state == "off" then
-        enableOption(6, 1)
-    elseif state == "on" then
-        -- ok
-    else
-        log("6,1 не найдена, ждём...")
-    end
-    if isOnIsland() then break end
-    task.wait(3)
-end
-log("На острове.")
+log("Скрипт запущен. Стадия 1: dragon talon")
 
--- СТАДИЯ 3: выключаем 6,1
-log("Стадия 3: выключаю 6,1...")
 while true do
-    local state = getOptionState(6, 1)
-    if state == "on" then
-        toggleOption(6, 1)
-    elseif state == "off" then
-        break
-    else
-        log("6,1 не найдена, ждём...")
-    end
-    task.wait(3)
-end
-log("6,1 отключена.")
+    local state = getOptionState(TAB, OPT)
 
--- СТАДИЯ 4: включаем 2,4
-log("Стадия 4: включаю 2,4...")
-while true do
-    local state = getOptionState(2, 4)
-    if state == "off" then
-        enableOption(2, 4)
-    elseif state == "on" then
-        break
-    else
-        log("2,4 не найдена, ждём...")
-    end
-    task.wait(3)
-end
-log("2,4 активна.")
+    if stage == 1 then
+        -- держим 6,1 пока не появится dragon talon
+        if state == "off" then
+            log("6,1 off — включаю...")
+            enableOption()
+        elseif state == "on" then
+            -- ok
+        else
+            log("6,1 не найдена, ожидание...")
+        end
+        if hasDragonTalon() then
+            log("Dragon talon есть → стадия 2 (остров)")
+            stage = 2
+        end
 
--- СТАДИЯ 5: ждём mastery > 500
-log("Стадия 5: mastery > 500...")
-while true do
-    local m = getMastery() or 0
-    log("Mastery: " .. tostring(m))
-    if m > 500 then break end
-    task.wait(3)
-end
-log("Mastery > 500.")
+    elseif stage == 2 then
+        -- продолжаем держать 6,1 пока не окажемся на острове
+        if state == "off" then
+            enableOption()
+        elseif state == "on" then
+            -- ok
+        else
+            log("6,1 не найдена, ожидание...")
+        end
+        if isOnIsland() then
+            log("На острове → стадия 3 (переключаюсь на 2,4)")
+            stage = 3
+        end
 
--- СТАДИЯ 6: выключаем 2,4
-log("Стадия 6: выключаю 2,4...")
-while true do
-    local state = getOptionState(2, 4)
-    if state == "on" then
-        toggleOption(2, 4)
-    elseif state == "off" then
-        break
-    else
-        log("2,4 не найдена, ждём...")
-    end
-    task.wait(3)
-end
-log("2,4 отключена.")
+    elseif stage == 3 then
+        -- выключаю 6,1
+        if state == "on" then
+            log("Выключаю 6,1...")
+            disableOption()
+        elseif state == "off" then
+            -- 6,1 выключена → переключаемся на 2,4
+            log("6,1 off → переключаю цель на 2,4")
+            TAB, OPT = 2, 4
+            stage = 4
+        else
+            log("6,1 не найдена, ожидание...")
+        end
 
--- СТАДИЯ 7: включаем 6,1
-log("Стадия 7: включаю 6,1...")
-while true do
-    local state = getOptionState(6, 1)
-    if state == "off" then
-        enableOption(6, 1)
-    elseif state == "on" then
-        break
-    else
-        log("6,1 не найдена, ждём...")
+    elseif stage == 4 then
+        -- держу 2,4 пока mastery не станет > 500
+        if state == "off" then
+            log("2,4 off — включаю...")
+            enableOption()
+        elseif state == "on" then
+            -- ok
+        else
+            log("2,4 не найдена, ожидание...")
+        end
+        local m = getMastery() or 0
+        log("Mastery: " .. tostring(m))
+        if m > 500 then
+            log("Mastery > 500 → стадия 5 (выключаю 2,4)")
+            stage = 5
+        end
+
+    elseif stage == 5 then
+        -- выключаю 2,4
+        if state == "on" then
+            log("Выключаю 2,4...")
+            disableOption()
+        elseif state == "off" then
+            -- 2,4 выключена → возвращаем цель на 6,1
+            log("2,4 off → переключаю цель на 6,1")
+            TAB, OPT = 6, 1
+            stage = 6
+        else
+            log("2,4 не найдена, ожидание...")
+        end
+
+    elseif stage == 6 then
+        -- финально держим 6,1 включённой
+        if state == "off" then
+            log("6,1 off — включаю...")
+            enableOption()
+        elseif state == "on" then
+            log("6,1 включена. Готово.")
+            stage = 7
+        else
+            log("6,1 не найдена, ожидание...")
+        end
+
+    elseif stage == 7 then
+        -- просто держим 6,1 (как твой оригинальный скрипт)
+        if state == "off" then
+            enableOption()
+        end
     end
+
     task.wait(3)
 end
-log("6,1 включена. Готово.")
