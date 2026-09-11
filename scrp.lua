@@ -12,6 +12,11 @@ local YELLOW_WHITE_TIMEOUT = 30 * 60
 local SERVER_URL           = "http://192.168.31.89:8000"
 local BELT_ORDER           = {"White","Yellow","Orange","Green","Blue","Purple","Red","Black"}
 
+local SCROLL_STEP_PIXELS  = 300
+local SCROLL_WAIT_TIME    = 0.15
+local SCROLL_INITIAL_WAIT = 0.5
+local SCROLL_FINAL_WAIT   = 1.0
+
 -- ============================================================
 -- СЕРВИСЫ И СОСТОЯНИЕ
 -- ============================================================
@@ -25,15 +30,14 @@ local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 local State = {
-    currentBelt       = "Unknown",
-    beltChangedAt     = tick(),
-    beltScanPaused    = false,
-    inventoryPrepared = false,   -- инвентарь открыт и Category3 выбрана
-    running           = true,
+    currentBelt     = "Unknown",
+    beltChangedAt   = tick(),
+    beltScanPaused  = false,
+    running         = true,
 }
 
 -- ============================================================
--- ОБЩИЕ УТИЛИТЫ
+-- УТИЛИТЫ
 -- ============================================================
 local function fireSequence(btn)
     if not btn then return false end
@@ -115,12 +119,11 @@ local function findInventoryButtonByName(buttonName)
     return nil
 end
 
--- Открыт ли инвентарь (Main под Inventory.Inventory видим)
-local function isInventoryOpen()
-    local main = findObjectByPath(playerGui, "Inventory", "Inventory", "Main")
-    if not main then return false end
-    if main:IsA("GuiObject") then return main.Visible end
-    return true
+-- Category3 присутствует в дереве (значит инвентарь уже открыт)
+local function findCategory3()
+    local c3 = findObjectByPath(playerGui, "Inventory","Inventory","Main","NavigationRail","Category3")
+    if c3 then return c3 end
+    return findInventoryButtonByName("Category3")
 end
 
 -- ============================================================
@@ -147,7 +150,7 @@ local function sanitizeBlacklist(list)
 end
 
 BLACKLIST = sanitizeBlacklist(BLACKLIST)
-print("[Blacklist] после санитайза: " .. #BLACKLIST .. " записей (мой ник: " .. player.Name .. ")")
+print("[Blacklist] " .. #BLACKLIST .. " записей (me: " .. player.Name .. ")")
 
 local function getBlacklistedPlayer()
     for _, plr in ipairs(Players:GetPlayers()) do
@@ -162,7 +165,7 @@ local function getBlacklistedPlayer()
 end
 
 -- ============================================================
--- ХАБ
+-- ЗАГРУЗКА ХАБА
 -- ============================================================
 task.spawn(function()
     pcall(function()
@@ -172,68 +175,41 @@ end)
 
 -- ============================================================
 -- БЕЛТ-СКАНЕР
--- Инвентарь открывается один раз. Дальше только скролл + парсинг.
+-- Логика: если Category3 уже в дереве → сразу скроллим.
+--         если нет → Menu → Items → Category3 → скролл.
 -- ============================================================
-local SCROLL_STEP_PIXELS  = 300
-local SCROLL_WAIT_TIME    = 0.15
-local SCROLL_INITIAL_WAIT = 0.5
-local SCROLL_FINAL_WAIT   = 1.0
+local function doBeltScan()
+    print("[BeltScan] старт скана")
 
--- Открывает инвентарь + выбирает Category3. Возвращает true если удалось.
-local function prepareInventory()
-    if not isInventoryOpen() then
-        print("[BeltScan] открываю инвентарь...")
+    local category3 = findCategory3()
+
+    if not category3 then
+        -- инвентарь не открыт — открываем
+        print("[BeltScan] Category3 нет, открываю инвентарь...")
+
         local menuButton = waitForHudButton("Menu", 10)
-        if not menuButton then warn("[BeltScan] HUD Menu не найдена"); return false end
+        if not menuButton then warn("[BeltScan] HUD Menu не найдена"); return nil end
         fireSequence(menuButton); task.wait(1.5)
 
         local itemsButton = waitForHudButton("Items", 10)
-        if not itemsButton then warn("[BeltScan] HUD Items не найдена"); return false end
+        if not itemsButton then warn("[BeltScan] HUD Items не найдена"); return nil end
         fireSequence(itemsButton); task.wait(1.5)
-    end
 
-    local category3 = waitForObjectByPath({"Inventory","Inventory","Main","NavigationRail","Category3"}, 5)
-    if not category3 then category3 = findInventoryButtonByName("Category3") end
-    if not category3 then warn("[BeltScan] Category3 не найдена"); return false end
-
-    fireSequence(category3); task.wait(0.6)
-    return true
-end
-
-local function doBeltScan()
-    -- Инвентарь не открыт? Готовим.
-    if not State.inventoryPrepared then
-        if not prepareInventory() then
-            State.inventoryPrepared = false
-            return nil
-        end
-        State.inventoryPrepared = true
+        category3 = waitForObjectByPath({"Inventory","Inventory","Main","NavigationRail","Category3"}, 5)
+        if not category3 then category3 = findInventoryButtonByName("Category3") end
+        if not category3 then warn("[BeltScan] Category3 не найдена"); return nil end
     else
-        -- Проверим, что инвентарь не закрыли руками
-        if not isInventoryOpen() then
-            print("[BeltScan] инвентарь закрыт, переоткрываю")
-            State.inventoryPrepared = false
-            if not prepareInventory() then
-                State.inventoryPrepared = false
-                return nil
-            end
-            State.inventoryPrepared = true
-        end
+        print("[BeltScan] Category3 уже открыта, пропускаю Menu/Items")
     end
 
-    -- TileGrid
+    fireSequence(category3); task.wait(SCROLL_INITIAL_WAIT)
+
     local tileGrid = waitForObjectByPath({"Inventory","Inventory","Main","PageContent","TileGrid"}, 5)
     if not tileGrid then
-        -- возможно Category3 не активна — нажмём ещё раз
-        local cat3 = findInventoryButtonByName("Category3")
-        if cat3 then fireSequence(cat3); task.wait(0.6) end
-        tileGrid = waitForObjectByPath({"Inventory","Inventory","Main","PageContent","TileGrid"}, 3)
+        local inv = playerGui:FindFirstChild("Inventory")
+        if inv then tileGrid = inv:FindFirstChild("TileGrid", true) end
     end
-    if not tileGrid then
-        warn("[BeltScan] TileGrid не найден — сброс prepare")
-        State.inventoryPrepared = false
-        return nil
-    end
+    if not tileGrid then warn("[BeltScan] TileGrid не найден"); return nil end
 
     local scrollingFrame = nil
     local obj = tileGrid
@@ -331,15 +307,12 @@ end
 -- Фоновый поток сканера
 task.spawn(function()
     if not player.Character then player.CharacterAdded:Wait() end
-
-    local waited = 0
-    while not findHudButtonByName("Menu") and waited < 90 do
-        task.wait(1); waited += 1
-    end
+    local w = 0
+    while not findHudButtonByName("Menu") and w < 90 do task.wait(1); w += 1 end
     if not findHudButtonByName("Menu") then
         warn("[BeltScan] HUD Menu не появилась за 90с"); return
     end
-    task.wait(2)
+    task.wait(3)
 
     while State.running do
         if not State.beltScanPaused then
@@ -350,7 +323,7 @@ task.spawn(function()
                 if belt ~= State.currentBelt then
                     State.currentBelt   = belt
                     State.beltChangedAt = tick()
-                    print("[BeltScan] Новый режим: " .. belt)
+                    print("[BeltScan] новый режим: " .. belt)
                 else
                     State.beltChangedAt = tick()
                 end
@@ -373,11 +346,10 @@ local function serverHop()
         return nil
     end
 
-    print("[Hop] ищем ServerBrowserButton...")
-    local waited = 0
-    while not findSB() and waited < 15 do task.wait(0.5); waited += 0.5 end
+    local w = 0
+    while not findSB() and w < 15 do task.wait(0.5); w += 0.5 end
     local sb = findSB()
-    if not sb then warn("[Hop] кнопка не найдена"); return false end
+    if not sb then warn("[Hop] ServerBrowserButton не найдена"); return false end
     fireSequence(sb); task.wait(1)
 
     local function findJoin()
@@ -389,8 +361,8 @@ local function serverHop()
         return nil
     end
 
-    waited = 0
-    while not findJoin() and waited < 20 do task.wait(0.5); waited += 0.5 end
+    w = 0
+    while not findJoin() and w < 20 do task.wait(0.5); w += 0.5 end
     if not findJoin() then warn("[Hop] Join не найдена"); return false end
 
     local sBrowser = playerGui:FindFirstChild("ServerBrowser")
@@ -400,9 +372,8 @@ local function serverHop()
     local sf = f:FindFirstChild("ScrollingFrame")
     if not sf then return false end
 
-    local canvasY = sf.CanvasSize.Y
-    local maxY = (typeof(canvasY) == "UDim") and canvasY.Offset or canvasY
-
+    local cY = sf.CanvasSize.Y
+    local maxY = (typeof(cY) == "UDim") and cY.Offset or cY
     local dur = math.random(1, 10)
     local y, t0 = 0, tick()
     sf.CanvasPosition = Vector2.new(0, 0)
@@ -424,7 +395,6 @@ local function serverHop()
     end
     collect(sBrowser)
     if #btns == 0 then warn("[Hop] нет кнопок Join"); return false end
-
     fireSequence(btns[math.random(1, #btns)])
     print("[Hop] нажали Join")
     return true
@@ -466,7 +436,7 @@ local function findIndicatorFrame(parent)
 end
 
 local function findTab(root, tabIndex)
-    local ts = safeFind(root, "Window", "Components", "TabsScroll")
+    local ts = safeFind(root, "Window","Components","TabsScroll")
     if not ts then return nil end
     local btn, count = nil, 0
     local function scan(p)
@@ -484,7 +454,7 @@ local function findTab(root, tabIndex)
 end
 
 local function findOption(root, optIndex)
-    local cont = safeFind(root, "Window", "Components", "Containers", "Container")
+    local cont = safeFind(root, "Window","Components","Containers","Container")
     if not cont then return nil end
     local btn, count = nil, 0
     for _, c in ipairs(cont:GetChildren()) do
@@ -640,7 +610,6 @@ end
 local function runOrangeMode()
     print("[Mode:Orange] START")
     State.beltScanPaused = true
-    State.inventoryPrepared = false  -- orange сам открывает инвентарь по-своему
 
     local SEND_INVENTORY_INTERVAL = 20
     local CONFIG_POLL_INTERVAL    = 10
@@ -1280,7 +1249,6 @@ local function runOrangeMode()
 
     State.beltScanPaused = false
     State.currentBelt = "Unknown"
-    State.inventoryPrepared = false
     task.wait(1)
 end
 
