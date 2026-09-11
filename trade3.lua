@@ -1,6 +1,10 @@
 -- ============================================================
 -- ПОЛНЫЙ СКРИПТ
--- Движение к TradeTable через BodyVelocity (как к лодке)
+-- 1) Команда -> инвентарь -> сервер
+-- 2) Телепорт по JobId (если нужно)
+-- 3) Ресет фруктов
+-- 4) Перемещение к waypoint -> к TradeTable (BodyVelocity, как к VehicleSeat)
+-- 5) Авто-трейд
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -93,14 +97,15 @@ local SCROLL_WAIT_TIME = 0.15
 local SCROLL_INITIAL_WAIT = 0.5
 local SCROLL_FINAL_WAIT = 1.0
 
-local BOAT_TAB, BOAT_OPT, ISLAND_OPT = 5, 6, 10
-local RETURN_TAB, RETURN_OPT = 3, 1
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
 
 local TELEPORT_TAB = 19
 local TELEPORT_OPT_TEXT = 2
 local TELEPORT_OPT_ACTIVATE = 3
+
+-- Waypoint — точка сбора, куда идём ПЕРЕД поиском стола
+local WAYPOINT_POSITION = Vector3.new(-12549.7, 337.5, -7501.1)
 
 -- ====================== ОБЩИЕ ======================
 local function fireSequence(btn)
@@ -403,21 +408,6 @@ local function findNthOption(container, optIndex)
     return optionBtn
 end
 
-local function setOptionState(tabIndex, optIndex, desiredState)
-    if desiredState ~= "on" and desiredState ~= "off" then return false end
-    local root = getRoot() if not root then return false end
-    local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll") if not tabsScroll then return false end
-    local tabButton = findNthTabButton(tabsScroll, tabIndex) if not tabButton then return false end
-    fireSequence(tabButton); task.wait(0.3)
-    local container = safeFind(root, "Window", "Components", "Containers", "Container") if not container then return false end
-    local optionBtn = findNthOption(container, optIndex) if not optionBtn then return false end
-    local indicator = findIndicatorFrame(optionBtn) if not indicator then return false end
-    if (tostring(indicator.BackgroundColor3) == COLOR_ON and desiredState == "on") or
-       (tostring(indicator.BackgroundColor3) == COLOR_OFF and desiredState == "off") then return true end
-    fireSequence(optionBtn); task.wait(0.1)
-    return true
-end
-
 -- ====================== ТЕЛЕПОРТ ПО JOB_ID ======================
 local function teleportToJobId(targetJobId)
     print("[Teleport] Телепорт на JobId:", targetJobId)
@@ -484,17 +474,14 @@ task.spawn(function()
     end
 end)
 
--- ====================== ДВИЖЕНИЕ К СТОЛУ (BodyVelocity, как к лодке) ======================
--- Тот же принцип, что и движение к VehicleSeat лодки:
--- BodyVelocity на UpperTorso, только без подъёма по Y.
-local function moveToTradeTableSeat(targetPosition)
+-- ====================== ДВИЖЕНИЕ (BodyVelocity, как к VehicleSeat) ======================
+local function moveToPosition(targetPosition)
     local character = player.Character or player.CharacterAdded:Wait()
     local humanoid = character:WaitForChild("Humanoid")
     local rootPart = character:WaitForChild("HumanoidRootPart")
     local upper = character:FindFirstChild("UpperTorso")
     if not upper then return false end
 
-    -- Чистим старый BV
     local oldBV = upper:FindFirstChildOfClass("BodyVelocity")
     if oldBV then oldBV:Destroy() end
 
@@ -503,7 +490,7 @@ local function moveToTradeTableSeat(targetPosition)
     mv.Parent = upper
 
     local isMoving = true
-    -- Анти-застревание
+    -- Анти-застревание (прыжок)
     local stuckThread = task.spawn(function()
         local lastPos = rootPart.Position
         local stuckSeconds = 0
@@ -824,6 +811,7 @@ end
 print("Скрипт запущен.")
 selectTeam()
 
+-- 1. Инвентарь + конфиг
 local config = nil
 while config == nil do
     local inventory = collectInventory()
@@ -843,7 +831,7 @@ end
 
 print("Конфигурация получена.")
 
--- Телепорт при необходимости
+-- 2. Телепорт по JobId (если требуется)
 local teleportTarget = config.teleport_to_job_id
 if teleportTarget and teleportTarget ~= "" and teleportTarget ~= game.JobId then
     print("[Teleport] Требуется JobId: " .. teleportTarget)
@@ -866,11 +854,21 @@ if teleportTarget and teleportTarget ~= "" and teleportTarget ~= game.JobId then
     end
 end
 
--- Ресет фруктов
+-- 3. Ресет фруктов
 local loadSuccess = processLoadFruit(config.load_fruit_items or {})
 if not loadSuccess then warn("Ошибка ресета"); return end
 
--- Трейд-цикл
+-- 4. Сначала идём к waypoint
+print("[Travel] Идём к waypoint:", WAYPOINT_POSITION)
+local reachedWaypoint = moveToPosition(WAYPOINT_POSITION)
+if reachedWaypoint then
+    print("[Travel] Дошли до waypoint")
+else
+    warn("[Travel] Не дошли до waypoint, продолжаем всё равно")
+end
+task.wait(1)
+
+-- 5. Трейд-цикл
 local tradeCompleted = false
 while not tradeCompleted do
     local tradeTable, mySeat, wasFullyFree = findTradeTable(config.partner_name or "")
@@ -882,7 +880,7 @@ while not tradeCompleted do
     print("Найден стол. Тип:", wasFullyFree and "свободный" or "частично занят")
 
     -- ДВИЖЕНИЕ К СТОЛУ (BodyVelocity)
-    local arrived = moveToTradeTableSeat(tablePos)
+    local arrived = moveToPosition(tablePos)
     if not arrived then print("Не дошли, пробуем другой."); task.wait(2); continue end
 
     if not waitForSeat(mySeat, 30) then
