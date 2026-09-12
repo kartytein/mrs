@@ -5,12 +5,11 @@
 local BLACKLIST = {
     "DorisVelasquez14332",
     "EdwardThornton360",
-    "НикВрага2",
 }
 
 local BELT_SCAN_INTERVAL = 30
 local HOLD_CHECK_INTERVAL = 30
-local SERVER_URL         = "http://192.168.1.100:8000"
+local SERVER_URL         = "http://192.168.31.89:8000"
 local BELT_ORDER         = {"White","Yellow","Orange","Green","Blue","Purple","Red","Black"}
 
 local SCROLL_STEP_PIXELS  = 10
