@@ -3,7 +3,7 @@
 -- КОНФИГ
 -- ============================================================
 local BLACKLIST = {
-    "CodyVillanueva9969",
+    "DorisVelasquez14332",
     "EdwardThornton360",
 }
 
