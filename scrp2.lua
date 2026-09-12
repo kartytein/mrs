@@ -171,17 +171,14 @@ end)
 -- ============================================================
 -- БЕЛТ-СКАНЕР (как collectInventory из трейда, но Category3)
 -- ============================================================
--- Извлечение "Dojo Belt (Color)" из тайла (по аналогии с extractTileInfo)
 local function extractBeltFromTile(tileObject)
     local details = tileObject:FindFirstChild("Details")
     if details then
-        -- сначала ищем строку с "Belt ("
         for _, o in ipairs(details:GetDescendants()) do
             if o:IsA("TextLabel") and o.Text and o.Text:find("Belt %(") then
                 return o.Text
             end
         end
-        -- fallback — любая строка с "Belt"
         for _, o in ipairs(details:GetDescendants()) do
             if o:IsA("TextLabel") and o.Text and o.Text:find("Belt") then
                 return o.Text
@@ -196,29 +193,22 @@ local function extractBeltFromTile(tileObject)
     return nil
 end
 
--- Полностью повторяет логику collectInventory из трейда, но:
---   Category2 → Category3
---   сбор fruits → сбор belt-строк
 local function doBeltScan()
     print("[BeltScan] старт")
 
-    -- 1. Menu
     local menuButton = waitForHudButton("Menu", 10)
     if not menuButton then warn("[BeltScan] HUD Menu не найдена"); return nil end
     fireSequence(menuButton); task.wait(1.5)
 
-    -- 2. Items
     local itemsButton = waitForHudButton("Items", 10)
     if not itemsButton then warn("[BeltScan] HUD Items не найдена"); return nil end
     fireSequence(itemsButton); task.wait(1.5)
 
-    -- 3. Category3 (тот же путь, что у Category2 в collectInventory, но цифра 3)
     local category3 = waitForObjectByPath({"Inventory","Inventory","Main","NavigationRail","Category3"}, 5)
     if not category3 then category3 = findInventoryButtonByName("Category3") end
     if not category3 then warn("[BeltScan] Category3 не найдена"); return nil end
     fireSequence(category3); task.wait(SCROLL_INITIAL_WAIT)
 
-    -- 4. TileGrid
     local tileGrid = waitForObjectByPath({"Inventory","Inventory","Main","PageContent","TileGrid"}, 5)
     if not tileGrid then
         local inv = playerGui:FindFirstChild("Inventory")
@@ -233,7 +223,6 @@ local function doBeltScan()
         obj = obj.Parent
     end
 
-    -- 5. Сбор тайлов (как collectVisible в collectInventory)
     local collected, beltList = {}, {}
     local function collectVisible()
         for _, child in ipairs(tileGrid:GetDescendants()) do
@@ -274,7 +263,6 @@ local function doBeltScan()
         print("  [" .. i .. "] " .. t)
     end
 
-    -- 6. Парсим наивысший пояс
     local highestBelt, highestIdx = nil, 0
     for _, t in ipairs(beltList) do
         local bp = t:find("Belt %(")
@@ -662,7 +650,6 @@ local function runTradeMode()
     local MOVE_TIMEOUT            = 60
     local ARRIVE_DISTANCE         = 6
     local MOVE_SPEED              = 80
-    local SPEED_Y                 = -2
 
     local TELEPORT_TAB          = 19
     local TELEPORT_OPT_TEXT     = 2
@@ -897,72 +884,57 @@ local function runTradeMode()
         end
     end)
 
+    -- ============================================================
+    -- moveToPosition: каждый кадр ЖЁСТКО выставляем CFrame к цели.
+    -- Если античит откатит — следующий кадр снова ставим ближе.
+    -- Так гарантированно доходим до точки.
+    -- ============================================================
     local function moveToPosition(target)
         local tx, tz, ty = target.X, target.Z, target.Y + 3
-        local character = player.Character or player.CharacterAdded:Wait()
-        local rootPart = character:WaitForChild("HumanoidRootPart")
-        local upper = character:FindFirstChild("UpperTorso")
-        if not upper then return false end
+        local startTime = tick()
+        local lastLog = 0
 
-        local oldBV = upper:FindFirstChildOfClass("BodyVelocity")
-        if oldBV then oldBV:Destroy() end
-
-        local mv = Instance.new("BodyVelocity")
-        mv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        mv.Parent = upper
-
-        local p = rootPart.Position
-        if math.abs(p.Y - ty) > 0.5 then rootPart.CFrame = CFrame.new(p.X, ty, p.Z) end
-
-        local isMoving = true
-        local stuckT = task.spawn(function()
-            local last, stuck = rootPart.Position, 0
-            while isMoving do
-                task.wait(1)
-                local c = player.Character
-                if not c then break end
-                local hrp = c:FindFirstChild("HumanoidRootPart")
-                local h = c:FindFirstChild("Humanoid")
-                if not hrp or not h then break end
-                local moved = (hrp.Position - last).Magnitude
-                local toT = (Vector3.new(tx, ty, tz) - hrp.Position).Magnitude
-                if toT < ARRIVE_DISTANCE or h.Sit then break end
-                if moved < 1 then
-                    stuck += 1
-                    if stuck >= 2 then pcall(function() h.Jump = true end); stuck = 0 end
-                else stuck = 0 end
-                last = hrp.Position
-            end
-        end)
-
-        local w = 0
-        while w < MOVE_TIMEOUT do
+        while tick() - startTime < MOVE_TIMEOUT do
             local c = player.Character
-            if not c then break end
+            if not c then task.wait(0.05); continue end
             local hrp = c:FindFirstChild("HumanoidRootPart")
             local h = c:FindFirstChild("Humanoid")
-            if not hrp or not h or h.Health <= 0 then break end
-            if h.Sit then
-                isMoving = false; if mv then mv:Destroy() end
-                task.cancel(stuckT); return true
-            end
+            if not hrp or not h or h.Health <= 0 then task.wait(0.05); continue end
+
+            if h.Sit then return true end
+
             local cur = hrp.Position
             local dx, dz = tx - cur.X, tz - cur.Z
             local dist = math.sqrt(dx*dx + dz*dz)
+
             if dist < ARRIVE_DISTANCE then
-                isMoving = false; if mv then mv:Destroy() end
-                task.cancel(stuckT)
                 pcall(function() h:MoveTo(Vector3.new(tx, cur.Y, tz)) end)
                 return true
             end
+
+            -- шаг за кадр (стремимся к цели)
+            local step = math.min(MOVE_SPEED * 0.05, dist)
             local nx, nz = dx / math.max(dist, 0.001), dz / math.max(dist, 0.001)
-            mv.Velocity = Vector3.new(nx * MOVE_SPEED, SPEED_Y, nz * MOVE_SPEED)
-            local pp = hrp.Position
-            if math.abs(pp.Y - ty) > 0.5 then hrp.CFrame = CFrame.new(pp.X, ty, pp.Z) end
-            task.wait(0.05); w += 0.05
+            local newX = cur.X + nx * step
+            local newZ = cur.Z + nz * step
+
+            -- ЖЁСТКО ставим CFrame. Даже если античит вернёт — следующий
+            -- кадр мы снова окажемся на studs ближе к цели.
+            pcall(function()
+                hrp.CFrame = CFrame.new(newX, ty, newZ)
+                hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            end)
+
+            -- раз в секунду лог прогресса
+            if tick() - lastLog >= 1 then
+                lastLog = tick()
+                print(string.format("[Move] dist=%.1f", dist))
+            end
+
+            task.wait(0.05)
         end
-        isMoving = false; if mv then mv:Destroy() end
-        task.cancel(stuckT)
+
+        warn("[Move] timeout, не дошли")
         return false
     end
 
@@ -1240,7 +1212,10 @@ local function runTradeMode()
     processLoadFruit(config.load_fruit_items or {})
 
     collisionsDisabled = true
-    moveToPosition(WAYPOINT_POSITION)
+    print("[Move] иду к waypoint")
+    if not moveToPosition(WAYPOINT_POSITION) then
+        warn("[Move] waypoint не достигнут, продолжаем к столу")
+    end
     task.wait(1)
 
     local done = false
