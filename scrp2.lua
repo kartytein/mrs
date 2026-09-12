@@ -12,7 +12,7 @@ local HOLD_CHECK_INTERVAL = 30
 local SERVER_URL         = "http://192.168.31.89:8000"
 local BELT_ORDER         = {"White","Yellow","Orange","Green","Blue","Purple","Red","Black"}
 
-local SCROLL_STEP_PIXELS  = 300
+local SCROLL_STEP_PIXELS  = 10
 local SCROLL_WAIT_TIME    = 0.15
 local SCROLL_INITIAL_WAIT = 0.5
 local SCROLL_FINAL_WAIT   = 1.0
