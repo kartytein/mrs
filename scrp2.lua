@@ -3,14 +3,13 @@
 -- КОНФИГ
 -- ============================================================
 local BLACKLIST = {
-    "ТвойНикЗдесь",
-    "НикВрага1",
-    "НикВрага2",
+    "CodyVillanueva9969",
+    "EdwardThornton360",
 }
 
 local BELT_SCAN_INTERVAL = 30
-local HOLD_CHECK_INTERVAL = 30      -- период проверки 6,1 в hold-режиме
-local SERVER_URL         = "http://192.168.1.100:8000"
+local HOLD_CHECK_INTERVAL = 30
+local SERVER_URL         = "http://192.168.31.89:8000"
 local BELT_ORDER         = {"White","Yellow","Orange","Green","Blue","Purple","Red","Black"}
 
 local SCROLL_STEP_PIXELS  = 300
@@ -176,11 +175,10 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- БЕЛТ-СКАНЕР
+-- БЕЛТ-СКАНЕР (v3: ищем "Belt (" в ОБЕИХ строках)
 -- ============================================================
 local function doBeltScan()
     local category3 = findCategory3()
-
     if not category3 then
         local menuButton = waitForHudButton("Menu", 10)
         if not menuButton then warn("[BeltScan] HUD Menu не найдена"); return nil end
@@ -195,49 +193,65 @@ local function doBeltScan()
         if not category3 then warn("[BeltScan] Category3 не найдена"); return nil end
     end
 
-    fireSequence(category3); task.wait(SCROLL_INITIAL_WAIT)
+    fireSequence(category3); task.wait(1.5)
 
-    local tileGrid = waitForObjectByPath({"Inventory","Inventory","Main","PageContent","TileGrid"}, 5)
-    if not tileGrid then
-        local inv = playerGui:FindFirstChild("Inventory")
-        if inv then tileGrid = inv:FindFirstChild("TileGrid", true) end
+    local tileGrid, scrollingFrame
+    for _ = 1, 20 do
+        tileGrid = waitForObjectByPath({"Inventory","Inventory","Main","PageContent","TileGrid"}, 2)
+        if not tileGrid then
+            local inv = playerGui:FindFirstChild("Inventory")
+            if inv then tileGrid = inv:FindFirstChild("TileGrid", true) end
+        end
+        if tileGrid then
+            local o = tileGrid
+            while o do
+                if o:IsA("ScrollingFrame") then scrollingFrame = o; break end
+                o = o.Parent
+            end
+        end
+        if tileGrid and scrollingFrame and scrollingFrame.AbsoluteSize.Y > 0 then break end
+        task.wait(0.5)
     end
     if not tileGrid then warn("[BeltScan] TileGrid не найден"); return nil end
+    if not scrollingFrame then warn("[BeltScan] ScrollingFrame не найден"); return nil end
 
-    local scrollingFrame = nil
-    local obj = tileGrid
-    while obj do
-        if obj:IsA("ScrollingFrame") then scrollingFrame = obj; break end
-        obj = obj.Parent
-    end
-
-    local function extractTileText(tileObject)
+    local function extractBeltText(tileObject)
         local details = tileObject:FindFirstChild("Details")
-        local text = nil
+
         if details then
-            local l1 = details:FindFirstChild("Line-1")
-            if l1 and l1:IsA("TextLabel") and l1.Text ~= "" then text = l1.Text end
-            if not text then
-                local l2 = details:FindFirstChild("Line-2")
-                if l2 and l2:IsA("TextLabel") and l2.Text ~= "" then text = l2.Text end
-            end
-            if not text then
-                for _, o in ipairs(details:GetDescendants()) do
-                    if o:IsA("TextLabel") and o.Text ~= "" then text = o.Text; break end
+            local candidates = {}
+            for _, lineName in ipairs({"Line-1","Line-2","Line-3","Line-4"}) do
+                local line = details:FindFirstChild(lineName)
+                if line and line:IsA("TextLabel") and line.Text and line.Text ~= "" then
+                    table.insert(candidates, line.Text)
                 end
             end
+            for _, o in ipairs(details:GetDescendants()) do
+                if o:IsA("TextLabel") and o.Text and o.Text ~= "" then
+                    local dup = false
+                    for _, c in ipairs(candidates) do
+                        if c == o.Text then dup = true; break end
+                    end
+                    if not dup then table.insert(candidates, o.Text) end
+                end
+            end
+
+            for _, t in ipairs(candidates) do
+                if t:find("Belt %(") then return t end
+            end
+            for _, t in ipairs(candidates) do
+                if t:find("Belt") then return t end
+            end
+            if #candidates > 0 then return candidates[1] end
         end
-        if not text then
-            for _, o in ipairs(tileObject:GetDescendants()) do
-                if o:IsA("TextLabel") and o.Text ~= "" then text = o.Text; break end
+
+        for _, o in ipairs(tileObject:GetDescendants()) do
+            if o:IsA("TextLabel") and o.Text and o.Text:find("Belt") then
+                return o.Text
             end
         end
-        if not text then return nil end
-        local clean = text
-        local ci = clean:find(",")
-        if ci then clean = clean:sub(1, ci - 1) end
-        clean = clean:gsub("%s+$", "")
-        return clean
+
+        return nil
     end
 
     local collected, collectedList = {}, {}
@@ -246,43 +260,53 @@ local function doBeltScan()
             if child:IsA("ImageButton") and child.Name:sub(1,5) == "Tile-" then
                 if not collected[child.Name] then
                     collected[child.Name] = true
-                    local t = extractTileText(child)
+                    local t = extractBeltText(child)
                     if t then table.insert(collectedList, t) end
                 end
             end
         end
     end
 
-    if scrollingFrame then
-        local canvasAbsoluteY = scrollingFrame.AbsoluteCanvasSize.Y
-        local windowAbsoluteY = scrollingFrame.AbsoluteSize.Y
-        scrollingFrame.CanvasPosition = Vector2.new(0, 0)
-        task.wait(SCROLL_INITIAL_WAIT)
+    scrollingFrame.CanvasPosition = Vector2.new(0, 0)
+    task.wait(1.0)
+    collectVisible()
+
+    local safety = 0
+    while safety < 300 do
+        local canvasY = scrollingFrame.AbsoluteCanvasSize.Y
+        local windowY = scrollingFrame.AbsoluteSize.Y
+        local maxY = math.max(0, canvasY - windowY)
+        local curY = scrollingFrame.CanvasPosition.Y
+        if curY >= maxY then break end
+        local nextY = math.min(curY + 200, maxY)
+        scrollingFrame.CanvasPosition = Vector2.new(0, nextY)
+        task.wait(0.2)
         collectVisible()
-        local maxScrollY = math.max(0, canvasAbsoluteY - windowAbsoluteY)
-        local currentY, safety, maxIter = 0, 0, 1000
-        while currentY < maxScrollY and safety < maxIter do
-            currentY = math.min(currentY + SCROLL_STEP_PIXELS, maxScrollY)
-            scrollingFrame.CanvasPosition = Vector2.new(0, currentY)
-            task.wait(SCROLL_WAIT_TIME)
-            collectVisible()
-            safety += 1
-        end
-        scrollingFrame.CanvasPosition = Vector2.new(0, maxScrollY)
-        task.wait(SCROLL_FINAL_WAIT)
-        collectVisible()
-    else
+        safety += 1
+    end
+
+    do
+        local canvasY = scrollingFrame.AbsoluteCanvasSize.Y
+        local windowY = scrollingFrame.AbsoluteSize.Y
+        local maxY = math.max(0, canvasY - windowY)
+        scrollingFrame.CanvasPosition = Vector2.new(0, maxY)
+        task.wait(1.0)
         collectVisible()
     end
 
+    print("[BeltScan] тайлов: " .. #collectedList)
+    for i, t in ipairs(collectedList) do
+        print("  [" .. i .. "] " .. t)
+    end
+
     local highestBelt, highestIdx = nil, 0
-    for _, text in ipairs(collectedList) do
-        local bp = text:find("Belt %(")
+    for _, t in ipairs(collectedList) do
+        local bp = t:find("Belt %(")
         if bp then
             local sp = bp + 6
-            local ep = text:find(")", sp)
+            local ep = t:find(")", sp)
             if ep then
-                local color = text:sub(sp, ep - 1)
+                local color = t:sub(sp, ep - 1)
                 for i, oc in ipairs(BELT_ORDER) do
                     if color == oc and i > highestIdx then
                         highestIdx = i; highestBelt = color; break
@@ -293,7 +317,7 @@ local function doBeltScan()
     end
 
     local result = highestBelt or "None"
-    print("[BeltScan] результат: " .. result .. " (тайлов: " .. #collectedList .. ")")
+    print("[BeltScan] результат: " .. result)
     return result
 end
 
@@ -591,21 +615,17 @@ end
 
 -- ============================================================
 -- HOLD 6,1 + DEBUGGER
--- Ждём смены пояса (White → Yellow). Каждые HOLD_CHECK_INTERVAL
--- проверяем реальное состояние 6,1 и перезапускаем при провале.
 -- ============================================================
 local function runHoldSixOne()
     local modeAtStart = State.currentBelt
     print("[Mode:Hold6,1] старт, пояс = " .. modeAtStart)
 
-    -- Первичное включение
     pcall(function() setOption(TAB_MAIN, OPT_MAIN, true) end)
 
     local failStreak = 0
     local checkCount = 0
 
     while State.running do
-        -- Пояс сменился — выходим, диспетчер примет решение
         if State.currentBelt ~= modeAtStart then
             print("[Mode:Hold6,1] пояс сменился на " .. State.currentBelt)
             return
@@ -613,17 +633,14 @@ local function runHoldSixOne()
 
         checkCount += 1
 
-        -- DEBUGGER: проверяем состояние и выправляем
         local state = getOptionState(TAB_MAIN, OPT_MAIN)
         local ok
         if state == true then
             ok = true
         elseif state == false then
-            -- Реально выключен — включаем
             print("[Mode:Hold6,1] debugger: 6,1 выключен, включаю")
             ok = setOption(TAB_MAIN, OPT_MAIN, true)
         else
-            -- Не удалось определить состояние — пробуем включить вслепую
             print("[Mode:Hold6,1] debugger: state=nil, пробую setOption(true)")
             ok = setOption(TAB_MAIN, OPT_MAIN, true)
         end
@@ -637,11 +654,9 @@ local function runHoldSixOne()
             failStreak += 1
             warn("[Mode:Hold6,1] debugger: провал #" .. failStreak)
 
-            -- 3 фейла подряд — вкладка 6 сильно глючит, даём ей "отдышаться"
             if failStreak >= 3 then
                 warn("[Mode:Hold6,1] debugger: 3 провала — пауза 15с")
                 task.wait(15)
-                -- Пробуем ещё раз с нуля (переход на главную вкладку, затем на 6)
                 local root = getRoot()
                 if root then
                     local anyTab = findTab(root, 1)
@@ -651,7 +666,6 @@ local function runHoldSixOne()
             end
         end
 
-        -- Каждые ~5 минут пишем статус в лог
         if checkCount % 10 == 0 then
             print("[Mode:Hold6,1] статус: belt=" .. State.currentBelt .. " 6,1 ok=" .. tostring(ok))
         end
@@ -1347,16 +1361,13 @@ while State.running do
     if belt == "Yellow" and not State.tradeDone then
         runTradeMode()
     elseif not State.nobeltDone then
-        -- Первый проход: пока не сделан nobelt
         if belt == "None" then
             runNoBeltMode()
         else
-            -- White/Orange/... но nobelt ещё не сделан — делаем его
             print("[Main] nobelt ещё не сделан, запускаю")
             runNoBeltMode()
         end
     else
-        -- nobelt сделан: держим 6,1 и ждём Yellow
         runHoldSixOne()
     end
     task.wait(3)
