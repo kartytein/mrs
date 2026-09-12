@@ -4,12 +4,13 @@
 -- ============================================================
 local BLACKLIST = {
     "DorisVelasquez14332",
-    "НикВрага1",
+    "EdwardThornton360",
+    "НикВрага2",
 }
 
 local BELT_SCAN_INTERVAL = 30
 local HOLD_CHECK_INTERVAL = 30
-local SERVER_URL         = "http://192.168.31.89:8000"
+local SERVER_URL         = "http://192.168.1.100:8000"
 local BELT_ORDER         = {"White","Yellow","Orange","Green","Blue","Purple","Red","Black"}
 
 local SCROLL_STEP_PIXELS  = 10
@@ -121,12 +122,6 @@ local function findInventoryButtonByName(buttonName)
     return nil
 end
 
-local function findCategory3()
-    local c3 = findObjectByPath(playerGui, "Inventory","Inventory","Main","NavigationRail","Category3")
-    if c3 then return c3 end
-    return findInventoryButtonByName("Category3")
-end
-
 -- ============================================================
 -- БЛЭКЛИСТ
 -- ============================================================
@@ -175,132 +170,114 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- БЕЛТ-СКАНЕР
+-- БЕЛТ-СКАНЕР (как collectInventory из трейда, но Category3)
 -- ============================================================
-local function doBeltScan()
-    local category3 = findCategory3()
-    if not category3 then
-        local menuButton = waitForHudButton("Menu", 10)
-        if not menuButton then warn("[BeltScan] HUD Menu не найдена"); return nil end
-        fireSequence(menuButton); task.wait(1.5)
-
-        local itemsButton = waitForHudButton("Items", 10)
-        if not itemsButton then warn("[BeltScan] HUD Items не найдена"); return nil end
-        fireSequence(itemsButton); task.wait(1.5)
-
-        category3 = waitForObjectByPath({"Inventory","Inventory","Main","NavigationRail","Category3"}, 5)
-        if not category3 then category3 = findInventoryButtonByName("Category3") end
-        if not category3 then warn("[BeltScan] Category3 не найдена"); return nil end
-    end
-
-    fireSequence(category3); task.wait(1.5)
-
-    local tileGrid, scrollingFrame
-    for _ = 1, 20 do
-        tileGrid = waitForObjectByPath({"Inventory","Inventory","Main","PageContent","TileGrid"}, 2)
-        if not tileGrid then
-            local inv = playerGui:FindFirstChild("Inventory")
-            if inv then tileGrid = inv:FindFirstChild("TileGrid", true) end
-        end
-        if tileGrid then
-            local o = tileGrid
-            while o do
-                if o:IsA("ScrollingFrame") then scrollingFrame = o; break end
-                o = o.Parent
+-- Извлечение "Dojo Belt (Color)" из тайла (по аналогии с extractTileInfo)
+local function extractBeltFromTile(tileObject)
+    local details = tileObject:FindFirstChild("Details")
+    if details then
+        -- сначала ищем строку с "Belt ("
+        for _, o in ipairs(details:GetDescendants()) do
+            if o:IsA("TextLabel") and o.Text and o.Text:find("Belt %(") then
+                return o.Text
             end
         end
-        if tileGrid and scrollingFrame and scrollingFrame.AbsoluteSize.Y > 0 then break end
-        task.wait(0.5)
-    end
-    if not tileGrid then warn("[BeltScan] TileGrid не найден"); return nil end
-    if not scrollingFrame then warn("[BeltScan] ScrollingFrame не найден"); return nil end
-
-    local function extractBeltText(tileObject)
-        local details = tileObject:FindFirstChild("Details")
-
-        if details then
-            local candidates = {}
-            for _, lineName in ipairs({"Line-1","Line-2","Line-3","Line-4"}) do
-                local line = details:FindFirstChild(lineName)
-                if line and line:IsA("TextLabel") and line.Text and line.Text ~= "" then
-                    table.insert(candidates, line.Text)
-                end
-            end
-            for _, o in ipairs(details:GetDescendants()) do
-                if o:IsA("TextLabel") and o.Text and o.Text ~= "" then
-                    local dup = false
-                    for _, c in ipairs(candidates) do
-                        if c == o.Text then dup = true; break end
-                    end
-                    if not dup then table.insert(candidates, o.Text) end
-                end
-            end
-
-            for _, t in ipairs(candidates) do
-                if t:find("Belt %(") then return t end
-            end
-            for _, t in ipairs(candidates) do
-                if t:find("Belt") then return t end
-            end
-            if #candidates > 0 then return candidates[1] end
-        end
-
-        for _, o in ipairs(tileObject:GetDescendants()) do
+        -- fallback — любая строка с "Belt"
+        for _, o in ipairs(details:GetDescendants()) do
             if o:IsA("TextLabel") and o.Text and o.Text:find("Belt") then
                 return o.Text
             end
         end
+    end
+    for _, o in ipairs(tileObject:GetDescendants()) do
+        if o:IsA("TextLabel") and o.Text and o.Text:find("Belt %(") then
+            return o.Text
+        end
+    end
+    return nil
+end
 
-        return nil
+-- Полностью повторяет логику collectInventory из трейда, но:
+--   Category2 → Category3
+--   сбор fruits → сбор belt-строк
+local function doBeltScan()
+    print("[BeltScan] старт")
+
+    -- 1. Menu
+    local menuButton = waitForHudButton("Menu", 10)
+    if not menuButton then warn("[BeltScan] HUD Menu не найдена"); return nil end
+    fireSequence(menuButton); task.wait(1.5)
+
+    -- 2. Items
+    local itemsButton = waitForHudButton("Items", 10)
+    if not itemsButton then warn("[BeltScan] HUD Items не найдена"); return nil end
+    fireSequence(itemsButton); task.wait(1.5)
+
+    -- 3. Category3 (тот же путь, что у Category2 в collectInventory, но цифра 3)
+    local category3 = waitForObjectByPath({"Inventory","Inventory","Main","NavigationRail","Category3"}, 5)
+    if not category3 then category3 = findInventoryButtonByName("Category3") end
+    if not category3 then warn("[BeltScan] Category3 не найдена"); return nil end
+    fireSequence(category3); task.wait(SCROLL_INITIAL_WAIT)
+
+    -- 4. TileGrid
+    local tileGrid = waitForObjectByPath({"Inventory","Inventory","Main","PageContent","TileGrid"}, 5)
+    if not tileGrid then
+        local inv = playerGui:FindFirstChild("Inventory")
+        if inv then tileGrid = inv:FindFirstChild("TileGrid", true) end
+    end
+    if not tileGrid then warn("[BeltScan] TileGrid не найден"); return nil end
+
+    local scrollingFrame = nil
+    local obj = tileGrid
+    while obj do
+        if obj:IsA("ScrollingFrame") then scrollingFrame = obj; break end
+        obj = obj.Parent
     end
 
-    local collected, collectedList = {}, {}
+    -- 5. Сбор тайлов (как collectVisible в collectInventory)
+    local collected, beltList = {}, {}
     local function collectVisible()
         for _, child in ipairs(tileGrid:GetDescendants()) do
             if child:IsA("ImageButton") and child.Name:sub(1,5) == "Tile-" then
                 if not collected[child.Name] then
                     collected[child.Name] = true
-                    local t = extractBeltText(child)
-                    if t then table.insert(collectedList, t) end
+                    local t = extractBeltFromTile(child)
+                    if t then table.insert(beltList, t) end
                 end
             end
         end
     end
 
-    scrollingFrame.CanvasPosition = Vector2.new(0, 0)
-    task.wait(1.0)
-    collectVisible()
-
-    local safety = 0
-    while safety < 300 do
-        local canvasY = scrollingFrame.AbsoluteCanvasSize.Y
-        local windowY = scrollingFrame.AbsoluteSize.Y
-        local maxY = math.max(0, canvasY - windowY)
-        local curY = scrollingFrame.CanvasPosition.Y
-        if curY >= maxY then break end
-        local nextY = math.min(curY + SCROLL_STEP_PIXELS, maxY)
-        scrollingFrame.CanvasPosition = Vector2.new(0, nextY)
-        task.wait(SCROLL_WAIT_TIME)
+    if scrollingFrame then
+        local cy = scrollingFrame.AbsoluteCanvasSize.Y
+        local wy = scrollingFrame.AbsoluteSize.Y
+        scrollingFrame.CanvasPosition = Vector2.new(0, 0)
+        task.wait(SCROLL_INITIAL_WAIT)
         collectVisible()
-        safety += 1
-    end
-
-    do
-        local canvasY = scrollingFrame.AbsoluteCanvasSize.Y
-        local windowY = scrollingFrame.AbsoluteSize.Y
-        local maxY = math.max(0, canvasY - windowY)
+        local maxY = math.max(0, cy - wy)
+        local y, s = 0, 0
+        while y < maxY and s < 1000 do
+            y = math.min(y + SCROLL_STEP_PIXELS, maxY)
+            scrollingFrame.CanvasPosition = Vector2.new(0, y)
+            task.wait(SCROLL_WAIT_TIME)
+            collectVisible()
+            s += 1
+        end
         scrollingFrame.CanvasPosition = Vector2.new(0, maxY)
         task.wait(SCROLL_FINAL_WAIT)
         collectVisible()
+    else
+        collectVisible()
     end
 
-    print("[BeltScan] тайлов: " .. #collectedList)
-    for i, t in ipairs(collectedList) do
+    print("[BeltScan] тайлов: " .. #beltList)
+    for i, t in ipairs(beltList) do
         print("  [" .. i .. "] " .. t)
     end
 
+    -- 6. Парсим наивысший пояс
     local highestBelt, highestIdx = nil, 0
-    for _, t in ipairs(collectedList) do
+    for _, t in ipairs(beltList) do
         local bp = t:find("Belt %(")
         if bp then
             local sp = bp + 6
@@ -1336,7 +1313,6 @@ if State.currentBelt == "Unknown" then
 end
 print("[Main] belt = " .. State.currentBelt)
 
--- Blacklist на старте — только если пояс НЕ Yellow
 do
     if State.currentBelt ~= "Yellow" then
         local bad = getBlacklistedPlayer()
@@ -1351,7 +1327,6 @@ do
 end
 
 while State.running do
-    -- Blacklist в цикле: скипаем, если Yellow
     do
         if State.currentBelt ~= "Yellow" then
             local bad = getBlacklistedPlayer()
