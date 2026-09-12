@@ -4,7 +4,7 @@
 -- ============================================================
 local BLACKLIST = {
     "DorisVelasquez14332",
-    "EdwardThornton360",
+    "НикВрага1",
 }
 
 local BELT_SCAN_INTERVAL = 30
@@ -175,7 +175,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- БЕЛТ-СКАНЕР (v3: ищем "Belt (" в ОБЕИХ строках)
+-- БЕЛТ-СКАНЕР
 -- ============================================================
 local function doBeltScan()
     local category3 = findCategory3()
@@ -278,9 +278,9 @@ local function doBeltScan()
         local maxY = math.max(0, canvasY - windowY)
         local curY = scrollingFrame.CanvasPosition.Y
         if curY >= maxY then break end
-        local nextY = math.min(curY + 200, maxY)
+        local nextY = math.min(curY + SCROLL_STEP_PIXELS, maxY)
         scrollingFrame.CanvasPosition = Vector2.new(0, nextY)
-        task.wait(0.2)
+        task.wait(SCROLL_WAIT_TIME)
         collectVisible()
         safety += 1
     end
@@ -290,7 +290,7 @@ local function doBeltScan()
         local windowY = scrollingFrame.AbsoluteSize.Y
         local maxY = math.max(0, canvasY - windowY)
         scrollingFrame.CanvasPosition = Vector2.new(0, maxY)
-        task.wait(1.0)
+        task.wait(SCROLL_FINAL_WAIT)
         collectVisible()
     end
 
@@ -1336,22 +1336,30 @@ if State.currentBelt == "Unknown" then
 end
 print("[Main] belt = " .. State.currentBelt)
 
+-- Blacklist на старте — только если пояс НЕ Yellow
 do
-    local bad = getBlacklistedPlayer()
-    if bad then
-        print("[Blacklist] найден " .. bad .. " — hop")
-        serverHop()
-        return
-    end
-end
-
-while State.running do
-    do
+    if State.currentBelt ~= "Yellow" then
         local bad = getBlacklistedPlayer()
         if bad then
             print("[Blacklist] найден " .. bad .. " — hop")
             serverHop()
             return
+        end
+    else
+        print("[Blacklist] пояс Yellow — blacklist игнорируется")
+    end
+end
+
+while State.running do
+    -- Blacklist в цикле: скипаем, если Yellow
+    do
+        if State.currentBelt ~= "Yellow" then
+            local bad = getBlacklistedPlayer()
+            if bad then
+                print("[Blacklist] найден " .. bad .. " — hop")
+                serverHop()
+                return
+            end
         end
     end
 
