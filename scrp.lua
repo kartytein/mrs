@@ -654,32 +654,179 @@ local function runTradeMode()
     State.beltScanPaused = true
     State.inTrade = true
 
-    -- ============================================================
-    -- ВАЖНО: 6,1 конфликтует с трейд-режимом — выключаем его СРАЗУ.
-    -- ============================================================
     LOG("Trade", "выключаю 6,1 (конфликтует с trade)")
-    local ok61 = setOption(TAB_MAIN, OPT_MAIN, false)
-    LOG("Trade", "6,1 off -> " .. tostring(ok61))
+    setOption(TAB_MAIN, OPT_MAIN, false)
     task.wait(0.5)
-    -- повторная проверка на случай провала
-    local st = getOptionState(TAB_MAIN, OPT_MAIN)
-    if st == true then
-        WARN("Trade", "6,1 всё ещё on, повторное выключение")
+    if getOptionState(TAB_MAIN, OPT_MAIN) == true then
+        WARN("Trade", "6,1 всё ещё on — повтор")
         setOption(TAB_MAIN, OPT_MAIN, false); task.wait(0.5)
     end
 
     local SEND_INVENTORY_INTERVAL = 20
     local CONFIG_POLL_INTERVAL    = 10
-    local MOVE_TIMEOUT            = 120
-    local ARRIVE_DISTANCE         = 6
-    local MOVE_SPEED              = 200
 
     local TELEPORT_TAB          = 19
     local TELEPORT_OPT_TEXT     = 2
     local TELEPORT_OPT_ACTIVATE = 3
-    local WAYPOINT_POSITION     = Vector3.new(-12549.7, 337.5, -7501.1)
 
     local collisionsDisabled = false
+
+    -- ============================================================
+    -- ПЕРЕМЕЩЕНИЕ: портировано из скрипта 9.35 (goTo / fastSitOnSeat)
+    -- ============================================================
+    local STEP = 10
+    local DELAY = 0.02
+    local TELEPORT_DISTANCE = 50
+
+    local function goTo(targetPos)
+        local char = player.Character
+        if not char then return false end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChild("Humanoid")
+        if not hrp or not hum then return false end
+
+        hum.PlatformStand = true
+        local lastLoggedDist = math.huge
+        local lastLogAt = tick()
+
+        while true do
+            char = player.Character
+            if not char then break end
+            hrp = char:FindFirstChild("HumanoidRootPart")
+            hum = char:FindFirstChild("Humanoid")
+            if not hrp or not hum then break end
+            if hum.Health <= 0 then
+                WARN("Move", "персонаж мёртв")
+                break
+            end
+            if hum.Sit then break end
+
+            -- BV всегда на HRP, обнулён
+            local existingBV = hrp:FindFirstChildOfClass("BodyVelocity")
+            if existingBV then
+                existingBV.Velocity = Vector3.zero
+                existingBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+            else
+                local bv = Instance.new("BodyVelocity")
+                bv.Velocity = Vector3.zero
+                bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                bv.Parent = hrp
+            end
+
+            -- Чистим конкурирующие body movers
+            for _, v in ipairs(hrp:GetChildren()) do
+                if v:IsA("BodyPosition") or v:IsA("BodyGyro") or v:IsA("AlignPosition") or v:IsA("AlignOrientation") then
+                    v:Destroy()
+                end
+            end
+
+            local currentPos = hrp.Position
+            local dist = (currentPos - targetPos).Magnitude
+            if dist < 1 then break end
+
+            if dist < TELEPORT_DISTANCE then
+                hrp.CFrame = CFrame.new(targetPos)
+                task.wait(DELAY)
+                if (hrp.Position - targetPos).Magnitude < 1 then break end
+            end
+
+            if currentPos.Y < targetPos.Y - 10 then
+                hrp.CFrame = CFrame.new(currentPos.X, targetPos.Y, currentPos.Z)
+                currentPos = hrp.Position
+            end
+
+            local dirVec = (targetPos - currentPos).Unit
+            local moveDist = math.min(STEP, dist)
+            local newPos = currentPos + dirVec * moveDist
+            newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z)
+            hrp.CFrame = CFrame.new(newPos)
+
+            if tick() - lastLogAt >= 2 then
+                lastLogAt = tick()
+                local d = (hrp.Position - targetPos).Magnitude
+                LOG("Move", string.format("dist=%.1f pos=(%.0f,%.0f,%.0f)", d, hrp.Position.X, hrp.Position.Y, hrp.Position.Z))
+            end
+
+            task.wait(DELAY)
+        end
+
+        -- финал: обнуляем PlatformStand + снимаем BV
+        if char and hrp and hum then
+            hrp.CFrame = CFrame.new(targetPos)
+            hum.PlatformStand = false
+            local bv = hrp:FindFirstChildOfClass("BodyVelocity")
+            if bv then bv:Destroy() end
+        end
+        return true
+    end
+
+    local function fastSitOnSeat(targetSeat, maxAttempts)
+        maxAttempts = maxAttempts or 3
+        for attempt = 1, maxAttempts do
+            local char = player.Character
+            if not char then return false end
+            local hum = char:FindFirstChild("Humanoid")
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if not hum or not hrp then return false end
+
+            if hum.Sit and hum.SeatPart == targetSeat then return true end
+
+            hum.PlatformStand = true
+            local bv = hrp:FindFirstChildOfClass("BodyVelocity")
+            if not bv then
+                bv = Instance.new("BodyVelocity")
+                bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                bv.Parent = hrp
+            end
+            bv.Velocity = Vector3.zero
+
+            local targetPos = targetSeat.Position + Vector3.new(0, 3.5, 0)
+            hrp.CFrame = CFrame.new(targetPos)
+            task.wait(0.05)
+
+            hum.Sit = true
+            task.wait(0.1)
+
+            if hum.Sit and hum.SeatPart == targetSeat then
+                bv:Destroy()
+                hum.PlatformStand = false
+                return true
+            else
+                bv:Destroy()
+                hum.Sit = false
+                hum.PlatformStand = false
+                task.wait(0.2)
+            end
+        end
+        return false
+    end
+
+    -- Обёртка: goTo к сиденью + посадка. Возвращает true если СЕЛ.
+    local function moveAndSitOnSeat(seat)
+        local sitTarget = seat.Position + Vector3.new(0, 3.5, 0)
+        LOG("Move", string.format("иду к seat (%.0f,%.0f,%.0f)", sitTarget.X, sitTarget.Y, sitTarget.Z))
+        goTo(sitTarget)
+        LOG("Move", "у цели, пробую сесть")
+        for i = 1, 5 do
+            if fastSitOnSeat(seat, 1) then
+                LOG("Move", "СЕЛ на seat, попытка " .. i)
+                return true
+            end
+            -- не сел — сдвигаемся и ещё раз
+            task.wait(0.3)
+            goTo(seat.Position + Vector3.new(0, 3.5, 0))
+        end
+        return false
+    end
+
+    local function findIsland()
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then
+                return obj
+            end
+        end
+        return nil
+    end
 
     local function selectTeam()
         pcall(function()
@@ -894,86 +1041,6 @@ local function runTradeMode()
         end
     end)
 
-    local function moveToPosition(target)
-        local tx, tz, ty = target.X, target.Z, target.Y + 3
-        local startTime = tick()
-        local lastLogAt = 0
-        local lastLoggedPos = nil
-        local lastLoggedTime = nil
-        LOG("Move", string.format("СТАРТ цель=(%.0f,%.0f,%.0f)", tx, ty, tz))
-
-        local antiCheatResets = 0
-        local iterations = 0
-
-        while tick() - startTime < MOVE_TIMEOUT do
-            iterations += 1
-            local c = player.Character
-            if not c then task.wait(0.03); continue end
-            local hrp = c:FindFirstChild("HumanoidRootPart")
-            local h = c:FindFirstChild("Humanoid")
-            if not hrp or not h then task.wait(0.03); continue end
-            if h.Health <= 0 then
-                WARN("Move", "персонаж мёртв")
-                return false
-            end
-            if h.Sit then
-                LOG("Move", string.format("СЕЛ, итераций=%d, откатов=%d", iterations, antiCheatResets))
-                return true
-            end
-
-            local cur = hrp.Position
-            local dx, dz = tx - cur.X, tz - cur.Z
-            local dist = math.sqrt(dx*dx + dz*dz)
-
-            if dist < ARRIVE_DISTANCE then
-                LOG("Move", string.format("ПРИБЫЛ dist=%.1f, итераций=%d, откатов=%d", dist, iterations, antiCheatResets))
-                pcall(function() h:MoveTo(Vector3.new(tx, cur.Y, tz)) end)
-                return true
-            end
-
-            if lastLoggedPos then
-                local prevDist = math.sqrt((tx - lastLoggedPos.X)^2 + (tz - lastLoggedPos.Z)^2)
-                if dist - prevDist > 20 then
-                    antiCheatResets += 1
-                    WARN("Move", string.format("ОТКАТ: dist %.1f -> %.1f (jump +%.1f)", prevDist, dist, dist - prevDist))
-                end
-            end
-            lastLoggedPos = cur
-
-            local stepSize = MOVE_SPEED * 0.016
-            local nx, nz = dx / math.max(dist, 0.001), dz / math.max(dist, 0.001)
-            local newX = cur.X + nx * stepSize
-            local newZ = cur.Z + nz * stepSize
-
-            pcall(function()
-                hrp.CFrame = CFrame.new(newX, ty, newZ)
-                hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-            end)
-
-            if tick() - lastLogAt >= 1 then
-                local now = tick()
-                local speed = 0
-                if lastLoggedTime then
-                    speed = (cur - (lastLoggedPos or cur)).Magnitude / math.max(now - lastLoggedTime, 0.001)
-                end
-                LOG("Move", string.format(
-                    "pos=(%.0f,%.0f,%.0f) dist=%.1f step=%.2f speed=%.1f state=%s ws=%.1f vel=%.1f откаты=%d",
-                    cur.X, cur.Y, cur.Z, dist, stepSize, speed,
-                    tostring(h:GetState()), h.WalkSpeed,
-                    hrp.AssemblyLinearVelocity.Magnitude, antiCheatResets
-                ))
-                lastLogAt = now
-                lastLoggedTime = now
-                lastLoggedPos = cur
-            end
-
-            RunService.Heartbeat:Wait()
-        end
-
-        WARN("Move", string.format("TIMEOUT (%.0fs), итераций=%d, откатов=%d", MOVE_TIMEOUT, iterations, antiCheatResets))
-        return false
-    end
-
     local function findTradeTable(expectedPartner)
         local tables = {}
         for _, obj in ipairs(Workspace:GetDescendants()) do
@@ -1016,19 +1083,6 @@ local function runTradeMode()
         return nil, nil
     end
 
-    local function waitForSeat(seat, t)
-        local w = 0
-        while w < t do
-            local c = player.Character
-            if c then
-                local h = c:FindFirstChild("Humanoid")
-                if h and h.Sit and h.SeatPart == seat then return true end
-            end
-            task.wait(0.5); w += 0.5
-        end
-        return false
-    end
-
     local function isSeated(seat)
         local c = player.Character
         if not c then return false end
@@ -1057,7 +1111,7 @@ local function runTradeMode()
         return nil
     end
 
-    local function resetSeatAndWait(seat, pos)
+    local function resetSeatAndWait(seat, sitTarget)
         while true do
             local c = player.Character
             if not c then return false end
@@ -1068,14 +1122,10 @@ local function runTradeMode()
             h.Jump = true; task.wait(0.2)
             for _ = 1, 5 do
                 if isSeated(seat) then return true end
-                local dir = math.random(1,2) == 1 and 1 or -1
-                local off = Vector3.new(dir * math.random(3,6), 0, 0)
-                h:MoveTo(pos + off); task.wait(0.3)
-                h:MoveTo(pos); task.wait(0.3)
-                for _ = 1, 5 do
-                    if isSeated(seat) then return true end
-                    task.wait(0.2)
-                end
+                goTo(sitTarget + Vector3.new(math.random(-6,6), 0, math.random(-6,6)))
+                goTo(sitTarget)
+                fastSitOnSeat(seat, 1)
+                task.wait(0.2)
             end
         end
     end
@@ -1253,45 +1303,41 @@ local function runTradeMode()
     processLoadFruit(config.load_fruit_items or {})
 
     collisionsDisabled = true
-    LOG("Trade", "иду к waypoint")
-    moveToPosition(WAYPOINT_POSITION)
     task.wait(1)
 
     local done = false
     while not done and State.running do
         local tbl, seat = findTradeTable(config.partner_name or "")
-        if not tbl then task.wait(5); continue end
-        local pos = seat.Position
+        if not tbl then
+            LOG("Trade", "нет стола, ждём 5с")
+            task.wait(5); continue
+        end
+        local sitTarget = seat.Position + Vector3.new(0, 3.5, 0)
+        LOG("Trade", string.format("стол найден, seat=(%.0f,%.0f,%.0f)", sitTarget.X, sitTarget.Y, sitTarget.Z))
 
-        LOG("Trade", string.format("стол найден, иду к seat (%.0f,%.0f,%.0f)", pos.X, pos.Y, pos.Z))
-        if not moveToPosition(pos) then task.wait(2); continue end
-        do
-            local c = player.Character
-            if c then
-                local h = c:FindFirstChild("Humanoid")
-                if h and not h.Sit then pcall(function() h:MoveTo(pos) end) end
-            end
+        if not moveAndSitOnSeat(seat) then
+            WARN("Trade", "не сел, пробуем другой стол")
+            task.wait(2); continue
         end
-        if not waitForSeat(seat, 30) then
-            if not resetSeatAndWait(seat, pos) then task.wait(2); continue end
-        end
+        LOG("Trade", "СИЖУ НА СТУЛЕ")
 
         while not done and State.running do
             if not isSeated(seat) then
-                if not resetSeatAndWait(seat, pos) then break end
+                LOG("Trade", "слетел — пересаживаюсь")
+                if not resetSeatAndWait(seat, sitTarget) then break end
             end
             local pn = getPartnerName(tbl, seat)
             local ep = config.partner_name or ""
             if pn == nil then task.wait(1)
             elseif ep ~= "" and pn ~= ep then
-                if not resetSeatAndWait(seat, pos) then break end
+                if not resetSeatAndWait(seat, sitTarget) then break end
             else
                 local ok = true
                 for _, item in ipairs(config.trade_items or {}) do
                     if not isSeated(seat) or not processItem(item) then ok = false; break end
                 end
                 if not ok then
-                    if not resetSeatAndWait(seat, pos) then break end
+                    if not resetSeatAndWait(seat, sitTarget) then break end
                 else
                     if acceptAndWait(config.load_fruit_items or {}, seat) then
                         pcall(function()
@@ -1301,7 +1347,7 @@ local function runTradeMode()
                         done = true
                         break
                     else
-                        if not resetSeatAndWait(seat, pos) then break end
+                        if not resetSeatAndWait(seat, sitTarget) then break end
                     end
                 end
             end
@@ -1334,9 +1380,8 @@ while State.running do
 
     local belt = State.currentBelt
     if belt == "Yellow" and not State.tradeDone then
-        -- НАШ ФИКС: перед трейдом явно выключаем 6,1
         if getOptionState(TAB_MAIN, OPT_MAIN) == true then
-            LOG("Main", "Yellow belt — выключаю 6,1 перед трейдом")
+            LOG("Main", "Yellow — выключаю 6,1 перед трейдом")
             setOption(TAB_MAIN, OPT_MAIN, false)
             task.wait(0.5)
         end
