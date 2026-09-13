@@ -3,19 +3,32 @@
 -- КОНФИГ
 -- ============================================================
 local BLACKLIST = {
-    "PhilipHenry11750",
     "EdwardThornton360",
+    "DorisVelasquez14332",
 }
 
-local BELT_SCAN_INTERVAL   = 30
-local YELLOW_WHITE_TIMEOUT = 30 * 60
-local SERVER_URL           = "http://192.168.31.89:8000"
-local BELT_ORDER           = {"White","Yellow","Orange","Green","Blue","Purple","Red","Black"}
+local BELT_SCAN_INTERVAL = 30
+local HOLD_CHECK_INTERVAL = 30
+local SERVER_URL         = "http://192.168.31.89:8000"
+local BELT_ORDER         = {"White","Yellow","Orange","Green","Blue","Purple","Red","Black"}
 
-local SCROLL_STEP_PIXELS  = 300
+local SCROLL_STEP_PIXELS  = 10
 local SCROLL_WAIT_TIME    = 0.15
 local SCROLL_INITIAL_WAIT = 0.5
 local SCROLL_FINAL_WAIT   = 1.0
+
+-- ============================================================
+-- ЛОГГЕР
+-- ============================================================
+local T0 = tick()
+local function LOG(tag, msg)
+    local dt = tick() - T0
+    print(string.format("[%7.2fs][%s] %s", dt, tag, msg))
+end
+local function WARN(tag, msg)
+    local dt = tick() - T0
+    warn(string.format("[%7.2fs][%s] %s", dt, tag, msg))
+end
 
 -- ============================================================
 -- СЕРВИСЫ И СОСТОЯНИЕ
@@ -34,6 +47,8 @@ local State = {
     beltChangedAt   = tick(),
     beltScanPaused  = false,
     running         = true,
+    nobeltDone      = false,
+    tradeDone       = false,
 }
 
 -- ============================================================
@@ -92,19 +107,28 @@ local function waitForHudButton(buttonName, timeout)
     local waited = 0
     while waited < timeout do
         local btn = findHudButtonByName(buttonName)
-        if btn then return btn end
+        if btn then
+            LOG("HUD", "найдена кнопка " .. buttonName .. " за " .. waited .. "с")
+            return btn
+        end
         task.wait(0.5); waited += 0.5
     end
+    WARN("HUD", "кнопка " .. buttonName .. " НЕ найдена за " .. timeout .. "с")
     return nil
 end
 
 local function waitForObjectByPath(pathTable, timeout)
     local waited = 0
+    local pathStr = table.concat(pathTable, ".")
     while waited < timeout do
         local obj = findObjectByPath(playerGui, table.unpack(pathTable))
-        if obj then return obj end
+        if obj then
+            LOG("Path", "найден " .. pathStr .. " за " .. waited .. "с")
+            return obj
+        end
         task.wait(0.5); waited += 0.5
     end
+    WARN("Path", "НЕ найден " .. pathStr .. " за " .. timeout .. "с")
     return nil
 end
 
@@ -117,13 +141,6 @@ local function findInventoryButtonByName(buttonName)
         end
     end
     return nil
-end
-
--- Category3 присутствует в дереве (значит инвентарь уже открыт)
-local function findCategory3()
-    local c3 = findObjectByPath(playerGui, "Inventory","Inventory","Main","NavigationRail","Category3")
-    if c3 then return c3 end
-    return findInventoryButtonByName("Category3")
 end
 
 -- ============================================================
@@ -150,7 +167,7 @@ local function sanitizeBlacklist(list)
 end
 
 BLACKLIST = sanitizeBlacklist(BLACKLIST)
-print("[Blacklist] " .. #BLACKLIST .. " записей (me: " .. player.Name .. ")")
+LOG("Blacklist", #BLACKLIST .. " записей после чистки (me: " .. player.Name .. ")")
 
 local function getBlacklistedPlayer()
     for _, plr in ipairs(Players:GetPlayers()) do
@@ -167,6 +184,7 @@ end
 -- ============================================================
 -- ЗАГРУЗКА ХАБА
 -- ============================================================
+LOG("Hub", "загружаю хаб...")
 task.spawn(function()
     pcall(function()
         loadstring(game:HttpGet("https://raw.githubusercontent.com/Omgshit/Scripts/main/MainLoader.lua"))()
@@ -175,41 +193,63 @@ end)
 
 -- ============================================================
 -- БЕЛТ-СКАНЕР
--- Логика: если Category3 уже в дереве → сразу скроллим.
---         если нет → Menu → Items → Category3 → скролл.
 -- ============================================================
-local function doBeltScan()
-    print("[BeltScan] старт скана")
-
-    local category3 = findCategory3()
-
-    if not category3 then
-        -- инвентарь не открыт — открываем
-        print("[BeltScan] Category3 нет, открываю инвентарь...")
-
-        local menuButton = waitForHudButton("Menu", 10)
-        if not menuButton then warn("[BeltScan] HUD Menu не найдена"); return nil end
-        fireSequence(menuButton); task.wait(1.5)
-
-        local itemsButton = waitForHudButton("Items", 10)
-        if not itemsButton then warn("[BeltScan] HUD Items не найдена"); return nil end
-        fireSequence(itemsButton); task.wait(1.5)
-
-        category3 = waitForObjectByPath({"Inventory","Inventory","Main","NavigationRail","Category3"}, 5)
-        if not category3 then category3 = findInventoryButtonByName("Category3") end
-        if not category3 then warn("[BeltScan] Category3 не найдена"); return nil end
-    else
-        print("[BeltScan] Category3 уже открыта, пропускаю Menu/Items")
+local function extractBeltFromTile(tileObject)
+    local details = tileObject:FindFirstChild("Details")
+    if details then
+        for _, o in ipairs(details:GetDescendants()) do
+            if o:IsA("TextLabel") and o.Text and o.Text:find("Belt %(") then
+                return o.Text
+            end
+        end
+        for _, o in ipairs(details:GetDescendants()) do
+            if o:IsA("TextLabel") and o.Text and o.Text:find("Belt") then
+                return o.Text
+            end
+        end
     end
+    for _, o in ipairs(tileObject:GetDescendants()) do
+        if o:IsA("TextLabel") and o.Text and o.Text:find("Belt %(") then
+            return o.Text
+        end
+    end
+    return nil
+end
 
+local function doBeltScan()
+    LOG("BeltScan", ">>> старт скана")
+
+    local menuButton = waitForHudButton("Menu", 10)
+    if not menuButton then WARN("BeltScan", "нет Menu — стоп"); return nil end
+    LOG("BeltScan", "клик Menu")
+    fireSequence(menuButton); task.wait(1.5)
+
+    local itemsButton = waitForHudButton("Items", 10)
+    if not itemsButton then WARN("BeltScan", "нет Items — стоп"); return nil end
+    LOG("BeltScan", "клик Items")
+    fireSequence(itemsButton); task.wait(1.5)
+
+    LOG("BeltScan", "ищу Category3...")
+    local category3 = waitForObjectByPath({"Inventory","Inventory","Main","NavigationRail","Category3"}, 5)
+    if not category3 then
+        LOG("BeltScan", "fallback: findInventoryButtonByName(Category3)")
+        category3 = findInventoryButtonByName("Category3")
+    end
+    if not category3 then WARN("BeltScan", "нет Category3 — стоп"); return nil end
+    LOG("BeltScan", "клик Category3: " .. category3:GetFullName())
     fireSequence(category3); task.wait(SCROLL_INITIAL_WAIT)
 
+    LOG("BeltScan", "ищу TileGrid...")
     local tileGrid = waitForObjectByPath({"Inventory","Inventory","Main","PageContent","TileGrid"}, 5)
     if not tileGrid then
         local inv = playerGui:FindFirstChild("Inventory")
-        if inv then tileGrid = inv:FindFirstChild("TileGrid", true) end
+        if inv then
+            LOG("BeltScan", "fallback: глубокий поиск TileGrid в Inventory")
+            tileGrid = inv:FindFirstChild("TileGrid", true)
+        end
     end
-    if not tileGrid then warn("[BeltScan] TileGrid не найден"); return nil end
+    if not tileGrid then WARN("BeltScan", "нет TileGrid — стоп"); return nil end
+    LOG("BeltScan", "TileGrid: " .. tileGrid:GetFullName())
 
     local scrollingFrame = nil
     local obj = tileGrid
@@ -217,79 +257,69 @@ local function doBeltScan()
         if obj:IsA("ScrollingFrame") then scrollingFrame = obj; break end
         obj = obj.Parent
     end
+    if not scrollingFrame then WARN("BeltScan", "нет ScrollingFrame — стоп"); return nil end
+    LOG("BeltScan", "ScrollingFrame: " .. scrollingFrame:GetFullName())
 
-    local function extractTileText(tileObject)
-        local details = tileObject:FindFirstChild("Details")
-        local text = nil
-        if details then
-            local l1 = details:FindFirstChild("Line-1")
-            if l1 and l1:IsA("TextLabel") and l1.Text ~= "" then text = l1.Text end
-            if not text then
-                local l2 = details:FindFirstChild("Line-2")
-                if l2 and l2:IsA("TextLabel") and l2.Text ~= "" then text = l2.Text end
-            end
-            if not text then
-                for _, o in ipairs(details:GetDescendants()) do
-                    if o:IsA("TextLabel") and o.Text ~= "" then text = o.Text; break end
-                end
-            end
-        end
-        if not text then
-            for _, o in ipairs(tileObject:GetDescendants()) do
-                if o:IsA("TextLabel") and o.Text ~= "" then text = o.Text; break end
-            end
-        end
-        if not text then return nil end
-        local clean = text
-        local ci = clean:find(",")
-        if ci then clean = clean:sub(1, ci - 1) end
-        clean = clean:gsub("%s+$", "")
-        return clean
-    end
-
-    local collected, collectedList = {}, {}
+    local collected, beltList = {}, {}
     local function collectVisible()
+        local newFound = 0
         for _, child in ipairs(tileGrid:GetDescendants()) do
             if child:IsA("ImageButton") and child.Name:sub(1,5) == "Tile-" then
                 if not collected[child.Name] then
                     collected[child.Name] = true
-                    local t = extractTileText(child)
-                    if t then table.insert(collectedList, t) end
+                    local t = extractBeltFromTile(child)
+                    if t then
+                        table.insert(beltList, t)
+                        newFound += 1
+                    end
                 end
             end
         end
+        return newFound
     end
 
     if scrollingFrame then
-        local canvasAbsoluteY = scrollingFrame.AbsoluteCanvasSize.Y
-        local windowAbsoluteY = scrollingFrame.AbsoluteSize.Y
+        local cy = scrollingFrame.AbsoluteCanvasSize.Y
+        local wy = scrollingFrame.AbsoluteSize.Y
+        LOG("BeltScan", "CanvasSize.Y=" .. cy .. "  WindowY=" .. wy .. "  max=" .. (cy - wy))
         scrollingFrame.CanvasPosition = Vector2.new(0, 0)
         task.wait(SCROLL_INITIAL_WAIT)
-        collectVisible()
-        local maxScrollY = math.max(0, canvasAbsoluteY - windowAbsoluteY)
-        local currentY, safety, maxIter = 0, 0, 1000
-        while currentY < maxScrollY and safety < maxIter do
-            currentY = math.min(currentY + SCROLL_STEP_PIXELS, maxScrollY)
-            scrollingFrame.CanvasPosition = Vector2.new(0, currentY)
+        local nf = collectVisible()
+        LOG("BeltScan", "стартовый сбор: " .. nf .. " новых, всего " .. #beltList)
+
+        local maxY = math.max(0, cy - wy)
+        local y, s = 0, 0
+        while y < maxY and s < 1000 do
+            y = math.min(y + SCROLL_STEP_PIXELS, maxY)
+            scrollingFrame.CanvasPosition = Vector2.new(0, y)
             task.wait(SCROLL_WAIT_TIME)
-            collectVisible()
-            safety += 1
+            local newF = collectVisible()
+            if newF > 0 then
+                LOG("BeltScan", "scroll y=" .. y .. " +" .. newF .. " тайлов")
+            end
+            s += 1
         end
-        scrollingFrame.CanvasPosition = Vector2.new(0, maxScrollY)
+        scrollingFrame.CanvasPosition = Vector2.new(0, maxY)
         task.wait(SCROLL_FINAL_WAIT)
         collectVisible()
+        LOG("BeltScan", "скролл завершён, итераций: " .. s)
     else
         collectVisible()
     end
 
+    LOG("BeltScan", "всего тайлов: " .. #beltList)
+    for i, t in ipairs(beltList) do
+        LOG("BeltScan", "  [" .. i .. "] " .. t)
+    end
+
     local highestBelt, highestIdx = nil, 0
-    for _, text in ipairs(collectedList) do
-        local bp = text:find("Belt %(")
+    for _, t in ipairs(beltList) do
+        local bp = t:find("Belt %(")
         if bp then
             local sp = bp + 6
-            local ep = text:find(")", sp)
+            local ep = t:find(")", sp)
             if ep then
-                local color = text:sub(sp, ep - 1)
+                local color = t:sub(sp, ep - 1)
                 for i, oc in ipairs(BELT_ORDER) do
                     if color == oc and i > highestIdx then
                         highestIdx = i; highestBelt = color; break
@@ -300,34 +330,43 @@ local function doBeltScan()
     end
 
     local result = highestBelt or "None"
-    print("[BeltScan] результат: " .. result .. " (тайлов: " .. #collectedList .. ")")
+    LOG("BeltScan", "<<< результат: " .. result)
     return result
 end
 
--- Фоновый поток сканера
 task.spawn(function()
+    LOG("BeltScan", "поток сканера запущен, ждём персонажа...")
     if not player.Character then player.CharacterAdded:Wait() end
+    LOG("BeltScan", "персонаж есть")
+
     local w = 0
     while not findHudButtonByName("Menu") and w < 90 do task.wait(1); w += 1 end
     if not findHudButtonByName("Menu") then
-        warn("[BeltScan] HUD Menu не появилась за 90с"); return
+        WARN("BeltScan", "HUD Menu не появилась за 90с — выходим")
+        return
     end
+    LOG("BeltScan", "HUD Menu найдена через " .. w .. "с")
     task.wait(3)
 
+    local iter = 0
     while State.running do
+        iter += 1
         if not State.beltScanPaused then
+            LOG("BeltScan", "итерация #" .. iter)
             local ok, belt = pcall(doBeltScan)
             if not ok then
-                warn("[BeltScan] ошибка: " .. tostring(belt))
+                WARN("BeltScan", "ошибка: " .. tostring(belt))
             elseif belt then
                 if belt ~= State.currentBelt then
+                    LOG("BeltScan", "НОВЫЙ РЕЖИМ: " .. State.currentBelt .. " -> " .. belt)
                     State.currentBelt   = belt
                     State.beltChangedAt = tick()
-                    print("[BeltScan] новый режим: " .. belt)
                 else
-                    State.beltChangedAt = tick()
+                    LOG("BeltScan", "режим тот же: " .. belt)
                 end
             end
+        else
+            LOG("BeltScan", "итерация #" .. iter .. " пропущена (paused)")
         end
         task.wait(BELT_SCAN_INTERVAL)
     end
@@ -337,6 +376,7 @@ end)
 -- СЕРВЕР-ХОП
 -- ============================================================
 local function serverHop()
+    LOG("Hop", "=== старт сервер-хопа ===")
     local function findSB()
         local tb = playerGui:FindFirstChild("Topbar")
         if tb then
@@ -349,7 +389,8 @@ local function serverHop()
     local w = 0
     while not findSB() and w < 15 do task.wait(0.5); w += 0.5 end
     local sb = findSB()
-    if not sb then warn("[Hop] ServerBrowserButton не найдена"); return false end
+    if not sb then WARN("Hop", "ServerBrowserButton не найдена"); return false end
+    LOG("Hop", "клик ServerBrowserButton")
     fireSequence(sb); task.wait(1)
 
     local function findJoin()
@@ -363,18 +404,20 @@ local function serverHop()
 
     w = 0
     while not findJoin() and w < 20 do task.wait(0.5); w += 0.5 end
-    if not findJoin() then warn("[Hop] Join не найдена"); return false end
+    if not findJoin() then WARN("Hop", "Join не найдена"); return false end
+    LOG("Hop", "кнопка Join появилась за " .. w .. "с")
 
     local sBrowser = playerGui:FindFirstChild("ServerBrowser")
-    if not sBrowser then return false end
+    if not sBrowser then WARN("Hop", "нет ServerBrowser"); return false end
     local f = sBrowser:FindFirstChild("Frame")
-    if not f then return false end
+    if not f then WARN("Hop", "нет Frame"); return false end
     local sf = f:FindFirstChild("ScrollingFrame")
-    if not sf then return false end
+    if not sf then WARN("Hop", "нет ScrollingFrame"); return false end
 
     local cY = sf.CanvasSize.Y
     local maxY = (typeof(cY) == "UDim") and cY.Offset or cY
     local dur = math.random(1, 10)
+    LOG("Hop", "скролл " .. dur .. "с, max=" .. maxY)
     local y, t0 = 0, tick()
     sf.CanvasPosition = Vector2.new(0, 0)
     task.wait(0.2)
@@ -394,14 +437,15 @@ local function serverHop()
         end
     end
     collect(sBrowser)
-    if #btns == 0 then warn("[Hop] нет кнопок Join"); return false end
+    LOG("Hop", "найдено кнопок Join: " .. #btns)
+    if #btns == 0 then WARN("Hop", "нет кнопок Join"); return false end
     fireSequence(btns[math.random(1, #btns)])
-    print("[Hop] нажали Join")
+    LOG("Hop", "нажали Join, ожидаем телепорт...")
     return true
 end
 
 -- ============================================================
--- ХАБ: опции 6,1 / 2,4
+-- ХАБ: опции
 -- ============================================================
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
@@ -493,32 +537,55 @@ local function waitForOptions(expectedMin, timeout)
     return false
 end
 
+local function getOptionState(tabIndex, optIndex)
+    local root = getRoot()
+    if not root then return nil end
+    local tb = findTab(root, tabIndex)
+    if not tb then return nil end
+    fireSequence(tb)
+    if not waitForOptions(optIndex, 8) then return nil end
+    local opt = findOption(root, optIndex)
+    if not opt then return nil end
+    local ind = findIndicatorFrame(opt)
+    if not ind then return nil end
+    local col = tostring(ind.BackgroundColor3)
+    if col == COLOR_ON then return true end
+    if col == COLOR_OFF then return false end
+    return nil
+end
+
 local function setOption(tabIndex, optIndex, wantOn)
     local root = getRoot()
-    if not root then return false end
+    if not root then LOG("Opt", "setOption("..tabIndex..","..optIndex..","..tostring(wantOn)..") нет root"); return false end
     local tb = findTab(root, tabIndex)
-    if not tb then return false end
+    if not tb then LOG("Opt", "нет таба "..tabIndex); return false end
     fireSequence(tb)
-    if not waitForOptions(optIndex, 8) then return false end
+    if not waitForOptions(optIndex, 8) then LOG("Opt", "опции не прогрузились"); return false end
 
     local opt = findOption(root, optIndex)
-    if not opt then return false end
+    if not opt then LOG("Opt", "нет опции "..optIndex); return false end
     local ind = findIndicatorFrame(opt)
-    if not ind then return false end
+    if not ind then LOG("Opt", "нет индикатора"); return false end
     local isOn = (tostring(ind.BackgroundColor3) == COLOR_ON)
-    if isOn == wantOn then return true end
+    if isOn == wantOn then
+        return true
+    end
 
+    LOG("Opt", "клик ("..tabIndex..","..optIndex..") -> "..tostring(wantOn))
     fireSequence(opt); task.wait(0.2)
-    for _ = 1, 5 do
+    for i = 1, 5 do
         local i2 = findIndicatorFrame(opt)
-        if i2 and (tostring(i2.BackgroundColor3) == COLOR_ON) == wantOn then return true end
+        if i2 and (tostring(i2.BackgroundColor3) == COLOR_ON) == wantOn then
+            return true
+        end
         fireSequence(opt); task.wait(0.25)
     end
+    WARN("Opt", "не удалось переключить ("..tabIndex..","..optIndex..") на "..tostring(wantOn))
     return false
 end
 
 -- ============================================================
--- РЕЖИМ "NO BELT"
+-- NO BELT
 -- ============================================================
 local function hasDragonTalon()
     local pg = player:FindFirstChild("PlayerGui")
@@ -549,74 +616,135 @@ local function getMastery()
 end
 
 local function runNoBeltMode()
-    print("[Mode:NoBelt] START")
+    LOG("NoBelt", "=== START ===")
+    LOG("NoBelt", "belt=" .. State.currentBelt)
+
+    LOG("NoBelt", "фаза 1: ждём dragon talon")
     local guard, guardT = 0, tick()
     while not hasDragonTalon() and State.running and State.currentBelt == "None" do
         setOption(TAB_MAIN, OPT_MAIN, true); task.wait(2); guard += 1
-        if guard % 15 == 0 and tick() - guardT > 120 then
-            warn("[Mode:NoBelt] dragon talon долго нет"); guardT = tick()
+        if guard % 15 == 0 then
+            LOG("NoBelt", "ожидание talon, guard=" .. guard)
+            guardT = tick()
         end
     end
-    if State.currentBelt ~= "None" then print("[Mode:NoBelt] belt сменился, выходим"); return end
-    print("[Mode:NoBelt] dragon talon OK")
+    if State.currentBelt ~= "None" then
+        LOG("NoBelt", "belt сменился на " .. State.currentBelt .. " — выход")
+        return
+    end
+    LOG("NoBelt", "dragon talon OK")
 
+    LOG("NoBelt", "фаза 2: ждём остров")
     while not isOnIsland() and State.running and State.currentBelt == "None" do
         setOption(TAB_MAIN, OPT_MAIN, true); task.wait(2)
     end
-    if State.currentBelt ~= "None" then return end
-    print("[Mode:NoBelt] на острове")
+    if State.currentBelt ~= "None" then
+        LOG("NoBelt", "belt сменился — выход")
+        return
+    end
+    LOG("NoBelt", "на острове")
 
+    LOG("NoBelt", "фаза 3: 6,1 off; 2,4 on")
     setOption(TAB_MAIN, OPT_MAIN, false); task.wait(0.5)
     setOption(2, 4, true)
 
+    LOG("NoBelt", "фаза 4: ждём mastery > 500")
+    local lastM = -1
     while State.running and State.currentBelt == "None" do
         task.wait(2)
-        if (getMastery() or 0) > 500 then break end
+        local m = getMastery() or 0
+        if m ~= lastM then
+            LOG("NoBelt", "mastery=" .. m)
+            lastM = m
+        end
+        if m > 500 then break end
     end
-    if State.currentBelt ~= "None" then return end
+    if State.currentBelt ~= "None" then
+        LOG("NoBelt", "belt сменился — выход")
+        return
+    end
 
+    LOG("NoBelt", "фаза 5: 2,4 off; 6,1 on")
     setOption(2, 4, false); task.wait(0.5)
     setOption(TAB_MAIN, OPT_MAIN, true)
-    print("[Mode:NoBelt] DONE")
+    LOG("NoBelt", "=== DONE ===")
+    State.nobeltDone = true
 end
 
 -- ============================================================
--- РЕЖИМ "YELLOW/WHITE"
+-- HOLD 6,1
 -- ============================================================
-local function runYellowWhiteMode()
-    print("[Mode:YellowWhite] включаю 6,1")
+local function runHoldSixOne()
+    local modeAtStart = State.currentBelt
+    LOG("Hold", "=== START === belt=" .. modeAtStart)
+
     pcall(function() setOption(TAB_MAIN, OPT_MAIN, true) end)
 
-    local modeAtStart = State.currentBelt
+    local failStreak = 0
+    local checkCount = 0
+
     while State.running do
         if State.currentBelt ~= modeAtStart then
-            print("[Mode:YellowWhite] пояс сменился: " .. State.currentBelt)
+            LOG("Hold", "belt сменился: " .. modeAtStart .. " -> " .. State.currentBelt .. " — выход")
             return
         end
-        if tick() - State.beltChangedAt > YELLOW_WHITE_TIMEOUT then
-            print("[Mode:YellowWhite] пояс не обновлялся — hop")
-            serverHop()
-            State.running = false
-            return
+
+        checkCount += 1
+        LOG("Hold", "проверка #" .. checkCount)
+
+        local state = getOptionState(TAB_MAIN, OPT_MAIN)
+        local ok
+        if state == true then
+            ok = true
+        elseif state == false then
+            LOG("Hold", "6,1 выключен — включаю")
+            ok = setOption(TAB_MAIN, OPT_MAIN, true)
+        else
+            LOG("Hold", "state=nil — пробую включить")
+            ok = setOption(TAB_MAIN, OPT_MAIN, true)
         end
-        pcall(function() setOption(TAB_MAIN, OPT_MAIN, true) end)
-        task.wait(60)
+
+        if ok then
+            if failStreak > 0 then
+                LOG("Hold", "восстановлен после " .. failStreak .. " провалов")
+            end
+            failStreak = 0
+        else
+            failStreak += 1
+            WARN("Hold", "провал #" .. failStreak)
+            if failStreak >= 3 then
+                WARN("Hold", "3 провала — пауза 15с")
+                task.wait(15)
+                local root = getRoot()
+                if root then
+                    local anyTab = findTab(root, 1)
+                    if anyTab then fireSequence(anyTab); task.wait(1) end
+                end
+                failStreak = 0
+            end
+        end
+
+        if checkCount % 10 == 0 then
+            LOG("Hold", "статус: belt=" .. State.currentBelt .. " 6,1 ok=" .. tostring(ok))
+        end
+
+        task.wait(HOLD_CHECK_INTERVAL)
     end
 end
 
 -- ============================================================
--- РЕЖИМ "ORANGE" — трейд
+-- ТРЕЙД
 -- ============================================================
-local function runOrangeMode()
-    print("[Mode:Orange] START")
+local function runTradeMode()
+    LOG("Trade", "=== START ===")
     State.beltScanPaused = true
+    LOG("Trade", "сканер пояса на паузе")
 
     local SEND_INVENTORY_INTERVAL = 20
     local CONFIG_POLL_INTERVAL    = 10
     local MOVE_TIMEOUT            = 60
     local ARRIVE_DISTANCE         = 6
     local MOVE_SPEED              = 80
-    local SPEED_Y                 = -2
 
     local TELEPORT_TAB          = 19
     local TELEPORT_OPT_TEXT     = 2
@@ -626,6 +754,7 @@ local function runOrangeMode()
     local collisionsDisabled = false
 
     local function selectTeam()
+        LOG("Trade", "SetTeam Marines")
         pcall(function()
             ReplicatedStorage.Remotes.CommF_:InvokeServer("SetTeam", "Marines")
         end)
@@ -663,21 +792,22 @@ local function runOrangeMode()
     end
 
     local function collectInventory()
+        LOG("Inv", "открываю Menu/Items/Category2")
         local menuButton = waitForHudButton("Menu", 10)
-        if not menuButton then return {} end
+        if not menuButton then WARN("Inv", "нет Menu"); return {} end
         fireSequence(menuButton); task.wait(1.5)
 
         local itemsButton = waitForHudButton("Items", 10)
-        if not itemsButton then return {} end
+        if not itemsButton then WARN("Inv", "нет Items"); return {} end
         fireSequence(itemsButton); task.wait(1.5)
 
         local category2 = waitForObjectByPath({"Inventory","Inventory","Main","NavigationRail","Category2"}, 5)
         if not category2 then category2 = findInventoryButtonByName("Category2") end
-        if not category2 then return {} end
+        if not category2 then WARN("Inv", "нет Category2"); return {} end
         fireSequence(category2); task.wait(SCROLL_INITIAL_WAIT)
 
         local tileGrid = waitForObjectByPath({"Inventory","Inventory","Main","PageContent","TileGrid"}, 5)
-        if not tileGrid then return {} end
+        if not tileGrid then WARN("Inv", "нет TileGrid"); return {} end
 
         local scrollingFrame = nil
         local obj = tileGrid
@@ -724,7 +854,7 @@ local function runOrangeMode()
         table.sort(list, function(a,b) return a.Number < b.Number end)
         local fruits = {}
         for _, t in ipairs(list) do if t.Text ~= "" then table.insert(fruits, t.Text) end end
-        print("[Inventory] собрано: " .. #fruits)
+        LOG("Inv", "собрано: " .. #fruits)
         return fruits
     end
 
@@ -732,14 +862,17 @@ local function runOrangeMode()
         local url = SERVER_URL .. "/send_inventory?nickname=" .. HttpService:UrlEncode(player.Name)
             .. "&fruits=" .. HttpService:UrlEncode(table.concat(fruits, ","))
             .. "&job_id=" .. HttpService:UrlEncode(game.JobId)
-        pcall(function() return game:HttpGet(url) end)
+        local ok, err = pcall(function() return game:HttpGet(url) end)
+        if ok then LOG("HTTP", "send_inventory OK")
+        else WARN("HTTP", "send_inventory err: " .. tostring(err)) end
     end
 
     local function fetchConfig()
         local url = SERVER_URL .. "/get_config?nickname=" .. HttpService:UrlEncode(player.Name)
         local ok, response = pcall(function() return game:HttpGet(url) end)
         if not ok then return nil end
-        local data = HttpService:JSONDecode(response)
+        local ok2, data = pcall(function() return HttpService:JSONDecode(response) end)
+        if not ok2 then return nil end
         if data and data.partner_name then return data end
         return nil
     end
@@ -773,6 +906,7 @@ local function runOrangeMode()
     local function processLoadFruit(items)
         if #items == 0 then return true end
         for _, item in ipairs(items) do
+            LOG("Fruit", "load " .. item)
             invokeLoadFruit(formatItemName(item))
             respawn(); waitRespawn(); task.wait(1)
         end
@@ -807,11 +941,12 @@ local function runOrangeMode()
     end
 
     local function teleportToJobId(jobId)
+        LOG("TP", "телепорт на " .. jobId)
         local root = getRoot() if not root then return false end
         local ts = safeFind(root, "Window","Components","TabsScroll")
         if not ts then return false end
         local tb = findNthTabButton(ts, TELEPORT_TAB)
-        if not tb then return false end
+        if not tb then WARN("TP", "нет таба " .. TELEPORT_TAB); return false end
         fireSequence(tb); task.wait(0.5)
         local cont = safeFind(root, "Window","Components","Containers","Container")
         if not cont then return false end
@@ -851,72 +986,63 @@ local function runOrangeMode()
         end
     end)
 
+    -- ============================================================
+    -- moveToPosition: CFrame каждый кадр
+    -- ============================================================
     local function moveToPosition(target)
         local tx, tz, ty = target.X, target.Z, target.Y + 3
-        local character = player.Character or player.CharacterAdded:Wait()
-        local rootPart = character:WaitForChild("HumanoidRootPart")
-        local upper = character:FindFirstChild("UpperTorso")
-        if not upper then return false end
+        local startTime = tick()
+        local lastLog = 0
+        local startPos = nil
+        LOG("Move", "старт, цель X=" .. math.floor(tx) .. " Y=" .. math.floor(ty) .. " Z=" .. math.floor(tz))
 
-        local oldBV = upper:FindFirstChildOfClass("BodyVelocity")
-        if oldBV then oldBV:Destroy() end
-
-        local mv = Instance.new("BodyVelocity")
-        mv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        mv.Parent = upper
-
-        local p = rootPart.Position
-        if math.abs(p.Y - ty) > 0.5 then rootPart.CFrame = CFrame.new(p.X, ty, p.Z) end
-
-        local isMoving = true
-        local stuckT = task.spawn(function()
-            local last, stuck = rootPart.Position, 0
-            while isMoving do
-                task.wait(1)
-                local c = player.Character
-                if not c then break end
-                local hrp = c:FindFirstChild("HumanoidRootPart")
-                local h = c:FindFirstChild("Humanoid")
-                if not hrp or not h then break end
-                local moved = (hrp.Position - last).Magnitude
-                local toT = (Vector3.new(tx, ty, tz) - hrp.Position).Magnitude
-                if toT < ARRIVE_DISTANCE or h.Sit then break end
-                if moved < 1 then
-                    stuck += 1
-                    if stuck >= 2 then pcall(function() h.Jump = true end); stuck = 0 end
-                else stuck = 0 end
-                last = hrp.Position
-            end
-        end)
-
-        local w = 0
-        while w < MOVE_TIMEOUT do
+        while tick() - startTime < MOVE_TIMEOUT do
             local c = player.Character
-            if not c then break end
+            if not c then
+                LOG("Move", "нет персонажа, ждём")
+                task.wait(0.05); continue
+            end
             local hrp = c:FindFirstChild("HumanoidRootPart")
             local h = c:FindFirstChild("Humanoid")
-            if not hrp or not h or h.Health <= 0 then break end
-            if h.Sit then
-                isMoving = false; if mv then mv:Destroy() end
-                task.cancel(stuckT); return true
+            if not hrp or not h or h.Health <= 0 then
+                task.wait(0.05); continue
             end
+
+            if h.Sit then
+                LOG("Move", "сел, выходим")
+                return true
+            end
+
             local cur = hrp.Position
+            if not startPos then startPos = cur end
             local dx, dz = tx - cur.X, tz - cur.Z
             local dist = math.sqrt(dx*dx + dz*dz)
+
             if dist < ARRIVE_DISTANCE then
-                isMoving = false; if mv then mv:Destroy() end
-                task.cancel(stuckT)
+                LOG("Move", "прибыл, dist=" .. string.format("%.1f", dist))
                 pcall(function() h:MoveTo(Vector3.new(tx, cur.Y, tz)) end)
                 return true
             end
+
+            local step = math.min(MOVE_SPEED * 0.05, dist)
             local nx, nz = dx / math.max(dist, 0.001), dz / math.max(dist, 0.001)
-            mv.Velocity = Vector3.new(nx * MOVE_SPEED, SPEED_Y, nz * MOVE_SPEED)
-            local pp = hrp.Position
-            if math.abs(pp.Y - ty) > 0.5 then hrp.CFrame = CFrame.new(pp.X, ty, pp.Z) end
-            task.wait(0.05); w += 0.05
+            local newX = cur.X + nx * step
+            local newZ = cur.Z + nz * step
+
+            pcall(function()
+                hrp.CFrame = CFrame.new(newX, ty, newZ)
+                hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            end)
+
+            if tick() - lastLog >= 1 then
+                lastLog = tick()
+                LOG("Move", string.format("pos=(%.0f,%.0f,%.0f) dist=%.1f", cur.X, cur.Y, cur.Z, dist))
+            end
+
+            task.wait(0.05)
         end
-        isMoving = false; if mv then mv:Destroy() end
-        task.cancel(stuckT)
+
+        WARN("Move", "TIMEOUT, не дошли")
         return false
     end
 
@@ -925,6 +1051,7 @@ local function runOrangeMode()
         for _, obj in ipairs(Workspace:GetDescendants()) do
             if obj:IsA("Model") and obj.Name == "TradeTable" then table.insert(tables, obj) end
         end
+        LOG("Table", "всего TradeTable: " .. #tables)
         local free, partial, partner = {}, {}, {}
         for _, tbl in ipairs(tables) do
             local seats = {}
@@ -956,6 +1083,7 @@ local function runOrangeMode()
                 end
             end
         end
+        LOG("Table", "free=" .. #free .. " partial=" .. #partial .. " partner=" .. #partner)
         if #partner > 0 then return partner[1].tbl, partner[1].seat end
         if #free > 0 then return free[1].tbl, free[1].seat end
         if #partial > 0 then return partial[1].tbl, partial[1].seat end
@@ -1106,24 +1234,26 @@ local function runOrangeMode()
     end
 
     local function processItem(search)
-        if findResultElement(search) then return true end
-        for _ = 1, MAX_ATTEMPTS_PER_ITEM do
+        LOG("Item", "добавляю '" .. search .. "'")
+        if findResultElement(search) then LOG("Item", "уже добавлен"); return true end
+        for att = 1, MAX_ATTEMPTS_PER_ITEM do
             local ab = findObjectByPath(playerGui, table.unpack(addBtnPath))
-            if not ab then task.wait(2); continue end
+            if not ab then LOG("Item", "попытка "..att..": нет AddButton"); task.wait(2); continue end
             fireSequence(ab)
             local fc = waitForObject(firstContPath, 5)
-            if not fc then task.wait(2); continue end
+            if not fc then LOG("Item", "попытка "..att..": нет firstContainer"); task.wait(2); continue end
             local te = findTextInContainer(fc, search)
-            if not te then task.wait(2); continue end
+            if not te then LOG("Item", "попытка "..att..": не найден текст"); task.wait(2); continue end
             local btn = findParentButton(te)
-            if not btn then task.wait(2); continue end
+            if not btn then LOG("Item", "попытка "..att..": нет кнопки"); task.wait(2); continue end
             fireSequence(btn)
             local w = 0
             while w < RESULT_TIMEOUT do
                 task.wait(0.5); w += 0.5
-                if findResultElement(search) then return true end
+                if findResultElement(search) then LOG("Item", "OK"); return true end
             end
         end
+        WARN("Item", "провал '" .. search .. "'")
         return false
     end
 
@@ -1140,18 +1270,26 @@ local function runOrangeMode()
 
     local function acceptAndWait(items, seat)
         if not isSeated(seat) then return false end
-        if not waitPreAccept(items, seat) then return false end
+        if not waitPreAccept(items, seat) then
+            LOG("Accept", "preaccept не выполнены")
+            return false
+        end
         local ab = findObjectByPath(playerGui, table.unpack(acceptPath))
         if not ab then return false end
+        LOG("Accept", "жму Accept")
         fireSequence(ab)
         local w = 0
         local r1 = findObjectByPath(playerGui, table.unpack(ready1Path))
         while w < READY_TIMEOUT do
             task.wait(0.5); w += 0.5
-            if not isSeated(seat) then return false end
+            if not isSeated(seat) then
+                LOG("Accept", "слетел со стула"); return false
+            end
             if isTradeCompleted() then return true end
             if r1 and r1:IsA("TextLabel") then
-                if r1.Text == "Not ready." or r1.Text ~= "Ready!" then return false end
+                if r1.Text == "Not ready." or r1.Text ~= "Ready!" then
+                    LOG("Accept", "ready1.Text=" .. r1.Text); return false
+                end
             end
         end
         return false
@@ -1163,6 +1301,7 @@ local function runOrangeMode()
     local att = 0
     while config == nil and State.running and att < 50 do
         att += 1
+        LOG("Config", "попытка #" .. att)
         local inv = collectInventory()
         if #inv > 0 then sendInventory(inv) else task.wait(SEND_INVENTORY_INTERVAL); continue end
         local w = 0
@@ -1174,12 +1313,15 @@ local function runOrangeMode()
         if not config then task.wait(SEND_INVENTORY_INTERVAL) end
     end
     if not config then
+        WARN("Trade", "не получили config — выход")
         State.beltScanPaused = false
         return
     end
+    LOG("Config", "получен: partner=" .. tostring(config.partner_name) .. " job=" .. tostring(config.teleport_to_job_id))
 
     local tele = config.teleport_to_job_id
     if tele and tele ~= "" and tele ~= game.JobId then
+        LOG("TP", "нужен телепорт на " .. tele .. " (сейчас " .. game.JobId .. ")")
         for _ = 1, 5 do
             if teleportToJobId(tele) then
                 local w = 0
@@ -1188,20 +1330,36 @@ local function runOrangeMode()
             end
             task.wait(2)
         end
-        if game.JobId ~= tele then State.beltScanPaused = false; return end
+        if game.JobId ~= tele then
+            WARN("Trade", "не удалось телепортнуться")
+            State.beltScanPaused = false
+            return
+        end
     end
 
     processLoadFruit(config.load_fruit_items or {})
 
     collisionsDisabled = true
-    moveToPosition(WAYPOINT_POSITION)
+    LOG("Trade", "коллизии выключены")
+
+    LOG("Trade", "иду к waypoint")
+    if not moveToPosition(WAYPOINT_POSITION) then
+        WARN("Trade", "waypoint не достигнут")
+    end
     task.wait(1)
 
     local done = false
+    local round = 0
     while not done and State.running do
+        round += 1
+        LOG("Trade", "раунд поиска стола #" .. round)
         local tbl, seat = findTradeTable(config.partner_name or "")
-        if not tbl then task.wait(5); continue end
+        if not tbl then
+            LOG("Trade", "нет стола, ждём 5с")
+            task.wait(5); continue
+        end
         local pos = seat.Position
+        LOG("Trade", "стол найден, seat=" .. seat:GetFullName())
 
         if not moveToPosition(pos) then task.wait(2); continue end
         do
@@ -1212,19 +1370,25 @@ local function runOrangeMode()
             end
         end
         if not waitForSeat(seat, 30) then
+            LOG("Trade", "не сел за 30с, ресет")
             if not resetSeatAndWait(seat, pos) then task.wait(2); continue end
         end
+        LOG("Trade", "сижу на стуле")
 
         while not done and State.running do
             if not isSeated(seat) then
+                LOG("Trade", "слетел со стула")
                 if not resetSeatAndWait(seat, pos) then break end
             end
             local pn = getPartnerName(tbl, seat)
             local ep = config.partner_name or ""
+            LOG("Trade", "партнёр сейчас: " .. tostring(pn) .. " | ждём: " .. ep)
+
             if pn == nil then task.wait(1)
             elseif ep ~= "" and pn ~= ep then
                 if not resetSeatAndWait(seat, pos) then break end
             else
+                LOG("Trade", "партнёр подходит, добавляю items")
                 local ok = true
                 for _, item in ipairs(config.trade_items or {}) do
                     if not isSeated(seat) or not processItem(item) then ok = false; break end
@@ -1233,8 +1397,9 @@ local function runOrangeMode()
                     if not resetSeatAndWait(seat, pos) then break end
                 else
                     if acceptAndWait(config.load_fruit_items or {}, seat) then
+                        LOG("Trade", "=== TRADE COMPLETED ===")
                         pcall(function()
-                            game:HttpGet(SERVER_URL .. "/trade_completed?nickname=" .. HttpService:UrlEncode(player.Name))
+                            game:HttpGet(SERVER_URL .. "/trade_completed?nickname=" .. HttpService.UrlEncode(player.Name))
                         end)
                         collisionsDisabled = false
                         done = true
@@ -1248,55 +1413,65 @@ local function runOrangeMode()
     end
 
     State.beltScanPaused = false
-    State.currentBelt = "Unknown"
-    task.wait(1)
+    State.tradeDone = true
+    LOG("Trade", "=== DONE ===")
 end
 
 -- ============================================================
 -- ГЛАВНЫЙ ДИСПЕТЧЕР
 -- ============================================================
-print("[Main] START | Blacklist: " .. #BLACKLIST .. " | Me: " .. player.Name)
+LOG("Main", "=== START === Blacklist: " .. #BLACKLIST .. " | Me: " .. player.Name)
 
-print("[Main] ждём первый скан пояса...")
+LOG("Main", "ждём первый скан пояса (макс 240с)...")
 local waitStart = tick()
 while State.currentBelt == "Unknown" and tick() - waitStart < 240 do task.wait(1) end
 if State.currentBelt == "Unknown" then
-    warn("[Main] пояс не определён за 240с")
+    WARN("Main", "пояс не определён за 240с — выход")
     return
 end
-print("[Main] belt = " .. State.currentBelt)
+LOG("Main", "belt = " .. State.currentBelt)
 
 do
-    local bad = getBlacklistedPlayer()
-    if bad then
-        print("[Blacklist] найден " .. bad .. " — hop")
-        serverHop()
-        return
+    if State.currentBelt ~= "Yellow" then
+        local bad = getBlacklistedPlayer()
+        if bad then
+            LOG("Main", "blacklist найден " .. bad .. " — hop")
+            serverHop()
+            return
+        end
+    else
+        LOG("Main", "пояс Yellow — blacklist игнорируется")
     end
 end
 
+local loop = 0
 while State.running do
+    loop += 1
+    LOG("Main", "---- цикл #" .. loop .. " ----")
     do
-        local bad = getBlacklistedPlayer()
-        if bad then
-            print("[Blacklist] найден " .. bad .. " — hop")
-            serverHop()
-            return
+        if State.currentBelt ~= "Yellow" then
+            local bad = getBlacklistedPlayer()
+            if bad then
+                LOG("Main", "blacklist найден " .. bad .. " — hop")
+                serverHop()
+                return
+            end
         end
     end
 
     local belt = State.currentBelt
-    print("[Main] mode = " .. belt)
+    LOG("Main", "belt=" .. belt .. " nobeltDone=" .. tostring(State.nobeltDone) .. " tradeDone=" .. tostring(State.tradeDone))
 
-    if belt == "Orange" then
-        runOrangeMode()
-    elseif belt == "Yellow" or belt == "White" then
-        runYellowWhiteMode()
-    elseif belt == "None" then
+    if belt == "Yellow" and not State.tradeDone then
+        LOG("Main", "-> runTradeMode")
+        runTradeMode()
+    elseif not State.nobeltDone then
+        LOG("Main", "-> runNoBeltMode")
         runNoBeltMode()
     else
-        print("[Main] режим " .. belt .. " не обрабатывается")
-        task.wait(30)
+        LOG("Main", "-> runHoldSixOne")
+        runHoldSixOne()
     end
+    LOG("Main", "выход из режима, следующий цикл через 3с")
     task.wait(3)
 end
