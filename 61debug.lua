@@ -9,7 +9,7 @@ local NOBELT_MASTERY_TIMEOUT= 60      -- сек без роста mastery в nob
 local STUCK_TIMEOUT         = 180     -- сек без движения → hop
 local STUCK_CHECK_INTERVAL  = 30
 local STUCK_MOVE_THRESHOLD  = 5       -- studs
-local SERVER_URL            = "http://192.168.1.100:8000"
+local SERVER_URL            = "http://192.168.31.89:8000"
 local BELT_ORDER            = {"White","Yellow","Orange","Green","Blue","Purple","Red","Black"}
 
 local SCROLL_STEP_PIXELS  = 10
