@@ -622,7 +622,10 @@ local function runHoldSixOne()
     local failStreak, checkCount = 0, 0
 
     while State.running do
-        if State.currentBelt ~= modeAtStart then return end
+        if State.currentBelt ~= modeAtStart then
+            LOG("Hold", "belt сменился: " .. modeAtStart .. " -> " .. State.currentBelt .. " — выход")
+            return
+        end
         if tick() - lastToggleAt > HOLD_TOGGLE_INTERVAL then
             setOption(TAB_MAIN, OPT_MAIN, false); task.wait(0.5)
             setOption(TAB_MAIN, OPT_MAIN, true)
@@ -651,11 +654,25 @@ local function runTradeMode()
     State.beltScanPaused = true
     State.inTrade = true
 
+    -- ============================================================
+    -- ВАЖНО: 6,1 конфликтует с трейд-режимом — выключаем его СРАЗУ.
+    -- ============================================================
+    LOG("Trade", "выключаю 6,1 (конфликтует с trade)")
+    local ok61 = setOption(TAB_MAIN, OPT_MAIN, false)
+    LOG("Trade", "6,1 off -> " .. tostring(ok61))
+    task.wait(0.5)
+    -- повторная проверка на случай провала
+    local st = getOptionState(TAB_MAIN, OPT_MAIN)
+    if st == true then
+        WARN("Trade", "6,1 всё ещё on, повторное выключение")
+        setOption(TAB_MAIN, OPT_MAIN, false); task.wait(0.5)
+    end
+
     local SEND_INVENTORY_INTERVAL = 20
     local CONFIG_POLL_INTERVAL    = 10
     local MOVE_TIMEOUT            = 120
     local ARRIVE_DISTANCE         = 6
-    local MOVE_SPEED              = 200      -- studs/sec
+    local MOVE_SPEED              = 200
 
     local TELEPORT_TAB          = 19
     local TELEPORT_OPT_TEXT     = 2
@@ -877,38 +894,30 @@ local function runTradeMode()
         end
     end)
 
-    -- ============================================================
-    -- moveToPosition с ПОДРОБНОЙ ДИАГНОСТИКОЙ
-    -- ============================================================
     local function moveToPosition(target)
         local tx, tz, ty = target.X, target.Z, target.Y + 3
         local startTime = tick()
         local lastLogAt = 0
         local lastLoggedPos = nil
         local lastLoggedTime = nil
-
         LOG("Move", string.format("СТАРТ цель=(%.0f,%.0f,%.0f)", tx, ty, tz))
 
         local antiCheatResets = 0
         local iterations = 0
-        local totalProgress = 0
 
         while tick() - startTime < MOVE_TIMEOUT do
             iterations += 1
-
             local c = player.Character
-            if not c then
-                task.wait(0.03); continue
-            end
+            if not c then task.wait(0.03); continue end
             local hrp = c:FindFirstChild("HumanoidRootPart")
             local h = c:FindFirstChild("Humanoid")
             if not hrp or not h then task.wait(0.03); continue end
             if h.Health <= 0 then
-                WARN("Move", "персонаж мёртв, выходим")
+                WARN("Move", "персонаж мёртв")
                 return false
             end
             if h.Sit then
-                LOG("Move", string.format("СЕЛ, итераций=%d, откатов=%d, дистанция=%d -> 0", iterations, antiCheatResets, math.floor(totalProgress)))
+                LOG("Move", string.format("СЕЛ, итераций=%d, откатов=%d", iterations, antiCheatResets))
                 return true
             end
 
@@ -922,18 +931,16 @@ local function runTradeMode()
                 return true
             end
 
-            -- проверка на откат античита: если расстояние до цели УВЕЛИЧИЛОСЬ на >20 studs с прошлого кадра
             if lastLoggedPos then
                 local prevDist = math.sqrt((tx - lastLoggedPos.X)^2 + (tz - lastLoggedPos.Z)^2)
                 if dist - prevDist > 20 then
                     antiCheatResets += 1
-                    WARN("Move", string.format("ОТКАТ античита: dist %.1f -> %.1f (jump +%.1f)", prevDist, dist, dist - prevDist))
+                    WARN("Move", string.format("ОТКАТ: dist %.1f -> %.1f (jump +%.1f)", prevDist, dist, dist - prevDist))
                 end
             end
             lastLoggedPos = cur
 
-            -- ставим CFrame ближе к цели
-            local stepSize = MOVE_SPEED * 0.016  -- ~1 кадр при 60fps
+            local stepSize = MOVE_SPEED * 0.016
             local nx, nz = dx / math.max(dist, 0.001), dz / math.max(dist, 0.001)
             local newX = cur.X + nx * stepSize
             local newZ = cur.Z + nz * stepSize
@@ -943,7 +950,6 @@ local function runTradeMode()
                 hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
             end)
 
-            -- лог раз в 1с
             if tick() - lastLogAt >= 1 then
                 local now = tick()
                 local speed = 0
@@ -951,15 +957,10 @@ local function runTradeMode()
                     speed = (cur - (lastLoggedPos or cur)).Magnitude / math.max(now - lastLoggedTime, 0.001)
                 end
                 LOG("Move", string.format(
-                    "pos=(%.0f,%.0f,%.0f) target=(%.0f,%.0f,%.0f) dist=%.1f step=%.2f speed=%.1f state=%s walkspeed=%.1f plat=%s vel=%.1f откаты=%d",
-                    cur.X, cur.Y, cur.Z,
-                    tx, ty, tz,
-                    dist, stepSize, speed,
-                    tostring(h:GetState()),
-                    h.WalkSpeed,
-                    tostring(h.PlatformStand),
-                    hrp.AssemblyLinearVelocity.Magnitude,
-                    antiCheatResets
+                    "pos=(%.0f,%.0f,%.0f) dist=%.1f step=%.2f speed=%.1f state=%s ws=%.1f vel=%.1f откаты=%d",
+                    cur.X, cur.Y, cur.Z, dist, stepSize, speed,
+                    tostring(h:GetState()), h.WalkSpeed,
+                    hrp.AssemblyLinearVelocity.Magnitude, antiCheatResets
                 ))
                 lastLogAt = now
                 lastLoggedTime = now
@@ -1333,6 +1334,12 @@ while State.running do
 
     local belt = State.currentBelt
     if belt == "Yellow" and not State.tradeDone then
+        -- НАШ ФИКС: перед трейдом явно выключаем 6,1
+        if getOptionState(TAB_MAIN, OPT_MAIN) == true then
+            LOG("Main", "Yellow belt — выключаю 6,1 перед трейдом")
+            setOption(TAB_MAIN, OPT_MAIN, false)
+            task.wait(0.5)
+        end
         runTradeMode()
     elseif not State.nobeltDone then
         runNoBeltMode()
