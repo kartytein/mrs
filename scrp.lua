@@ -671,11 +671,11 @@ local function runTradeMode()
     local collisionsDisabled = false
 
     -- ============================================================
-    -- ПЕРЕМЕЩЕНИЕ: goTo / fastSitOnSeat (медленные, безопасные)
+    -- ПЕРЕМЕЩЕНИЕ: goTo / fastSitOnSeat
     -- ============================================================
-    local STEP = 4              -- маленький шаг, античит не реагирует
-    local DELAY = 0.03          -- 33 шага/сек ≈ 130 studs/сек
-    local TELEPORT_DISTANCE = 12 -- телепорт только когда почти пришли
+    local STEP = 4
+    local DELAY = 0.03
+    local TELEPORT_DISTANCE = 12
 
     local function goTo(targetPos)
         local char = player.Character
@@ -1025,12 +1025,16 @@ local function runTradeMode()
         end
     end)
 
+    -- ============================================================
+    -- findTradeTable: отдаём ТОЛЬКО полностью свободные столы
+    -- или те, где сидит ИМЕННО наш партнёр. Чужих — игнорим.
+    -- ============================================================
     local function findTradeTable(expectedPartner)
         local tables = {}
         for _, obj in ipairs(Workspace:GetDescendants()) do
             if obj:IsA("Model") and obj.Name == "TradeTable" then table.insert(tables, obj) end
         end
-        local free, partial, partner = {}, {}, {}
+        local free, partner = {}, {}
         for _, tbl in ipairs(tables) do
             local seats = {}
             for _, part in ipairs(tbl:GetDescendants()) do
@@ -1054,16 +1058,15 @@ local function runTradeMode()
                             end
                         end
                     end
-                    local e = {tbl = tbl, seat = freeSeats[1], on = on}
                     if expectedPartner ~= "" and on == expectedPartner then
-                        table.insert(partner, e)
-                    else table.insert(partial, e) end
+                        table.insert(partner, {tbl = tbl, seat = freeSeats[1], on = on})
+                    end
+                    -- ЧУЖОЙ партнёр — стол игнорируется полностью
                 end
             end
         end
         if #partner > 0 then return partner[1].tbl, partner[1].seat end
         if #free > 0 then return free[1].tbl, free[1].seat end
-        if #partial > 0 then return partial[1].tbl, partial[1].seat end
         return nil, nil
     end
 
@@ -1236,8 +1239,16 @@ local function runTradeMode()
         local r1 = findObjectByPath(playerGui, table.unpack(ready1Path))
         while w < READY_TIMEOUT do
             task.wait(0.5); w += 0.5
-            if not isSeated(seat) then return false end
+            if not isSeated(seat) then
+                LOG("Accept", "вышел со стула — считаем завершено/провал")
+                return isTradeCompleted()
+            end
             if isTradeCompleted() then return true end
+            local tradeContainer = findObjectByPath(playerGui, "Main","Trade","Container")
+            if not tradeContainer and w > 2 then
+                LOG("Accept", "UI трейда пропал — считаем завершено")
+                return true
+            end
             if r1 and r1:IsA("TextLabel") then
                 if r1.Text == "Not ready." or r1.Text ~= "Ready!" then return false end
             end
@@ -1293,7 +1304,7 @@ local function runTradeMode()
     while not done and State.running do
         local tbl, seat = findTradeTable(config.partner_name or "")
         if not tbl then
-            LOG("Trade", "нет стола, ждём 5с")
+            LOG("Trade", "нет подходящего стола, ждём 5с")
             task.wait(5); continue
         end
         local sitTarget = seat.Position + Vector3.new(0, 3.5, 0)
@@ -1305,16 +1316,57 @@ local function runTradeMode()
         end
         LOG("Trade", "СИЖУ НА СТУЛЕ")
 
+        -- Хелпер: второй стул
+        local function getOtherSeat(tbl_, mySeat)
+            for _, part in ipairs(tbl_:GetDescendants()) do
+                if (part:IsA("Seat") or part:IsA("VehicleSeat")) and part ~= mySeat then
+                    return part
+                end
+            end
+            return nil
+        end
+
+        local otherSeat = getOtherSeat(tbl, seat)
+
         while not done and State.running do
             if not isSeated(seat) then
                 LOG("Trade", "слетел — пересаживаюсь")
                 if not resetSeatAndWait(seat, sitTarget) then break end
             end
+
+            -- КРИТИЧНО: мгновенно проверяем второго игрока
+            if otherSeat and otherSeat.Occupant then
+                local otherHum = otherSeat.Occupant
+                local otherChar = otherHum and otherHum.Parent
+                local otherPlr = otherChar and Players:GetPlayerFromCharacter(otherChar)
+                local ep = config.partner_name or ""
+                if otherPlr and otherPlr ~= player and ep ~= "" and otherPlr.Name ~= ep then
+                    LOG("Trade", "!!! ЧУЖОЙ партнёр " .. otherPlr.Name .. " — СРОЧНО валим")
+                    local c = player.Character
+                    if c then
+                        local h = c:FindFirstChild("Humanoid")
+                        if h then pcall(function() h.Sit = false end) end
+                    end
+                    task.wait(0.1)
+                    goTo(sitTarget + Vector3.new(0, 0, 40))
+                    break
+                end
+            end
+
             local pn = getPartnerName(tbl, seat)
             local ep = config.partner_name or ""
-            if pn == nil then task.wait(1)
+            if pn == nil then
+                task.wait(0.2)
             elseif ep ~= "" and pn ~= ep then
-                if not resetSeatAndWait(seat, sitTarget) then break end
+                LOG("Trade", "чужой партнёр через getPartnerName — валим")
+                local c = player.Character
+                if c then
+                    local h = c:FindFirstChild("Humanoid")
+                    if h then pcall(function() h.Sit = false end) end
+                end
+                task.wait(0.1)
+                goTo(sitTarget + Vector3.new(0, 0, 40))
+                break
             else
                 local ok = true
                 for _, item in ipairs(config.trade_items or {}) do
@@ -1324,6 +1376,17 @@ local function runTradeMode()
                     if not resetSeatAndWait(seat, sitTarget) then break end
                 else
                     if acceptAndWait(config.load_fruit_items or {}, seat) then
+                        LOG("Trade", "=== TRADE COMPLETED ===")
+
+                        -- СРАЗУ ВСТАЁМ, чтобы игра не запустила трейд заново
+                        local c = player.Character
+                        if c then
+                            local h = c:FindFirstChild("Humanoid")
+                            if h then pcall(function() h.Sit = false end) end
+                        end
+                        task.wait(0.15)
+                        pcall(function() goTo(sitTarget + Vector3.new(0, 0, 40)) end)
+
                         pcall(function()
                             game:HttpGet(SERVER_URL .. "/trade_completed?nickname=" .. HttpService:UrlEncode(player.Name))
                         end)
