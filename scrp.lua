@@ -36,7 +36,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService       = game:GetService("HttpService")
 local Workspace         = game:GetService("Workspace")
 local CoreGui           = game:GetService("CoreGui")
-local RunService        = game:GetService("RunService")
 
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -672,11 +671,11 @@ local function runTradeMode()
     local collisionsDisabled = false
 
     -- ============================================================
-    -- ПЕРЕМЕЩЕНИЕ: портировано из скрипта 9.35 (goTo / fastSitOnSeat)
+    -- ПЕРЕМЕЩЕНИЕ: goTo / fastSitOnSeat (медленные, безопасные)
     -- ============================================================
-    local STEP = 10
-    local DELAY = 0.02
-    local TELEPORT_DISTANCE = 50
+    local STEP = 4              -- маленький шаг, античит не реагирует
+    local DELAY = 0.03          -- 33 шага/сек ≈ 130 studs/сек
+    local TELEPORT_DISTANCE = 12 -- телепорт только когда почти пришли
 
     local function goTo(targetPos)
         local char = player.Character
@@ -686,7 +685,6 @@ local function runTradeMode()
         if not hrp or not hum then return false end
 
         hum.PlatformStand = true
-        local lastLoggedDist = math.huge
         local lastLogAt = tick()
 
         while true do
@@ -701,7 +699,6 @@ local function runTradeMode()
             end
             if hum.Sit then break end
 
-            -- BV всегда на HRP, обнулён
             local existingBV = hrp:FindFirstChildOfClass("BodyVelocity")
             if existingBV then
                 existingBV.Velocity = Vector3.zero
@@ -713,7 +710,6 @@ local function runTradeMode()
                 bv.Parent = hrp
             end
 
-            -- Чистим конкурирующие body movers
             for _, v in ipairs(hrp:GetChildren()) do
                 if v:IsA("BodyPosition") or v:IsA("BodyGyro") or v:IsA("AlignPosition") or v:IsA("AlignOrientation") then
                     v:Destroy()
@@ -744,13 +740,12 @@ local function runTradeMode()
             if tick() - lastLogAt >= 2 then
                 lastLogAt = tick()
                 local d = (hrp.Position - targetPos).Magnitude
-                LOG("Move", string.format("dist=%.1f pos=(%.0f,%.0f,%.0f)", d, hrp.Position.X, hrp.Position.Y, hrp.Position.Z))
+                LOG("Move", string.format("dist=%.1f", d))
             end
 
             task.wait(DELAY)
         end
 
-        -- финал: обнуляем PlatformStand + снимаем BV
         if char and hrp and hum then
             hrp.CFrame = CFrame.new(targetPos)
             hum.PlatformStand = false
@@ -801,7 +796,6 @@ local function runTradeMode()
         return false
     end
 
-    -- Обёртка: goTo к сиденью + посадка. Возвращает true если СЕЛ.
     local function moveAndSitOnSeat(seat)
         local sitTarget = seat.Position + Vector3.new(0, 3.5, 0)
         LOG("Move", string.format("иду к seat (%.0f,%.0f,%.0f)", sitTarget.X, sitTarget.Y, sitTarget.Z))
@@ -809,23 +803,13 @@ local function runTradeMode()
         LOG("Move", "у цели, пробую сесть")
         for i = 1, 5 do
             if fastSitOnSeat(seat, 1) then
-                LOG("Move", "СЕЛ на seat, попытка " .. i)
+                LOG("Move", "СЕЛ, попытка " .. i)
                 return true
             end
-            -- не сел — сдвигаемся и ещё раз
             task.wait(0.3)
             goTo(seat.Position + Vector3.new(0, 3.5, 0))
         end
         return false
-    end
-
-    local function findIsland()
-        for _, obj in ipairs(Workspace:GetDescendants()) do
-            if obj.Name and string.find(string.lower(obj.Name), "prehistoricisland") then
-                return obj
-            end
-        end
-        return nil
     end
 
     local function selectTeam()
