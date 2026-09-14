@@ -239,14 +239,14 @@ end
 
 local function doBeltScan()
     local category3 = ensureCategoryOpen("Category3")
-    if not category3 then WARN("BeltScan", "нет Category3"); return nil end
+    if not category3 then WARN("BeltScan", "нет Category3 — возврат nil"); return nil end
 
     local tileGrid = waitForObjectByPath({"Inventory","Inventory","Main","PageContent","TileGrid"}, 5)
     if not tileGrid then
         local inv = playerGui:FindFirstChild("Inventory")
         if inv then tileGrid = inv:FindFirstChild("TileGrid", true) end
     end
-    if not tileGrid then WARN("BeltScan", "нет TileGrid"); return nil end
+    if not tileGrid then WARN("BeltScan", "нет TileGrid — возврат nil"); return nil end
 
     local scrollingFrame = nil
     local obj = tileGrid
@@ -254,16 +254,22 @@ local function doBeltScan()
         if obj:IsA("ScrollingFrame") then scrollingFrame = obj; break end
         obj = obj.Parent
     end
-    if not scrollingFrame then WARN("BeltScan", "нет ScrollingFrame"); return nil end
+    if not scrollingFrame then WARN("BeltScan", "нет ScrollingFrame — возврат nil"); return nil end
 
     local beltList = scanTilesOnce(tileGrid, scrollingFrame)
     if #beltList == 0 then
+        LOG("BeltScan", "0 тайлов, повторный клик Category3 + скан")
         fireSequence(category3); task.wait(3.0)
         tileGrid = waitForObjectByPath({"Inventory","Inventory","Main","PageContent","TileGrid"}, 3) or tileGrid
         if not tileGrid then return nil end
         beltList = scanTilesOnce(tileGrid, scrollingFrame)
     end
-    if #beltList == 0 then WARN("BeltScan", "0 тайлов"); return nil end
+
+    -- КЛЮЧЕВОЙ ФИКС: 0 тайлов = нет поясов = "None", а не nil
+    if #beltList == 0 then
+        LOG("BeltScan", "0 тайлов после 2 попыток → считаем None")
+        return "None"
+    end
 
     local highestBelt, highestIdx = nil, 0
     for _, t in ipairs(beltList) do
@@ -281,7 +287,9 @@ local function doBeltScan()
             end
         end
     end
-    return highestBelt or "None"
+    if highestBelt then return highestBelt end
+    -- Тайлы есть, но belt-строк нет — тоже None (например только пустые слоты)
+    return "None"
 end
 
 task.spawn(function()
@@ -298,7 +306,8 @@ task.spawn(function()
         iter += 1
         if not State.beltScanPaused then
             local ok, belt = pcall(doBeltScan)
-            if not ok then WARN("BeltScan", "ошибка: " .. tostring(belt))
+            if not ok then
+                WARN("BeltScan", "ошибка: " .. tostring(belt))
             elseif belt and belt ~= State.currentBelt then
                 LOG("BeltScan", "НОВЫЙ РЕЖИМ: " .. State.currentBelt .. " -> " .. belt)
                 State.currentBelt = belt
@@ -578,21 +587,21 @@ end
 local function runNoBeltMode()
     LOG("NoBelt", "=== START ===")
     local guard = 0
-    while not hasDragonTalon() and State.running and State.currentBelt == "None" do
+    while not hasDragonTalon() and State.running and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
         setOption(TAB_MAIN, OPT_MAIN, true); task.wait(2); guard += 1
         if guard % 15 == 0 then LOG("NoBelt", "guard=" .. guard) end
     end
-    if State.currentBelt ~= "None" then return end
-    while not isOnIsland() and State.running and State.currentBelt == "None" do
+    if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
+    while not isOnIsland() and State.running and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
         setOption(TAB_MAIN, OPT_MAIN, true); task.wait(2)
     end
-    if State.currentBelt ~= "None" then return end
+    if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
     setOption(TAB_MAIN, OPT_MAIN, false); task.wait(0.5)
     setOption(2, 4, true)
 
     local lastMastery = getMastery() or 0
     local lastChangeAt = tick()
-    while State.running and State.currentBelt == "None" do
+    while State.running and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
         task.wait(5)
         local m = getMastery() or 0
         if m > lastMastery then
@@ -605,7 +614,7 @@ local function runNoBeltMode()
             serverHop(); State.running = false; return
         end
     end
-    if State.currentBelt ~= "None" then return end
+    if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
     setOption(2, 4, false); task.wait(0.5)
     setOption(TAB_MAIN, OPT_MAIN, true)
     State.nobeltDone = true
@@ -670,9 +679,6 @@ local function runTradeMode()
 
     local collisionsDisabled = false
 
-    -- ============================================================
-    -- ПЕРЕМЕЩЕНИЕ: goTo / fastSitOnSeat
-    -- ============================================================
     local STEP = 4
     local DELAY = 0.03
     local TELEPORT_DISTANCE = 12
@@ -1025,10 +1031,6 @@ local function runTradeMode()
         end
     end)
 
-    -- ============================================================
-    -- findTradeTable: отдаём ТОЛЬКО полностью свободные столы
-    -- или те, где сидит ИМЕННО наш партнёр. Чужих — игнорим.
-    -- ============================================================
     local function findTradeTable(expectedPartner)
         local tables = {}
         for _, obj in ipairs(Workspace:GetDescendants()) do
@@ -1061,7 +1063,6 @@ local function runTradeMode()
                     if expectedPartner ~= "" and on == expectedPartner then
                         table.insert(partner, {tbl = tbl, seat = freeSeats[1], on = on})
                     end
-                    -- ЧУЖОЙ партнёр — стол игнорируется полностью
                 end
             end
         end
@@ -1316,7 +1317,6 @@ local function runTradeMode()
         end
         LOG("Trade", "СИЖУ НА СТУЛЕ")
 
-        -- Хелпер: второй стул
         local function getOtherSeat(tbl_, mySeat)
             for _, part in ipairs(tbl_:GetDescendants()) do
                 if (part:IsA("Seat") or part:IsA("VehicleSeat")) and part ~= mySeat then
@@ -1334,7 +1334,6 @@ local function runTradeMode()
                 if not resetSeatAndWait(seat, sitTarget) then break end
             end
 
-            -- КРИТИЧНО: мгновенно проверяем второго игрока
             if otherSeat and otherSeat.Occupant then
                 local otherHum = otherSeat.Occupant
                 local otherChar = otherHum and otherHum.Parent
@@ -1378,7 +1377,6 @@ local function runTradeMode()
                     if acceptAndWait(config.load_fruit_items or {}, seat) then
                         LOG("Trade", "=== TRADE COMPLETED ===")
 
-                        -- СРАЗУ ВСТАЁМ, чтобы игра не запустила трейд заново
                         local c = player.Character
                         if c then
                             local h = c:FindFirstChild("Humanoid")
@@ -1412,11 +1410,13 @@ end
 -- ============================================================
 LOG("Main", "=== START === Me: " .. player.Name)
 
+LOG("Main", "ждём первый скан пояса (макс 90с)...")
 local waitStart = tick()
-while State.currentBelt == "Unknown" and tick() - waitStart < 240 do task.wait(1) end
+while State.currentBelt == "Unknown" and tick() - waitStart < 90 do task.wait(1) end
+
+-- ФИКС: даже если belt так и Unknown (сканер глючит) — всё равно стартуем nobelt
 if State.currentBelt == "Unknown" then
-    WARN("Main", "пояс не определён за 240с — выход")
-    return
+    WARN("Main", "belt не определён за 90с — стартуем nobelt всё равно")
 end
 LOG("Main", "belt = " .. State.currentBelt)
 
@@ -1434,6 +1434,7 @@ while State.running do
         end
         runTradeMode()
     elseif not State.nobeltDone then
+        -- Unknown тоже идёт сюда (считаем "нет belt" = None)
         runNoBeltMode()
     else
         runHoldSixOne()
