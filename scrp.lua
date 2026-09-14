@@ -265,7 +265,6 @@ local function doBeltScan()
         beltList = scanTilesOnce(tileGrid, scrollingFrame)
     end
 
-    -- КЛЮЧЕВОЙ ФИКС: 0 тайлов = нет поясов = "None", а не nil
     if #beltList == 0 then
         LOG("BeltScan", "0 тайлов после 2 попыток → считаем None")
         return "None"
@@ -288,7 +287,6 @@ local function doBeltScan()
         end
     end
     if highestBelt then return highestBelt end
-    -- Тайлы есть, но belt-строк нет — тоже None (например только пустые слоты)
     return "None"
 end
 
@@ -319,10 +317,14 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- СЕРВЕР-ХОП
+-- СЕРВЕР-ХОП (простой: Join → 10с → проверка JobId)
 -- ============================================================
 local function serverHop()
     LOG("Hop", "=== старт сервер-хопа ===")
+    State.beltScanPaused = true
+
+    local originalJobId = game.JobId
+
     local function findSB()
         local tb = playerGui:FindFirstChild("Topbar")
         if tb then
@@ -331,12 +333,6 @@ local function serverHop()
         end
         return nil
     end
-
-    local w = 0
-    while not findSB() and w < 15 do task.wait(0.5); w += 0.5 end
-    local sb = findSB()
-    if not sb then WARN("Hop", "нет ServerBrowserButton"); return false end
-    fireSequence(sb); task.wait(1)
 
     local function findJoin()
         for _, v in ipairs(playerGui:GetDescendants()) do
@@ -347,43 +343,81 @@ local function serverHop()
         return nil
     end
 
-    w = 0
-    while not findJoin() and w < 20 do task.wait(0.5); w += 0.5 end
-    if not findJoin() then WARN("Hop", "нет Join"); return false end
+    for attempt = 1, 5 do
+        LOG("Hop", "попытка #" .. attempt)
 
-    local sBrowser = playerGui:FindFirstChild("ServerBrowser")
-    if not sBrowser then return false end
-    local f = sBrowser:FindFirstChild("Frame")
-    if not f then return false end
-    local sf = f:FindFirstChild("ScrollingFrame")
-    if not sf then return false end
+        -- Открыть браузер
+        local w = 0
+        while not findSB() and w < 10 do task.wait(0.5); w += 0.5 end
+        local sb = findSB()
+        if not sb then WARN("Hop", "нет ServerBrowserButton"); task.wait(2); continue end
+        fireSequence(sb); task.wait(1.5)
 
-    local cY = sf.CanvasSize.Y
-    local maxY = (typeof(cY) == "UDim") and cY.Offset or cY
-    local dur = math.random(1, 10)
-    local y, t0 = 0, tick()
-    sf.CanvasPosition = Vector2.new(0, 0)
-    task.wait(0.2)
-    while (tick() - t0) < dur and y < maxY do
-        y = math.min(y + 150, maxY)
-        sf.CanvasPosition = Vector2.new(0, y)
-        task.wait(0.03)
-    end
+        -- Ждём Join
+        w = 0
+        while not findJoin() and w < 15 do task.wait(0.5); w += 0.5 end
+        if not findJoin() then WARN("Hop", "нет Join"); task.wait(2); continue end
 
-    local btns = {}
-    local function collect(p)
-        for _, c in ipairs(p:GetChildren()) do
-            if (c:IsA("TextButton") or c:IsA("TextBox")) and c.Text == "Join" and c.Visible then
-                table.insert(btns, c)
-            end
-            collect(c)
+        local sBrowser = playerGui:FindFirstChild("ServerBrowser")
+        if not sBrowser then WARN("Hop", "нет ServerBrowser"); task.wait(2); continue end
+        local f = sBrowser:FindFirstChild("Frame")
+        if not f then WARN("Hop", "нет Frame"); task.wait(2); continue end
+        local sf = f:FindFirstChild("ScrollingFrame")
+        if not sf then WARN("Hop", "нет ScrollingFrame"); task.wait(2); continue end
+
+        -- Скролл
+        local cY = sf.CanvasSize.Y
+        local maxY = (typeof(cY) == "UDim") and cY.Offset or cY
+        local dur = math.random(1, 10)
+        local y, t0 = 0, tick()
+        sf.CanvasPosition = Vector2.new(0, 0)
+        task.wait(0.3)
+        while (tick() - t0) < dur and y < maxY do
+            y = math.min(y + 150, maxY)
+            sf.CanvasPosition = Vector2.new(0, y)
+            task.wait(0.03)
         end
+
+        -- Собрать все Join
+        local btns = {}
+        local function collect(p)
+            for _, c in ipairs(p:GetChildren()) do
+                if (c:IsA("TextButton") or c:IsA("TextBox")) and c.Text == "Join" and c.Visible then
+                    table.insert(btns, c)
+                end
+                collect(c)
+            end
+        end
+        collect(sBrowser)
+        if #btns == 0 then WARN("Hop", "нет Join кнопок"); task.wait(2); continue end
+
+        -- Кликаем Join
+        local chosen = btns[math.random(1, #btns)]
+        LOG("Hop", "жму Join " .. chosen:GetFullName())
+        fireSequence(chosen)
+
+        -- Ждём 10с и проверяем JobId
+        task.wait(10)
+        if game.JobId ~= originalJobId then
+            LOG("Hop", "ТЕЛЕПОРТ УСПЕШЕН: " .. originalJobId .. " -> " .. game.JobId)
+            -- ждём загрузки нового сервера
+            task.wait(8)
+            State.nobeltDone    = false
+            State.tradeDone     = false
+            State.currentBelt   = "Unknown"
+            State.beltChangedAt = tick()
+            State.beltScanPaused = false
+            LOG("Hop", "State сброшен — новый сервер")
+            return true
+        end
+
+        WARN("Hop", "попытка #" .. attempt .. " не сработала (JobId тот же), ещё раз")
+        task.wait(1)
     end
-    collect(sBrowser)
-    if #btns == 0 then WARN("Hop", "нет Join"); return false end
-    fireSequence(btns[math.random(1, #btns)])
-    LOG("Hop", "нажали Join")
-    return true
+
+    WARN("Hop", "не удалось за 5 попыток")
+    State.beltScanPaused = false
+    return false
 end
 
 -- ============================================================
@@ -545,7 +579,8 @@ task.spawn(function()
                 local idle = tick() - lastMoveAt
                 if idle > STUCK_TIMEOUT then
                     WARN("Stuck", "нет движения " .. math.floor(idle) .. "с — hop")
-                    serverHop(); State.running = false; return
+                    serverHop()
+                    lastPos = nil; lastMoveAt = tick()
                 end
             end
         end
@@ -611,7 +646,8 @@ local function runNoBeltMode()
         if m > 500 then break end
         if tick() - lastChangeAt > NOBELT_MASTERY_TIMEOUT then
             WARN("NoBelt", "mastery не растёт " .. NOBELT_MASTERY_TIMEOUT .. "с — hop")
-            serverHop(); State.running = false; return
+            serverHop()
+            return
         end
     end
     if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
@@ -1413,8 +1449,6 @@ LOG("Main", "=== START === Me: " .. player.Name)
 LOG("Main", "ждём первый скан пояса (макс 90с)...")
 local waitStart = tick()
 while State.currentBelt == "Unknown" and tick() - waitStart < 90 do task.wait(1) end
-
--- ФИКС: даже если belt так и Unknown (сканер глючит) — всё равно стартуем nobelt
 if State.currentBelt == "Unknown" then
     WARN("Main", "belt не определён за 90с — стартуем nobelt всё равно")
 end
@@ -1434,7 +1468,6 @@ while State.running do
         end
         runTradeMode()
     elseif not State.nobeltDone then
-        -- Unknown тоже идёт сюда (считаем "нет belt" = None)
         runNoBeltMode()
     else
         runHoldSixOne()
