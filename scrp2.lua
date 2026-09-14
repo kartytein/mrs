@@ -1,5 +1,5 @@
 -- ============================================================
--- ФУЛЛ-ДАМП OPTION1.BUTTON (исправлен pairs по Instance)
+-- ФУЛЛ-ДАМП OPTION1.BUTTON И ВСЕГО ВОКРУГ (исправлен)
 -- ============================================================
 local Players = game:GetService("Players")
 local CS = game:GetService("CollectionService")
@@ -25,26 +25,25 @@ local function fmt(v, depth)
     end
 end
 
-local SIGNALS = {
-    "MouseEnter", "MouseLeave",
-    "MouseButton1Down", "MouseButton1Up", "MouseButton1Click",
-    "MouseButton2Down", "MouseButton2Up", "MouseButton2Click",
-    "Activated", "InputBegan", "InputChanged", "InputEnded",
-    "TouchTap", "TouchLongPress",
-    "SelectionGained", "SelectionLost",
-    "Changed", "ChildAdded", "ChildRemoved",
-    "DescendantAdded", "DescendantRemoving",
-    "AncestryChanged", "AttributeChanged", "Destroying"
-}
-
+-- Безопасная проверка сигнала
 local function dumpConnections(inst, indent)
     local pre = indent .. "  "
+    local SIGNALS = {
+        "MouseEnter", "MouseLeave",
+        "MouseButton1Down", "MouseButton1Up", "MouseButton1Click",
+        "MouseButton2Down", "MouseButton2Up", "MouseButton2Click",
+        "Activated", "InputBegan", "InputChanged", "InputEnded",
+        "TouchTap", "TouchLongPress",
+        "SelectionGained", "SelectionLost",
+        "Changed", "ChildAdded", "ChildRemoved", "DescendantAdded", "DescendantRemoving",
+        "AncestryChanged", "AttributeChanged", "Destroying"
+    }
     print(string.format("%s│  --- КОННЕКТЫ ---", pre))
     local any = false
     for _, sigName in ipairs(SIGNALS) do
         local sig
-        pcall(function() sig = inst[sigName] end)
-        if sig then
+        local ok = pcall(function() sig = inst[sigName] end)
+        if ok and sig then
             local ok2, conns = pcall(function() return getconnections(sig) end)
             if ok2 and conns and #conns > 0 then
                 any = true
@@ -56,47 +55,9 @@ local function dumpConnections(inst, indent)
             end
         end
     end
-    if not any then print(string.format("%s│    (нет активных коннектов)", pre)) end
-end
-
--- Безопасный сбор простых свойств
-local function collectProps(inst)
-    local result = {}
-    -- Собираем имена свойств через getproperties (если есть), иначе через таблицу свойств класса
-    local names = {}
-    local ok = pcall(function()
-        for _, n in ipairs(inst:GetProperties and inst:GetProperties() or {}) do
-            table.insert(names, n)
-        end
-    end)
-    if not ok or #names == 0 then
-        -- Фоллбэк: список вручную
-        names = {
-            "Name","ClassName","Visible","Active","Position","Size",
-            "AbsolutePosition","AbsoluteSize","AnchorPoint","ZIndex",
-            "BackgroundColor3","BackgroundTransparency","BorderSizePixel",
-            "ClipsDescendants","LayoutOrder","AutoButtonColor","Selectable",
-            "Modal","Text","TextColor3","TextSize","TextScaled","TextWrapped",
-            "Font","TextXAlignment","TextYAlignment","TextTransparency","RichText",
-            "Image","ImageColor3","ImageTransparency","ScaleType",
-            "Enabled","DisplayOrder","ResetOnSpawn","IgnoreGuiInset","ZIndexBehavior",
-            "FillDirection","Padding","SortOrder","Rotation","Interactable"
-        }
+    if not any then
+        print(string.format("%s│    (нет активных коннектов)", pre))
     end
-    for _, k in ipairs(names) do
-        local o, v = pcall(function() return inst[k] end)
-        if o and v ~= nil then
-            local tp = type(v)
-            if tp == "string" or tp == "number" or tp == "boolean"
-               or typeof(v) == "EnumItem" or typeof(v) == "Vector2"
-               or typeof(v) == "Vector3" or typeof(v) == "UDim2"
-               or typeof(v) == "UDim" or typeof(v) == "Color3" then
-                table.insert(result, {k = k, v = v})
-            end
-        end
-    end
-    table.sort(result, function(a, b) return a.k < b.k end)
-    return result
 end
 
 local function dumpInstance(inst, indent)
@@ -106,9 +67,74 @@ local function dumpInstance(inst, indent)
     print(string.format("%s╭─ [%s] %s", indent, inst.ClassName, inst.Name))
     print(string.format("%s│  Полный путь: %s", pre, inst:GetFullName()))
     
-    -- Простые свойства
-    print(string.format("%s│  --- СВОЙСТВА ---", pre))
-    for _, p in ipairs(collectProps(inst)) do
+    if inst:IsA("GuiObject") then
+        print(string.format("%s│  Visible = %s", pre, tostring(inst.Visible)))
+        print(string.format("%s│  Active = %s", pre, tostring(inst.Active)))
+        print(string.format("%s│  Position = %s", pre, tostring(inst.Position)))
+        print(string.format("%s│  Size = %s", pre, tostring(inst.Size)))
+        print(string.format("%s│  AbsolutePosition = %s", pre, tostring(inst.AbsolutePosition)))
+        print(string.format("%s│  AbsoluteSize = %s", pre, tostring(inst.AbsoluteSize)))
+        print(string.format("%s│  AnchorPoint = %s", pre, tostring(inst.AnchorPoint)))
+        print(string.format("%s│  ZIndex = %s", pre, tostring(inst.ZIndex)))
+        print(string.format("%s│  BackgroundColor3 = %s", pre, tostring(inst.BackgroundColor3)))
+        print(string.format("%s│  BackgroundTransparency = %s", pre, tostring(inst.BackgroundTransparency)))
+        print(string.format("%s│  BorderSizePixel = %s", pre, tostring(inst.BorderSizePixel)))
+        print(string.format("%s│  ClipsDescendants = %s", pre, tostring(inst.ClipsDescendants)))
+        print(string.format("%s│  LayoutOrder = %s", pre, tostring(inst.LayoutOrder)))
+    end
+    if inst:IsA("GuiButton") then
+        print(string.format("%s│  AutoButtonColor = %s", pre, tostring(inst.AutoButtonColor)))
+        print(string.format("%s│  Selectable = %s", pre, tostring(inst.Selectable)))
+        print(string.format("%s│  Modal = %s", pre, tostring(inst.Modal)))
+    end
+    if inst:IsA("TextLabel") or inst:IsA("TextButton") or inst:IsA("TextBox") then
+        print(string.format("%s│  Text = %q", pre, inst.Text))
+        print(string.format("%s│  TextColor3 = %s", pre, tostring(inst.TextColor3)))
+        print(string.format("%s│  TextSize = %s", pre, tostring(inst.TextSize)))
+        print(string.format("%s│  TextScaled = %s", pre, tostring(inst.TextScaled)))
+        print(string.format("%s│  TextWrapped = %s", pre, tostring(inst.TextWrapped)))
+        print(string.format("%s│  Font = %s", pre, tostring(inst.Font)))
+        print(string.format("%s│  TextXAlignment = %s", pre, tostring(inst.TextXAlignment)))
+        print(string.format("%s│  TextYAlignment = %s", pre, tostring(inst.TextYAlignment)))
+        print(string.format("%s│  TextTransparency = %s", pre, tostring(inst.TextTransparency)))
+        print(string.format("%s│  RichText = %s", pre, tostring(inst.RichText)))
+    end
+    if inst:IsA("ImageLabel") or inst:IsA("ImageButton") then
+        print(string.format("%s│  Image = %s", pre, tostring(inst.Image)))
+        print(string.format("%s│  ImageColor3 = %s", pre, tostring(inst.ImageColor3)))
+        print(string.format("%s│  ImageTransparency = %s", pre, tostring(inst.ImageTransparency)))
+        print(string.format("%s│  ScaleType = %s", pre, tostring(inst.ScaleType)))
+    end
+    if inst:IsA("ScreenGui") then
+        print(string.format("%s│  Enabled = %s", pre, tostring(inst.Enabled)))
+        print(string.format("%s│  DisplayOrder = %s", pre, tostring(inst.DisplayOrder)))
+        print(string.format("%s│  ResetOnSpawn = %s", pre, tostring(inst.ResetOnSpawn)))
+        print(string.format("%s│  IgnoreGuiInset = %s", pre, tostring(inst.IgnoreGuiInset)))
+        print(string.format("%s│  ZIndexBehavior = %s", pre, tostring(inst.ZIndexBehavior)))
+    end
+    if inst:IsA("UIGridLayout") or inst:IsA("UIListLayout") then
+        print(string.format("%s│  FillDirection = %s", pre, tostring(inst.FillDirection)))
+        print(string.format("%s│  Padding = %s", pre, tostring(inst.Padding)))
+        print(string.format("%s│  SortOrder = %s", pre, tostring(inst.SortOrder)))
+    end
+    
+    -- Все простые свойства через pcall
+    print(string.format("%s│  --- Все простые свойства ---", pre))
+    local props = {}
+    for k, v in pairs(inst) do
+        if type(k) == "string" and not k:match("^_") then
+            local o, val = pcall(function() return inst[k] end)
+            if o and (type(val) == "string" or type(val) == "number"
+                   or type(val) == "boolean" or typeof(val) == "EnumItem"
+                   or typeof(val) == "Vector2" or typeof(val) == "Vector3"
+                   or typeof(val) == "UDim2" or typeof(val) == "UDim"
+                   or typeof(val) == "Color3") then
+                table.insert(props, {k = k, v = val})
+            end
+        end
+    end
+    table.sort(props, function(a, b) return a.k < b.k end)
+    for _, p in ipairs(props) do
         print(string.format("%s│    .%s = %s", pre, p.k, fmt(p.v)))
     end
     
@@ -130,10 +156,10 @@ local function dumpInstance(inst, indent)
         for _, t in ipairs(tags) do print(string.format("%s│    %s", pre, t)) end
     end
     
-    -- Коннекты
+    -- Коннекты (для всех, не только кнопок)
     dumpConnections(inst, indent)
     
-    -- Дети (рекурсия)
+    -- Дети
     local children = inst:GetChildren()
     print(string.format("%s│  --- ДЕТИ (%d) ---", pre, #children))
     for _, c in ipairs(children) do
@@ -148,7 +174,7 @@ local function dumpInstance(inst, indent)
 end
 
 -- ============================================================
--- Поиск кнопки
+-- 1. Поиск кнопки
 -- ============================================================
 local function findTarget()
     local dg = pg:FindFirstChild("DialogueGui")
@@ -169,17 +195,17 @@ local function findTarget()
         end
     end
     if not opt1 then return nil end
-    return opt1:FindFirstChild("button"), opt1, scroller
+    return opt1:FindFirstChild("button"), opt1, scroller, optList, t1, dg
 end
 
 print("╔══════════════════════════════════════════════════════╗")
 print("║  ЖДУ ПОЯВЛЕНИЯ option1.button (до 15 сек)...         ║")
 print("╚══════════════════════════════════════════════════════╝")
 
-local btn, opt1, scroller
+local btn, opt1, scroller, optList, t1, dg
 local t0 = tick()
 while tick() - t0 < 15 do
-    btn, opt1, scroller = findTarget()
+    btn, opt1, scroller, optList, t1, dg = findTarget()
     if btn then break end
     task.wait(0.2)
 end
