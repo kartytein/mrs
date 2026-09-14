@@ -17,6 +17,13 @@ local SCROLL_WAIT_TIME    = 0.15
 local SCROLL_INITIAL_WAIT = 1.0
 local SCROLL_FINAL_WAIT   = 1.0
 
+-- Точка для nobelt-фарма
+local FIXED_POS = Vector3.new(9825.3, -1962.3, 9822.5)
+
+-- Пост-трейд: NPC Dojo Trainer
+local POST_TRADE_WAYPOINT = Vector3.new(5866.9, 1208.6, 872.0)
+local POST_TRADE_NPC_NAME = "Dojo Trainer"
+
 -- ============================================================
 -- ЛОГГЕР
 -- ============================================================
@@ -39,6 +46,23 @@ local CoreGui           = game:GetService("CoreGui")
 
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
+
+-- Remote для NPC Dojo Trainer
+local RF_InteractDragonQuest = nil
+do
+    local modules = ReplicatedStorage:FindFirstChild("Modules")
+    if modules then
+        local net = modules:FindFirstChild("Net")
+        if net then
+            RF_InteractDragonQuest = net:FindFirstChild("RF/InteractDragonQuest")
+        end
+    end
+    if RF_InteractDragonQuest then
+        LOG("Remote", "RF/InteractDragonQuest найден")
+    else
+        WARN("Remote", "RF/InteractDragonQuest НЕ найден")
+    end
+end
 
 local State = {
     currentBelt     = "Unknown",
@@ -158,6 +182,110 @@ local function ensureCategoryOpen(catName)
     if not category then WARN("Cat", "нет " .. catName); return nil end
     fireSequence(category); task.wait(SCROLL_INITIAL_WAIT)
     return category
+end
+
+-- ============================================================
+-- CALL REMOTE для NPC
+-- ============================================================
+local function callRemote(args, label)
+    if not RF_InteractDragonQuest then
+        WARN("Remote", "RF/InteractDragonQuest не найден")
+        return false
+    end
+    LOG("Remote", "▶ " .. label)
+    local ok, resp = pcall(function()
+        return RF_InteractDragonQuest:InvokeServer(args)
+    end)
+    if ok then
+        LOG("Remote", "  ✓ " .. label .. " OK, ответ: " .. tostring(resp))
+    else
+        WARN("Remote", "  ✗ " .. label .. " ошибка: " .. tostring(resp))
+    end
+    return ok, resp
+end
+
+-- ============================================================
+-- ПЕРЕМЕЩЕНИЕ (глобальный)
+-- ============================================================
+local function goToPosition(targetPos)
+    local STEP = 4
+    local DELAY = 0.03
+    local TELEPORT_DISTANCE = 12
+
+    local char = player.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChild("Humanoid")
+    if not hrp or not hum then return false end
+
+    hum.PlatformStand = true
+    local lastLogAt = tick()
+    LOG("Move", string.format("старт X=%.0f Y=%.0f Z=%.0f", targetPos.X, targetPos.Y, targetPos.Z))
+
+    while true do
+        char = player.Character
+        if not char then break end
+        hrp = char:FindFirstChild("HumanoidRootPart")
+        hum = char:FindFirstChild("Humanoid")
+        if not hrp or not hum then break end
+        if hum.Health <= 0 then WARN("Move", "персонаж мёртв"); break end
+        if hum.Sit then break end
+
+        local existingBV = hrp:FindFirstChildOfClass("BodyVelocity")
+        if existingBV then
+            existingBV.Velocity = Vector3.zero
+            existingBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        else
+            local bv = Instance.new("BodyVelocity")
+            bv.Velocity = Vector3.zero
+            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+            bv.Parent = hrp
+        end
+
+        for _, v in ipairs(hrp:GetChildren()) do
+            if v:IsA("BodyPosition") or v:IsA("BodyGyro") or v:IsA("AlignPosition") or v:IsA("AlignOrientation") then
+                v:Destroy()
+            end
+        end
+
+        local currentPos = hrp.Position
+        local dist = (currentPos - targetPos).Magnitude
+        if dist < 1 then break end
+
+        if dist < TELEPORT_DISTANCE then
+            hrp.CFrame = CFrame.new(targetPos)
+            task.wait(DELAY)
+            if (hrp.Position - targetPos).Magnitude < 1 then break end
+        end
+
+        if currentPos.Y < targetPos.Y - 10 then
+            hrp.CFrame = CFrame.new(currentPos.X, targetPos.Y, currentPos.Z)
+            currentPos = hrp.Position
+        end
+
+        local dirVec = (targetPos - currentPos).Unit
+        local moveDist = math.min(STEP, dist)
+        local newPos = currentPos + dirVec * moveDist
+        newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z)
+        hrp.CFrame = CFrame.new(newPos)
+
+        if tick() - lastLogAt >= 2 then
+            lastLogAt = tick()
+            local d = (hrp.Position - targetPos).Magnitude
+            LOG("Move", string.format("dist=%.1f", d))
+        end
+
+        task.wait(DELAY)
+    end
+
+    if char and hrp and hum then
+        hrp.CFrame = CFrame.new(targetPos)
+        hum.PlatformStand = false
+        local bv = hrp:FindFirstChildOfClass("BodyVelocity")
+        if bv then bv:Destroy() end
+    end
+    LOG("Move", "дошли до точки")
+    return true
 end
 
 -- ============================================================
@@ -317,7 +445,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- СЕРВЕР-ХОП (простой: Join → 10с → проверка JobId)
+-- СЕРВЕР-ХОП
 -- ============================================================
 local function serverHop()
     LOG("Hop", "=== старт сервер-хопа ===")
@@ -346,14 +474,12 @@ local function serverHop()
     for attempt = 1, 5 do
         LOG("Hop", "попытка #" .. attempt)
 
-        -- Открыть браузер
         local w = 0
         while not findSB() and w < 10 do task.wait(0.5); w += 0.5 end
         local sb = findSB()
         if not sb then WARN("Hop", "нет ServerBrowserButton"); task.wait(2); continue end
         fireSequence(sb); task.wait(1.5)
 
-        -- Ждём Join
         w = 0
         while not findJoin() and w < 15 do task.wait(0.5); w += 0.5 end
         if not findJoin() then WARN("Hop", "нет Join"); task.wait(2); continue end
@@ -365,7 +491,6 @@ local function serverHop()
         local sf = f:FindFirstChild("ScrollingFrame")
         if not sf then WARN("Hop", "нет ScrollingFrame"); task.wait(2); continue end
 
-        -- Скролл
         local cY = sf.CanvasSize.Y
         local maxY = (typeof(cY) == "UDim") and cY.Offset or cY
         local dur = math.random(1, 10)
@@ -378,7 +503,6 @@ local function serverHop()
             task.wait(0.03)
         end
 
-        -- Собрать все Join
         local btns = {}
         local function collect(p)
             for _, c in ipairs(p:GetChildren()) do
@@ -391,16 +515,13 @@ local function serverHop()
         collect(sBrowser)
         if #btns == 0 then WARN("Hop", "нет Join кнопок"); task.wait(2); continue end
 
-        -- Кликаем Join
         local chosen = btns[math.random(1, #btns)]
         LOG("Hop", "жму Join " .. chosen:GetFullName())
         fireSequence(chosen)
 
-        -- Ждём 10с и проверяем JobId
         task.wait(10)
         if game.JobId ~= originalJobId then
             LOG("Hop", "ТЕЛЕПОРТ УСПЕШЕН: " .. originalJobId .. " -> " .. game.JobId)
-            -- ждём загрузки нового сервера
             task.wait(8)
             State.nobeltDone    = false
             State.tradeDone     = false
@@ -621,19 +742,34 @@ end
 
 local function runNoBeltMode()
     LOG("NoBelt", "=== START ===")
+
+    -- Фаза 1: dragon talon
     local guard = 0
     while not hasDragonTalon() and State.running and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
         setOption(TAB_MAIN, OPT_MAIN, true); task.wait(2); guard += 1
         if guard % 15 == 0 then LOG("NoBelt", "guard=" .. guard) end
     end
     if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
+
+    -- Фаза 2: остров
     while not isOnIsland() and State.running and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
         setOption(TAB_MAIN, OPT_MAIN, true); task.wait(2)
     end
     if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
+    LOG("NoBelt", "остров найден (звук)")
+
+    -- Фаза 3: 6,1 OFF → goTo → 2,4 ON
+    LOG("NoBelt", "6,1 OFF")
     setOption(TAB_MAIN, OPT_MAIN, false); task.wait(0.5)
+
+    LOG("NoBelt", "перемещаюсь к фиксированной точке")
+    goToPosition(FIXED_POS)
+    task.wait(0.5)
+
+    LOG("NoBelt", "2,4 ON")
     setOption(2, 4, true)
 
+    -- Фаза 4: фарм до 500
     local lastMastery = getMastery() or 0
     local lastChangeAt = tick()
     while State.running and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
@@ -651,6 +787,8 @@ local function runNoBeltMode()
         end
     end
     if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
+
+    -- Фаза 5: 2,4 OFF → 6,1 ON
     setOption(2, 4, false); task.wait(0.5)
     setOption(TAB_MAIN, OPT_MAIN, true)
     State.nobeltDone = true
@@ -1434,6 +1572,24 @@ local function runTradeMode()
             end
         end
     end
+
+    -- ============================================================
+    -- ПОСТ-ТРЕЙД: перемещение к NPC + активация квестов
+    -- ============================================================
+    LOG("PostTrade", "=== старт пост-трейд сценария ===")
+    task.wait(2)
+
+    LOG("PostTrade", "перемещаюсь к Dojo Trainer")
+    goToPosition(POST_TRADE_WAYPOINT)
+    task.wait(1.5)
+
+    LOG("PostTrade", "активирую RequestQuest")
+    callRemote({NPC = POST_TRADE_NPC_NAME, Command = "RequestQuest"}, "RequestQuest")
+    task.wait(1)
+
+    LOG("PostTrade", "активирую ClaimQuest")
+    callRemote({NPC = POST_TRADE_NPC_NAME, Command = "ClaimQuest"}, "ClaimQuest")
+    LOG("PostTrade", "=== DONE ===")
 
     State.beltScanPaused = false
     State.inTrade = false
