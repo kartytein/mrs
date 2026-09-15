@@ -44,7 +44,6 @@ local CoreGui           = game:GetService("CoreGui")
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- Remote для NPC Dojo Trainer
 local RF_InteractDragonQuest = nil
 do
     local modules = ReplicatedStorage:FindFirstChild("Modules")
@@ -77,40 +76,35 @@ local State = {
 local collisionsDisabledGlobal = false
 local savedCollisionsGlobal = {}
 
-local function setWorldCollisions(enabled)
-    local myChar = player.Character
-    if enabled then
-        for part, _ in pairs(savedCollisionsGlobal) do
-            if part and part.Parent then
-                pcall(function() part.CanCollide = true end)
-            end
-        end
-        savedCollisionsGlobal = {}
-    else
+-- Один проход: отключает коллизии у всех BasePart кроме своих
+local function disableCollisionsNow()
+    pcall(function()
+        local myChar = player.Character
         for _, obj in ipairs(Workspace:GetDescendants()) do
             if obj:IsA("BasePart") and not (myChar and obj:IsDescendantOf(myChar)) then
                 if obj.CanCollide then savedCollisionsGlobal[obj] = true end
-                pcall(function() obj.CanCollide = false end)
+                if obj.CanCollide then obj.CanCollide = false end
             end
         end
-    end
+    end)
 end
 
--- Фоновой цикл поддержки (Roblox иногда возвращает CanCollide обратно)
+local function restoreCollisionsNow()
+    for part, _ in pairs(savedCollisionsGlobal) do
+        if part and part.Parent then
+            pcall(function() part.CanCollide = true end)
+        end
+    end
+    savedCollisionsGlobal = {}
+end
+
+-- Фоновый цикл: каждые 0.1с, пока флаг активен, глушим коллизии у новых объектов
 task.spawn(function()
     while true do
         if collisionsDisabledGlobal then
-            pcall(function()
-                local myChar = player.Character
-                for _, obj in ipairs(Workspace:GetDescendants()) do
-                    if obj:IsA("BasePart") and not (myChar and obj:IsDescendantOf(myChar)) then
-                        if obj.CanCollide then savedCollisionsGlobal[obj] = true end
-                        obj.CanCollide = false
-                    end
-                end
-            end)
+            disableCollisionsNow()
         end
-        task.wait(1)
+        task.wait(0.1)
     end
 end)
 
@@ -245,7 +239,7 @@ local function callRemote(args, label)
 end
 
 -- ============================================================
--- ПЕРЕМЕЩЕНИЕ (глобальный)
+-- ПЕРЕМЕЩЕНИЕ (глобальный) — глушит коллизии КАЖДЫЙ КАДР
 -- ============================================================
 local function goToPosition(targetPos)
     local STEP = 4
@@ -263,6 +257,11 @@ local function goToPosition(targetPos)
     LOG("Move", string.format("старт X=%.0f Y=%.0f Z=%.0f", targetPos.X, targetPos.Y, targetPos.Z))
 
     while true do
+        -- КАЖДЫЙ КАДР глушим коллизии (особенно у новых подгруженных чанков)
+        if collisionsDisabledGlobal then
+            disableCollisionsNow()
+        end
+
         char = player.Character
         if not char then break end
         hrp = char:FindFirstChild("HumanoidRootPart")
@@ -791,29 +790,29 @@ local function runNoBeltMode()
     end
     if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
 
-    -- Фаза 2: остров
+    -- Фаза 2: остров (sound)
     while not isOnIsland() and State.running and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
         setOption(TAB_MAIN, OPT_MAIN, true); task.wait(2)
     end
     if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
-    LOG("NoBelt", "остров найден (звук)")
+    LOG("NoBelt", "остров найден (sound)")
 
-    -- Фаза 3: 6,1 OFF → goTo (коллизии OFF) → 2,4 ON
+    -- Фаза 3: 6,1 OFF → коллизии OFF → goTo → коллизии ON → 2,4 ON
     LOG("NoBelt", "6,1 OFF")
     setOption(TAB_MAIN, OPT_MAIN, false); task.wait(0.5)
 
-    LOG("NoBelt", "отключаю коллизии на перемещение")
+    LOG("NoBelt", "ВКЛ флаг коллизий и первый сброс")
     collisionsDisabledGlobal = true
-    setWorldCollisions(false)
-    task.wait(1)
+    disableCollisionsNow()
+    task.wait(0.5)
 
-    LOG("NoBelt", "перемещаюсь к фиксированной точке")
+    LOG("NoBelt", "перемещаюсь к фиксированной точке (коллизии глушатся каждый кадр)")
     goToPosition(FIXED_POS)
     task.wait(0.5)
 
-    LOG("NoBelt", "включаю коллизии обратно")
+    LOG("NoBelt", "ВЫКЛ флаг коллизий, восстанавливаю")
     collisionsDisabledGlobal = false
-    setWorldCollisions(true)
+    restoreCollisionsNow()
     task.wait(0.5)
 
     LOG("NoBelt", "2,4 ON")
@@ -1629,18 +1628,18 @@ local function runTradeMode()
     LOG("PostTrade", "=== старт пост-трейд сценария ===")
     task.wait(2)
 
-    LOG("PostTrade", "отключаю коллизии на перемещение к NPC")
+    LOG("PostTrade", "ВКЛ флаг коллизий")
     collisionsDisabledGlobal = true
-    setWorldCollisions(false)
-    task.wait(1)
+    disableCollisionsNow()
+    task.wait(0.5)
 
-    LOG("PostTrade", "перемещаюсь к Dojo Trainer")
+    LOG("PostTrade", "перемещаюсь к Dojo Trainer (коллизии глушатся каждый кадр)")
     goToPosition(POST_TRADE_WAYPOINT)
     task.wait(1.5)
 
-    LOG("PostTrade", "включаю коллизии обратно")
+    LOG("PostTrade", "ВЫКЛ флаг коллизий, восстанавливаю")
     collisionsDisabledGlobal = false
-    setWorldCollisions(true)
+    restoreCollisionsNow()
     task.wait(0.5)
 
     LOG("PostTrade", "активирую RequestQuest")
