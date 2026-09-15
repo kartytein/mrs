@@ -17,7 +17,8 @@ local SCROLL_WAIT_TIME    = 0.15
 local SCROLL_INITIAL_WAIT = 1.0
 local SCROLL_FINAL_WAIT   = 1.0
 
-local FIXED_POS = Vector3.new(9825.3, -1962.3, 9822.5)
+local FIXED_POS          = Vector3.new(9825.3, -1962.3, 9822.5)
+local TRADE_WAYPOINT     = Vector3.new(-12549.7, 337.5, -7501.1)
 local POST_TRADE_WAYPOINT = Vector3.new(5866.9, 1208.6, 872.0)
 local POST_TRADE_NPC_NAME = "Dojo Trainer"
 
@@ -217,7 +218,7 @@ local function ensureCategoryOpen(catName)
 end
 
 -- ============================================================
--- CALL REMOTE для NPC
+-- CALL REMOTE
 -- ============================================================
 local function callRemote(args, label)
     if not RF_InteractDragonQuest then
@@ -780,12 +781,10 @@ end
 local function runNoBeltMode()
     LOG("NoBelt", "=== START ===")
 
-    -- НОВОЕ: сразу вырубаем 2,4 (не должна висеть включённой во время пути)
     LOG("NoBelt", "принудительно 2,4 OFF на старте")
     setOption(TAB_FARM, OPT_FARM, false)
     task.wait(0.5)
 
-    -- Фаза 1: dragon talon (6,1 ON)
     local guard = 0
     while not hasDragonTalon() and State.running and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
         setOption(TAB_MAIN, OPT_MAIN, true); task.wait(2); guard += 1
@@ -794,18 +793,16 @@ local function runNoBeltMode()
     if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
     LOG("NoBelt", "dragon talon OK")
 
-    -- Фаза 2: остров (sound)
     while not isOnIsland() and State.running and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
         setOption(TAB_MAIN, OPT_MAIN, true); task.wait(2)
     end
     if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
     LOG("NoBelt", "остров найден (sound)")
 
-    -- Фаза 3: полностью вырубаем всё → коллизии OFF → goTo → коллизии ON → 2,4 ON
     LOG("NoBelt", "6,1 OFF")
     setOption(TAB_MAIN, OPT_MAIN, false); task.wait(0.5)
 
-    LOG("NoBelt", "2,4 OFF (ещё раз для гарантии)")
+    LOG("NoBelt", "2,4 OFF для гарантии")
     setOption(TAB_FARM, OPT_FARM, false); task.wait(0.5)
 
     LOG("NoBelt", "ВКЛ флаг коллизий")
@@ -825,7 +822,6 @@ local function runNoBeltMode()
     LOG("NoBelt", "на точке → 2,4 ON")
     setOption(TAB_FARM, OPT_FARM, true)
 
-    -- Фаза 4: фарм до 500
     local lastMastery = getMastery() or 0
     local lastChangeAt = tick()
     while State.running and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
@@ -844,7 +840,6 @@ local function runNoBeltMode()
     end
     if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
 
-    -- Фаза 5: 2,4 OFF → 6,1 ON
     setOption(TAB_FARM, OPT_FARM, false); task.wait(0.5)
     setOption(TAB_MAIN, OPT_MAIN, true)
     State.nobeltDone = true
@@ -892,7 +887,7 @@ local function runTradeMode()
     State.beltScanPaused = true
     State.inTrade = true
 
-    LOG("Trade", "выключаю 6,1 (конфликтует с trade)")
+    LOG("Trade", "выключаю 6,1")
     setOption(TAB_MAIN, OPT_MAIN, false)
     task.wait(0.5)
     if getOptionState(TAB_MAIN, OPT_MAIN) == true then
@@ -900,7 +895,7 @@ local function runTradeMode()
         setOption(TAB_MAIN, OPT_MAIN, false); task.wait(0.5)
     end
 
-    LOG("Trade", "2,4 OFF (на всякий)")
+    LOG("Trade", "2,4 OFF")
     setOption(TAB_FARM, OPT_FARM, false)
     task.wait(0.5)
 
@@ -933,10 +928,7 @@ local function runTradeMode()
             hrp = char:FindFirstChild("HumanoidRootPart")
             hum = char:FindFirstChild("Humanoid")
             if not hrp or not hum then break end
-            if hum.Health <= 0 then
-                WARN("Move", "персонаж мёртв")
-                break
-            end
+            if hum.Health <= 0 then WARN("Move", "персонаж мёртв"); break end
             if hum.Sit then break end
 
             local existingBV = hrp:FindFirstChildOfClass("BodyVelocity")
@@ -1535,6 +1527,26 @@ local function runTradeMode()
     collisionsDisabled = true
     task.wait(1)
 
+    -- ============================================================
+    -- ФИКС: сначала идём к waypoint (там обычно трейд-зона),
+    -- потом уже ищем столы. Иначе столы не прогружены.
+    -- ============================================================
+    LOG("Trade", "ВКЛ глобальный флаг коллизий")
+    collisionsDisabledGlobal = true
+    disableCollisionsNow()
+    task.wait(0.5)
+
+    LOG("Trade", "перемещаюсь к waypoint трейд-зоны")
+    goToPosition(TRADE_WAYPOINT)
+    task.wait(1.0)
+
+    LOG("Trade", "ВЫКЛ глобальный флаг коллизий")
+    collisionsDisabledGlobal = false
+    restoreCollisionsNow()
+    task.wait(0.5)
+
+    LOG("Trade", "начинаю искать стол")
+
     local done = false
     while not done and State.running do
         local tbl, seat = findTradeTable(config.partner_name or "")
@@ -1648,7 +1660,7 @@ local function runTradeMode()
     goToPosition(POST_TRADE_WAYPOINT)
     task.wait(1.5)
 
-    LOG("PostTrade", "ВЫКЛ флаг коллизий, восстанавливаю")
+    LOG("PostTrade", "ВЫКЛ флаг коллизий")
     collisionsDisabledGlobal = false
     restoreCollisionsNow()
     task.wait(0.5)
