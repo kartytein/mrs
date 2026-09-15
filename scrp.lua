@@ -9,7 +9,7 @@ local NOBELT_MASTERY_TIMEOUT= 60
 local STUCK_TIMEOUT         = 180
 local STUCK_CHECK_INTERVAL  = 30
 local STUCK_MOVE_THRESHOLD  = 5
-local SERVER_URL            = "http://192.168.31.89:8000"
+local SERVER_URL            = "http://192.168.1.100:8000"
 local BELT_ORDER            = {"White","Yellow","Orange","Green","Blue","Purple","Red","Black"}
 
 local SCROLL_STEP_PIXELS  = 10
@@ -238,13 +238,16 @@ local function callRemote(args, label)
 end
 
 -- ============================================================
--- ПЕРЕМЕЩЕНИЕ
+-- ПЕРЕМЕЩЕНИЕ: X/Z через CFrame, Y через BodyVelocity (как в оригинале)
 -- ============================================================
-local function goToPosition(targetPos)
-    local STEP = 4
-    local DELAY = 0.03
-    local TELEPORT_DISTANCE = 12
+local STEP_XZ          = 4
+local DELAY            = 0.03
+local TELEPORT_DIST_XZ = 12
+local Y_UP_SPEED       = 50
+local Y_TOLERANCE      = 3
+local MAX_ITER         = 6000
 
+local function goToPosition(targetPos)
     local char = player.Character
     if not char then return false end
     local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -253,9 +256,13 @@ local function goToPosition(targetPos)
 
     hum.PlatformStand = true
     local lastLogAt = tick()
-    LOG("Move", string.format("старт X=%.0f Y=%.0f Z=%.0f", targetPos.X, targetPos.Y, targetPos.Z))
+    local iter = 0
+    LOG("Move", string.format("старт (%.0f,%.0f,%.0f)", targetPos.X, targetPos.Y, targetPos.Z))
 
-    while true do
+    while iter < MAX_ITER do
+        iter += 1
+
+        -- Каждый кадр глушим коллизии, если включён флаг
         if collisionsDisabledGlobal then
             disableCollisionsNow()
         end
@@ -265,58 +272,58 @@ local function goToPosition(targetPos)
         hrp = char:FindFirstChild("HumanoidRootPart")
         hum = char:FindFirstChild("Humanoid")
         if not hrp or not hum then break end
-        if hum.Health <= 0 then WARN("Move", "персонаж мёртв"); break end
+        if hum.Health <= 0 then
+            WARN("Move", "персонаж мёртв")
+            break
+        end
         if hum.Sit then break end
 
-        local existingBV = hrp:FindFirstChildOfClass("BodyVelocity")
-        if existingBV then
-            existingBV.Velocity = Vector3.zero
-            existingBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        else
-            local bv = Instance.new("BodyVelocity")
-            bv.Velocity = Vector3.zero
+        local bv = hrp:FindFirstChildOfClass("BodyVelocity")
+        if not bv then
+            bv = Instance.new("BodyVelocity")
             bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
             bv.Parent = hrp
         end
 
         for _, v in ipairs(hrp:GetChildren()) do
-            if v:IsA("BodyPosition") or v:IsA("BodyGyro") or v:IsA("AlignPosition") or v:IsA("AlignOrientation") then
+            if v:IsA("BodyPosition") or v:IsA("BodyGyro")
+               or v:IsA("AlignPosition") or v:IsA("AlignOrientation") then
                 v:Destroy()
             end
         end
 
-        local currentPos = hrp.Position
-        local dist = (currentPos - targetPos).Magnitude
-        if dist < 1 then break end
+        local cur = hrp.Position
+        local dx, dz = targetPos.X - cur.X, targetPos.Z - cur.Z
+        local dy = targetPos.Y - cur.Y
+        local distXZ = math.sqrt(dx*dx + dz*dz)
 
-        if dist < TELEPORT_DISTANCE then
-            hrp.CFrame = CFrame.new(targetPos)
-            task.wait(DELAY)
-            if (hrp.Position - targetPos).Magnitude < 1 then break end
+        if distXZ < 1 and math.abs(dy) < Y_TOLERANCE then break end
+
+        if distXZ < TELEPORT_DIST_XZ and distXZ > 0 then
+            hrp.CFrame = CFrame.new(targetPos.X, cur.Y, targetPos.Z)
+        elseif distXZ >= TELEPORT_DIST_XZ then
+            local step = math.min(STEP_XZ, distXZ)
+            local nx, nz = dx / distXZ, dz / distXZ
+            hrp.CFrame = CFrame.new(cur.X + nx * step, cur.Y, cur.Z + nz * step)
         end
 
-        if currentPos.Y < targetPos.Y - 10 then
-            hrp.CFrame = CFrame.new(currentPos.X, targetPos.Y, currentPos.Z)
-            currentPos = hrp.Position
+        local velY = 0
+        if dy > Y_TOLERANCE then
+            velY = math.min(Y_UP_SPEED, dy * 2)
+        elseif dy < -Y_TOLERANCE then
+            velY = -20
         end
-
-        local dirVec = (targetPos - currentPos).Unit
-        local moveDist = math.min(STEP, dist)
-        local newPos = currentPos + dirVec * moveDist
-        newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z)
-        hrp.CFrame = CFrame.new(newPos)
+        bv.Velocity = Vector3.new(0, velY, 0)
 
         if tick() - lastLogAt >= 2 then
             lastLogAt = tick()
-            local d = (hrp.Position - targetPos).Magnitude
-            LOG("Move", string.format("dist=%.1f", d))
+            LOG("Move", string.format("dxz=%.1f dy=%.1f velY=%.1f", distXZ, dy, velY))
         end
 
         task.wait(DELAY)
     end
 
     if char and hrp and hum then
-        hrp.CFrame = CFrame.new(targetPos)
         hum.PlatformStand = false
         local bv = hrp:FindFirstChildOfClass("BodyVelocity")
         if bv then bv:Destroy() end
@@ -404,14 +411,14 @@ end
 
 local function doBeltScan()
     local category3 = ensureCategoryOpen("Category3")
-    if not category3 then WARN("BeltScan", "нет Category3 — возврат nil"); return nil end
+    if not category3 then WARN("BeltScan", "нет Category3"); return nil end
 
     local tileGrid = waitForObjectByPath({"Inventory","Inventory","Main","PageContent","TileGrid"}, 5)
     if not tileGrid then
         local inv = playerGui:FindFirstChild("Inventory")
         if inv then tileGrid = inv:FindFirstChild("TileGrid", true) end
     end
-    if not tileGrid then WARN("BeltScan", "нет TileGrid — возврат nil"); return nil end
+    if not tileGrid then WARN("BeltScan", "нет TileGrid"); return nil end
 
     local scrollingFrame = nil
     local obj = tileGrid
@@ -419,11 +426,11 @@ local function doBeltScan()
         if obj:IsA("ScrollingFrame") then scrollingFrame = obj; break end
         obj = obj.Parent
     end
-    if not scrollingFrame then WARN("BeltScan", "нет ScrollingFrame — возврат nil"); return nil end
+    if not scrollingFrame then WARN("BeltScan", "нет ScrollingFrame"); return nil end
 
     local beltList = scanTilesOnce(tileGrid, scrollingFrame)
     if #beltList == 0 then
-        LOG("BeltScan", "0 тайлов, повторный клик Category3 + скан")
+        LOG("BeltScan", "0 тайлов, повторный клик Category3")
         fireSequence(category3); task.wait(3.0)
         tileGrid = waitForObjectByPath({"Inventory","Inventory","Main","PageContent","TileGrid"}, 3) or tileGrid
         if not tileGrid then return nil end
@@ -431,7 +438,7 @@ local function doBeltScan()
     end
 
     if #beltList == 0 then
-        LOG("BeltScan", "0 тайлов после 2 попыток → считаем None")
+        LOG("BeltScan", "0 тайлов → None")
         return "None"
     end
 
@@ -553,7 +560,7 @@ local function serverHop()
         if #btns == 0 then WARN("Hop", "нет Join кнопок"); task.wait(2); continue end
 
         local chosen = btns[math.random(1, #btns)]
-        LOG("Hop", "жму Join " .. chosen:GetFullName())
+        LOG("Hop", "жму Join")
         fireSequence(chosen)
 
         task.wait(10)
@@ -565,11 +572,11 @@ local function serverHop()
             State.currentBelt   = "Unknown"
             State.beltChangedAt = tick()
             State.beltScanPaused = false
-            LOG("Hop", "State сброшен — новый сервер")
+            LOG("Hop", "State сброшен")
             return true
         end
 
-        WARN("Hop", "попытка #" .. attempt .. " не сработала (JobId тот же), ещё раз")
+        WARN("Hop", "попытка #" .. attempt .. " провалена")
         task.wait(1)
     end
 
@@ -781,7 +788,7 @@ end
 local function runNoBeltMode()
     LOG("NoBelt", "=== START ===")
 
-    LOG("NoBelt", "принудительно 2,4 OFF на старте")
+    LOG("NoBelt", "2,4 OFF на старте")
     setOption(TAB_FARM, OPT_FARM, false)
     task.wait(0.5)
 
@@ -802,24 +809,24 @@ local function runNoBeltMode()
     LOG("NoBelt", "6,1 OFF")
     setOption(TAB_MAIN, OPT_MAIN, false); task.wait(0.5)
 
-    LOG("NoBelt", "2,4 OFF для гарантии")
+    LOG("NoBelt", "2,4 OFF")
     setOption(TAB_FARM, OPT_FARM, false); task.wait(0.5)
 
-    LOG("NoBelt", "ВКЛ флаг коллизий")
+    LOG("NoBelt", "ВКЛ коллизии OFF")
     collisionsDisabledGlobal = true
     disableCollisionsNow()
     task.wait(0.5)
 
-    LOG("NoBelt", "перемещаюсь к фиксированной точке")
+    LOG("NoBelt", "goTo FIXED_POS")
     goToPosition(FIXED_POS)
     task.wait(0.5)
 
-    LOG("NoBelt", "ВЫКЛ флаг коллизий")
+    LOG("NoBelt", "коллизии ON")
     collisionsDisabledGlobal = false
     restoreCollisionsNow()
     task.wait(0.5)
 
-    LOG("NoBelt", "на точке → 2,4 ON")
+    LOG("NoBelt", "2,4 ON")
     setOption(TAB_FARM, OPT_FARM, true)
 
     local lastMastery = getMastery() or 0
@@ -833,7 +840,7 @@ local function runNoBeltMode()
         end
         if m > 500 then break end
         if tick() - lastChangeAt > NOBELT_MASTERY_TIMEOUT then
-            WARN("NoBelt", "mastery не растёт " .. NOBELT_MASTERY_TIMEOUT .. "с — hop")
+            WARN("NoBelt", "mastery не растёт — hop")
             serverHop()
             return
         end
@@ -887,11 +894,10 @@ local function runTradeMode()
     State.beltScanPaused = true
     State.inTrade = true
 
-    LOG("Trade", "выключаю 6,1")
+    LOG("Trade", "6,1 OFF")
     setOption(TAB_MAIN, OPT_MAIN, false)
     task.wait(0.5)
     if getOptionState(TAB_MAIN, OPT_MAIN) == true then
-        WARN("Trade", "6,1 всё ещё on — повтор")
         setOption(TAB_MAIN, OPT_MAIN, false); task.wait(0.5)
     end
 
@@ -905,87 +911,6 @@ local function runTradeMode()
     local TELEPORT_TAB          = 19
     local TELEPORT_OPT_TEXT     = 2
     local TELEPORT_OPT_ACTIVATE = 3
-
-    local collisionsDisabled = false
-
-    local STEP = 4
-    local DELAY = 0.03
-    local TELEPORT_DISTANCE = 12
-
-    local function goTo(targetPos)
-        local char = player.Character
-        if not char then return false end
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        local hum = char:FindFirstChild("Humanoid")
-        if not hrp or not hum then return false end
-
-        hum.PlatformStand = true
-        local lastLogAt = tick()
-
-        while true do
-            char = player.Character
-            if not char then break end
-            hrp = char:FindFirstChild("HumanoidRootPart")
-            hum = char:FindFirstChild("Humanoid")
-            if not hrp or not hum then break end
-            if hum.Health <= 0 then WARN("Move", "персонаж мёртв"); break end
-            if hum.Sit then break end
-
-            local existingBV = hrp:FindFirstChildOfClass("BodyVelocity")
-            if existingBV then
-                existingBV.Velocity = Vector3.zero
-                existingBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-            else
-                local bv = Instance.new("BodyVelocity")
-                bv.Velocity = Vector3.zero
-                bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-                bv.Parent = hrp
-            end
-
-            for _, v in ipairs(hrp:GetChildren()) do
-                if v:IsA("BodyPosition") or v:IsA("BodyGyro") or v:IsA("AlignPosition") or v:IsA("AlignOrientation") then
-                    v:Destroy()
-                end
-            end
-
-            local currentPos = hrp.Position
-            local dist = (currentPos - targetPos).Magnitude
-            if dist < 1 then break end
-
-            if dist < TELEPORT_DISTANCE then
-                hrp.CFrame = CFrame.new(targetPos)
-                task.wait(DELAY)
-                if (hrp.Position - targetPos).Magnitude < 1 then break end
-            end
-
-            if currentPos.Y < targetPos.Y - 10 then
-                hrp.CFrame = CFrame.new(currentPos.X, targetPos.Y, currentPos.Z)
-                currentPos = hrp.Position
-            end
-
-            local dirVec = (targetPos - currentPos).Unit
-            local moveDist = math.min(STEP, dist)
-            local newPos = currentPos + dirVec * moveDist
-            newPos = Vector3.new(newPos.X, targetPos.Y, newPos.Z)
-            hrp.CFrame = CFrame.new(newPos)
-
-            if tick() - lastLogAt >= 2 then
-                lastLogAt = tick()
-                local d = (hrp.Position - targetPos).Magnitude
-                LOG("Move", string.format("dist=%.1f", d))
-            end
-
-            task.wait(DELAY)
-        end
-
-        if char and hrp and hum then
-            hrp.CFrame = CFrame.new(targetPos)
-            hum.PlatformStand = false
-            local bv = hrp:FindFirstChildOfClass("BodyVelocity")
-            if bv then bv:Destroy() end
-        end
-        return true
-    end
 
     local function fastSitOnSeat(targetSeat, maxAttempts)
         maxAttempts = maxAttempts or 3
@@ -1030,27 +955,22 @@ local function runTradeMode()
 
     local function moveAndSitOnSeat(seat)
         local sitTarget = seat.Position + Vector3.new(0, 3.5, 0)
-        LOG("Move", string.format("иду к seat (%.0f,%.0f,%.0f)", sitTarget.X, sitTarget.Y, sitTarget.Z))
-        goTo(sitTarget)
+        LOG("Move", "иду к seat")
+        goToPosition(sitTarget)
         LOG("Move", "у цели, пробую сесть")
         for i = 1, 5 do
             if fastSitOnSeat(seat, 1) then
-                LOG("Move", "СЕЛ, попытка " .. i)
+                LOG("Move", "СЕЛ")
                 return true
             end
             task.wait(0.3)
-            goTo(seat.Position + Vector3.new(0, 3.5, 0))
+            goToPosition(seat.Position + Vector3.new(0, 3.5, 0))
         end
         return false
     end
 
-    -- ============================================================
-    -- НОВОЕ: простая перепосадка — прыжок + goTo(seat) + fastSit
-    -- Никаких отходов в стороны. Используется при чужом партнёре
-    -- и при слёте со стула.
-    -- ============================================================
     local function jumpAndReSeat(seat, sitTarget)
-        LOG("Trade", "перепосадка: прыжок + движение к столу")
+        LOG("Trade", "перепосадка: jump + goTo + fastSit")
         local c = player.Character
         if c then
             local h = c:FindFirstChild("Humanoid")
@@ -1061,7 +981,7 @@ local function runTradeMode()
                 task.wait(0.3)
             end
         end
-        goTo(sitTarget)
+        goToPosition(sitTarget)
         return fastSitOnSeat(seat, 3)
     end
 
@@ -1157,8 +1077,7 @@ local function runTradeMode()
         local url = SERVER_URL .. "/send_inventory?nickname=" .. HttpService:UrlEncode(player.Name)
             .. "&fruits=" .. HttpService:UrlEncode(table.concat(fruits, ","))
             .. "&job_id=" .. HttpService:UrlEncode(game.JobId)
-        local ok, err = pcall(function() return game:HttpGet(url) end)
-        if ok then LOG("HTTP", "send_inventory OK") else WARN("HTTP", "err: " .. tostring(err)) end
+        pcall(function() return game:HttpGet(url) end)
     end
 
     local function fetchConfig()
@@ -1264,17 +1183,10 @@ local function runTradeMode()
 
     task.spawn(function()
         while true do
-            if collisionsDisabled then
-                pcall(function()
-                    local myChar = player.Character
-                    for _, obj in ipairs(Workspace:GetDescendants()) do
-                        if obj:IsA("BasePart") and not (myChar and obj:IsDescendantOf(myChar)) then
-                            obj.CanCollide = false
-                        end
-                    end
-                end)
+            if collisionsDisabledGlobal then
+                disableCollisionsNow()
             end
-            task.wait(2)
+            task.wait(0.5)
         end
     end)
 
@@ -1346,7 +1258,6 @@ local function runTradeMode()
         return nil
     end
 
-    -- Обновлённая resetSeatAndWait — тоже через jumpAndReSeat
     local function resetSeatAndWait(seat, sitTarget)
         while true do
             local c = player.Character
@@ -1488,7 +1399,7 @@ local function runTradeMode()
             if isTradeCompleted() then return true end
             local tradeContainer = findObjectByPath(playerGui, "Main","Trade","Container")
             if not tradeContainer and w > 2 then
-                LOG("Accept", "UI трейда пропал — считаем завершено")
+                LOG("Accept", "UI пропал — завершено")
                 return true
             end
             if r1 and r1:IsA("TextLabel") then
@@ -1539,41 +1450,37 @@ local function runTradeMode()
 
     processLoadFruit(config.load_fruit_items or {})
 
-    collisionsDisabled = true
-    task.wait(1)
-
-    -- Waypoint трейд-зоны ДО поиска столов
-    LOG("Trade", "ВКЛ глобальный флаг коллизий (waypoint)")
+    LOG("Trade", "ВКЛ коллизии OFF (waypoint)")
     collisionsDisabledGlobal = true
     disableCollisionsNow()
     task.wait(0.5)
 
-    LOG("Trade", "перемещаюсь к waypoint трейд-зоны")
+    LOG("Trade", "goTo TRADE_WAYPOINT")
     goToPosition(TRADE_WAYPOINT)
     task.wait(1.0)
 
-    LOG("Trade", "ВЫКЛ глобальный флаг коллизий")
+    LOG("Trade", "коллизии ON")
     collisionsDisabledGlobal = false
     restoreCollisionsNow()
     task.wait(0.5)
 
-    LOG("Trade", "начинаю искать стол")
+    LOG("Trade", "ищу стол")
 
     local done = false
     while not done and State.running do
         local tbl, seat = findTradeTable(config.partner_name or "")
         if not tbl then
-            LOG("Trade", "нет подходящего стола, ждём 5с")
+            LOG("Trade", "нет стола, ждём 5с")
             task.wait(5); continue
         end
         local sitTarget = seat.Position + Vector3.new(0, 3.5, 0)
-        LOG("Trade", string.format("стол найден, seat=(%.0f,%.0f,%.0f)", sitTarget.X, sitTarget.Y, sitTarget.Z))
+        LOG("Trade", "стол найден")
 
         if not moveAndSitOnSeat(seat) then
-            WARN("Trade", "не сел, пробуем другой стол")
+            WARN("Trade", "не сел, другой стол")
             task.wait(2); continue
         end
-        LOG("Trade", "СИЖУ НА СТУЛЕ")
+        LOG("Trade", "СИЖУ")
 
         local function getOtherSeat(tbl_, mySeat)
             for _, part in ipairs(tbl_:GetDescendants()) do
@@ -1587,27 +1494,23 @@ local function runTradeMode()
         local otherSeat = getOtherSeat(tbl, seat)
 
         while not done and State.running do
-            -- Слетел со стула → пересаживаемся тем же способом (прыжок + goTo + fastSit)
             if not isSeated(seat) then
-                LOG("Trade", "слетел — пересаживаюсь (jump + goTo + fastSit)")
+                LOG("Trade", "слетел — jumpAndReSeat")
                 if not jumpAndReSeat(seat, sitTarget) then
                     task.wait(0.5)
-                    -- если совсем не получилось — выходим из внутреннего цикла
                     if not isSeated(seat) then break end
                 end
             end
 
-            -- Чужой партнёр → прыжок и перепосадка (без отходов)
             if otherSeat and otherSeat.Occupant then
                 local otherHum = otherSeat.Occupant
                 local otherChar = otherHum and otherHum.Parent
                 local otherPlr = otherChar and Players:GetPlayerFromCharacter(otherChar)
                 local ep = config.partner_name or ""
                 if otherPlr and otherPlr ~= player and ep ~= "" and otherPlr.Name ~= ep then
-                    LOG("Trade", "чужой партнёр " .. otherPlr.Name .. " — прыгаю и пересаживаюсь")
+                    LOG("Trade", "чужой партнёр " .. otherPlr.Name .. " — jumpAndReSeat")
                     jumpAndReSeat(seat, sitTarget)
                     task.wait(1)
-                    -- не break, продолжаем ждать — прыжок заставил нас встать и снова сесть
                 end
             end
 
@@ -1616,7 +1519,7 @@ local function runTradeMode()
             if pn == nil then
                 task.wait(0.2)
             elseif ep ~= "" and pn ~= ep then
-                LOG("Trade", "чужой партнёр (getPartnerName) — прыжок и перепосадка")
+                LOG("Trade", "чужой (getPartnerName) — jumpAndReSeat")
                 jumpAndReSeat(seat, sitTarget)
                 task.wait(1)
             else
@@ -1640,7 +1543,6 @@ local function runTradeMode()
                         pcall(function()
                             game:HttpGet(SERVER_URL .. "/trade_completed?nickname=" .. HttpService:UrlEncode(player.Name))
                         end)
-                        collisionsDisabled = false
                         done = true
                         break
                     else
@@ -1651,31 +1553,29 @@ local function runTradeMode()
         end
     end
 
-    -- ============================================================
     -- ПОСТ-ТРЕЙД
-    -- ============================================================
-    LOG("PostTrade", "=== старт пост-трейд сценария ===")
+    LOG("PostTrade", "=== START ===")
     task.wait(2)
 
-    LOG("PostTrade", "ВКЛ флаг коллизий")
+    LOG("PostTrade", "ВКЛ коллизии OFF")
     collisionsDisabledGlobal = true
     disableCollisionsNow()
     task.wait(0.5)
 
-    LOG("PostTrade", "перемещаюсь к Dojo Trainer")
+    LOG("PostTrade", "goTo Dojo Trainer")
     goToPosition(POST_TRADE_WAYPOINT)
     task.wait(1.5)
 
-    LOG("PostTrade", "ВЫКЛ флаг коллизий")
+    LOG("PostTrade", "коллизии ON")
     collisionsDisabledGlobal = false
     restoreCollisionsNow()
     task.wait(0.5)
 
-    LOG("PostTrade", "активирую RequestQuest")
+    LOG("PostTrade", "RequestQuest")
     callRemote({NPC = POST_TRADE_NPC_NAME, Command = "RequestQuest"}, "RequestQuest")
     task.wait(1)
 
-    LOG("PostTrade", "активирую ClaimQuest")
+    LOG("PostTrade", "ClaimQuest")
     callRemote({NPC = POST_TRADE_NPC_NAME, Command = "ClaimQuest"}, "ClaimQuest")
     LOG("PostTrade", "=== DONE ===")
 
@@ -1694,7 +1594,7 @@ LOG("Main", "ждём первый скан пояса (макс 90с)...")
 local waitStart = tick()
 while State.currentBelt == "Unknown" and tick() - waitStart < 90 do task.wait(1) end
 if State.currentBelt == "Unknown" then
-    WARN("Main", "belt не определён за 90с — стартуем nobelt всё равно")
+    WARN("Main", "belt не определён за 90с — стартуем nobelt")
 end
 LOG("Main", "belt = " .. State.currentBelt)
 
@@ -1706,7 +1606,7 @@ while State.running do
     local belt = State.currentBelt
     if belt == "Yellow" and not State.tradeDone then
         if getOptionState(TAB_MAIN, OPT_MAIN) == true then
-            LOG("Main", "Yellow — выключаю 6,1 перед трейдом")
+            LOG("Main", "Yellow — 6,1 OFF перед трейдом")
             setOption(TAB_MAIN, OPT_MAIN, false)
             task.wait(0.5)
         end
