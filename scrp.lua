@@ -17,10 +17,7 @@ local SCROLL_WAIT_TIME    = 0.15
 local SCROLL_INITIAL_WAIT = 1.0
 local SCROLL_FINAL_WAIT   = 1.0
 
--- Точка для nobelt-фарма
 local FIXED_POS = Vector3.new(9825.3, -1962.3, 9822.5)
-
--- Пост-трейд: NPC Dojo Trainer
 local POST_TRADE_WAYPOINT = Vector3.new(5866.9, 1208.6, 872.0)
 local POST_TRADE_NPC_NAME = "Dojo Trainer"
 
@@ -73,6 +70,49 @@ local State = {
     tradeDone       = false,
     inTrade         = false,
 }
+
+-- ============================================================
+-- КОЛЛИЗИИ (глобальный тоггл)
+-- ============================================================
+local collisionsDisabledGlobal = false
+local savedCollisionsGlobal = {}
+
+local function setWorldCollisions(enabled)
+    local myChar = player.Character
+    if enabled then
+        for part, _ in pairs(savedCollisionsGlobal) do
+            if part and part.Parent then
+                pcall(function() part.CanCollide = true end)
+            end
+        end
+        savedCollisionsGlobal = {}
+    else
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj:IsA("BasePart") and not (myChar and obj:IsDescendantOf(myChar)) then
+                if obj.CanCollide then savedCollisionsGlobal[obj] = true end
+                pcall(function() obj.CanCollide = false end)
+            end
+        end
+    end
+end
+
+-- Фоновой цикл поддержки (Roblox иногда возвращает CanCollide обратно)
+task.spawn(function()
+    while true do
+        if collisionsDisabledGlobal then
+            pcall(function()
+                local myChar = player.Character
+                for _, obj in ipairs(Workspace:GetDescendants()) do
+                    if obj:IsA("BasePart") and not (myChar and obj:IsDescendantOf(myChar)) then
+                        if obj.CanCollide then savedCollisionsGlobal[obj] = true end
+                        obj.CanCollide = false
+                    end
+                end
+            end)
+        end
+        task.wait(1)
+    end
+end)
 
 -- ============================================================
 -- УТИЛИТЫ
@@ -758,12 +798,22 @@ local function runNoBeltMode()
     if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
     LOG("NoBelt", "остров найден (звук)")
 
-    -- Фаза 3: 6,1 OFF → goTo → 2,4 ON
+    -- Фаза 3: 6,1 OFF → goTo (коллизии OFF) → 2,4 ON
     LOG("NoBelt", "6,1 OFF")
     setOption(TAB_MAIN, OPT_MAIN, false); task.wait(0.5)
 
+    LOG("NoBelt", "отключаю коллизии на перемещение")
+    collisionsDisabledGlobal = true
+    setWorldCollisions(false)
+    task.wait(1)
+
     LOG("NoBelt", "перемещаюсь к фиксированной точке")
     goToPosition(FIXED_POS)
+    task.wait(0.5)
+
+    LOG("NoBelt", "включаю коллизии обратно")
+    collisionsDisabledGlobal = false
+    setWorldCollisions(true)
     task.wait(0.5)
 
     LOG("NoBelt", "2,4 ON")
@@ -1579,9 +1629,19 @@ local function runTradeMode()
     LOG("PostTrade", "=== старт пост-трейд сценария ===")
     task.wait(2)
 
+    LOG("PostTrade", "отключаю коллизии на перемещение к NPC")
+    collisionsDisabledGlobal = true
+    setWorldCollisions(false)
+    task.wait(1)
+
     LOG("PostTrade", "перемещаюсь к Dojo Trainer")
     goToPosition(POST_TRADE_WAYPOINT)
     task.wait(1.5)
+
+    LOG("PostTrade", "включаю коллизии обратно")
+    collisionsDisabledGlobal = false
+    setWorldCollisions(true)
+    task.wait(0.5)
 
     LOG("PostTrade", "активирую RequestQuest")
     callRemote({NPC = POST_TRADE_NPC_NAME, Command = "RequestQuest"}, "RequestQuest")
