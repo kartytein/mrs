@@ -72,7 +72,7 @@ local State = {
 }
 
 -- ============================================================
--- КОЛЛИЗИИ (глобальный тоггл)
+-- КОЛЛИЗИИ
 -- ============================================================
 local collisionsDisabledGlobal = false
 local savedCollisionsGlobal = {}
@@ -238,7 +238,7 @@ local function callRemote(args, label)
 end
 
 -- ============================================================
--- ПЕРЕМЕЩЕНИЕ (глобальный)
+-- ПЕРЕМЕЩЕНИЕ
 -- ============================================================
 local function goToPosition(targetPos)
     local STEP = 4
@@ -1044,6 +1044,27 @@ local function runTradeMode()
         return false
     end
 
+    -- ============================================================
+    -- НОВОЕ: простая перепосадка — прыжок + goTo(seat) + fastSit
+    -- Никаких отходов в стороны. Используется при чужом партнёре
+    -- и при слёте со стула.
+    -- ============================================================
+    local function jumpAndReSeat(seat, sitTarget)
+        LOG("Trade", "перепосадка: прыжок + движение к столу")
+        local c = player.Character
+        if c then
+            local h = c:FindFirstChild("Humanoid")
+            if h then
+                pcall(function() h.Sit = false end)
+                task.wait(0.1)
+                pcall(function() h.Jump = true end)
+                task.wait(0.3)
+            end
+        end
+        goTo(sitTarget)
+        return fastSitOnSeat(seat, 3)
+    end
+
     local function selectTeam()
         pcall(function()
             ReplicatedStorage.Remotes.CommF_:InvokeServer("SetTeam", "Marines")
@@ -1325,6 +1346,7 @@ local function runTradeMode()
         return nil
     end
 
+    -- Обновлённая resetSeatAndWait — тоже через jumpAndReSeat
     local function resetSeatAndWait(seat, sitTarget)
         while true do
             local c = player.Character
@@ -1332,15 +1354,8 @@ local function runTradeMode()
             local h = c:FindFirstChild("Humanoid")
             if not h then return false end
             if isSeated(seat) then return true end
-            pcall(function() h.Sit = false end); task.wait(0.2)
-            h.Jump = true; task.wait(0.2)
-            for _ = 1, 5 do
-                if isSeated(seat) then return true end
-                goTo(sitTarget + Vector3.new(math.random(-6,6), 0, math.random(-6,6)))
-                goTo(sitTarget)
-                fastSitOnSeat(seat, 1)
-                task.wait(0.2)
-            end
+            if jumpAndReSeat(seat, sitTarget) then return true end
+            task.wait(0.3)
         end
     end
 
@@ -1467,7 +1482,7 @@ local function runTradeMode()
         while w < READY_TIMEOUT do
             task.wait(0.5); w += 0.5
             if not isSeated(seat) then
-                LOG("Accept", "вышел со стула — считаем завершено/провал")
+                LOG("Accept", "вышел со стула")
                 return isTradeCompleted()
             end
             if isTradeCompleted() then return true end
@@ -1527,11 +1542,8 @@ local function runTradeMode()
     collisionsDisabled = true
     task.wait(1)
 
-    -- ============================================================
-    -- ФИКС: сначала идём к waypoint (там обычно трейд-зона),
-    -- потом уже ищем столы. Иначе столы не прогружены.
-    -- ============================================================
-    LOG("Trade", "ВКЛ глобальный флаг коллизий")
+    -- Waypoint трейд-зоны ДО поиска столов
+    LOG("Trade", "ВКЛ глобальный флаг коллизий (waypoint)")
     collisionsDisabledGlobal = true
     disableCollisionsNow()
     task.wait(0.5)
@@ -1575,26 +1587,27 @@ local function runTradeMode()
         local otherSeat = getOtherSeat(tbl, seat)
 
         while not done and State.running do
+            -- Слетел со стула → пересаживаемся тем же способом (прыжок + goTo + fastSit)
             if not isSeated(seat) then
-                LOG("Trade", "слетел — пересаживаюсь")
-                if not resetSeatAndWait(seat, sitTarget) then break end
+                LOG("Trade", "слетел — пересаживаюсь (jump + goTo + fastSit)")
+                if not jumpAndReSeat(seat, sitTarget) then
+                    task.wait(0.5)
+                    -- если совсем не получилось — выходим из внутреннего цикла
+                    if not isSeated(seat) then break end
+                end
             end
 
+            -- Чужой партнёр → прыжок и перепосадка (без отходов)
             if otherSeat and otherSeat.Occupant then
                 local otherHum = otherSeat.Occupant
                 local otherChar = otherHum and otherHum.Parent
                 local otherPlr = otherChar and Players:GetPlayerFromCharacter(otherChar)
                 local ep = config.partner_name or ""
                 if otherPlr and otherPlr ~= player and ep ~= "" and otherPlr.Name ~= ep then
-                    LOG("Trade", "!!! ЧУЖОЙ партнёр " .. otherPlr.Name .. " — СРОЧНО валим")
-                    local c = player.Character
-                    if c then
-                        local h = c:FindFirstChild("Humanoid")
-                        if h then pcall(function() h.Sit = false end) end
-                    end
-                    task.wait(0.1)
-                    goTo(sitTarget + Vector3.new(0, 0, 40))
-                    break
+                    LOG("Trade", "чужой партнёр " .. otherPlr.Name .. " — прыгаю и пересаживаюсь")
+                    jumpAndReSeat(seat, sitTarget)
+                    task.wait(1)
+                    -- не break, продолжаем ждать — прыжок заставил нас встать и снова сесть
                 end
             end
 
@@ -1603,15 +1616,9 @@ local function runTradeMode()
             if pn == nil then
                 task.wait(0.2)
             elseif ep ~= "" and pn ~= ep then
-                LOG("Trade", "чужой партнёр через getPartnerName — валим")
-                local c = player.Character
-                if c then
-                    local h = c:FindFirstChild("Humanoid")
-                    if h then pcall(function() h.Sit = false end) end
-                end
-                task.wait(0.1)
-                goTo(sitTarget + Vector3.new(0, 0, 40))
-                break
+                LOG("Trade", "чужой партнёр (getPartnerName) — прыжок и перепосадка")
+                jumpAndReSeat(seat, sitTarget)
+                task.wait(1)
             else
                 local ok = true
                 for _, item in ipairs(config.trade_items or {}) do
@@ -1629,7 +1636,6 @@ local function runTradeMode()
                             if h then pcall(function() h.Sit = false end) end
                         end
                         task.wait(0.15)
-                        pcall(function() goTo(sitTarget + Vector3.new(0, 0, 40)) end)
 
                         pcall(function()
                             game:HttpGet(SERVER_URL .. "/trade_completed?nickname=" .. HttpService:UrlEncode(player.Name))
@@ -1646,7 +1652,7 @@ local function runTradeMode()
     end
 
     -- ============================================================
-    -- ПОСТ-ТРЕЙД: перемещение к NPC + активация квестов
+    -- ПОСТ-ТРЕЙД
     -- ============================================================
     LOG("PostTrade", "=== старт пост-трейд сценария ===")
     task.wait(2)
