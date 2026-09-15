@@ -76,7 +76,6 @@ local State = {
 local collisionsDisabledGlobal = false
 local savedCollisionsGlobal = {}
 
--- Один проход: отключает коллизии у всех BasePart кроме своих
 local function disableCollisionsNow()
     pcall(function()
         local myChar = player.Character
@@ -98,7 +97,6 @@ local function restoreCollisionsNow()
     savedCollisionsGlobal = {}
 end
 
--- Фоновый цикл: каждые 0.1с, пока флаг активен, глушим коллизии у новых объектов
 task.spawn(function()
     while true do
         if collisionsDisabledGlobal then
@@ -239,7 +237,7 @@ local function callRemote(args, label)
 end
 
 -- ============================================================
--- ПЕРЕМЕЩЕНИЕ (глобальный) — глушит коллизии КАЖДЫЙ КАДР
+-- ПЕРЕМЕЩЕНИЕ (глобальный)
 -- ============================================================
 local function goToPosition(targetPos)
     local STEP = 4
@@ -257,7 +255,6 @@ local function goToPosition(targetPos)
     LOG("Move", string.format("старт X=%.0f Y=%.0f Z=%.0f", targetPos.X, targetPos.Y, targetPos.Z))
 
     while true do
-        -- КАЖДЫЙ КАДР глушим коллизии (особенно у новых подгруженных чанков)
         if collisionsDisabledGlobal then
             disableCollisionsNow()
         end
@@ -586,6 +583,7 @@ end
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
 local TAB_MAIN, OPT_MAIN = 6, 1
+local TAB_FARM, OPT_FARM = 2, 4
 
 local function getRoot()
     for _, c in ipairs(CoreGui:GetChildren()) do
@@ -782,13 +780,19 @@ end
 local function runNoBeltMode()
     LOG("NoBelt", "=== START ===")
 
-    -- Фаза 1: dragon talon
+    -- НОВОЕ: сразу вырубаем 2,4 (не должна висеть включённой во время пути)
+    LOG("NoBelt", "принудительно 2,4 OFF на старте")
+    setOption(TAB_FARM, OPT_FARM, false)
+    task.wait(0.5)
+
+    -- Фаза 1: dragon talon (6,1 ON)
     local guard = 0
     while not hasDragonTalon() and State.running and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
         setOption(TAB_MAIN, OPT_MAIN, true); task.wait(2); guard += 1
         if guard % 15 == 0 then LOG("NoBelt", "guard=" .. guard) end
     end
     if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
+    LOG("NoBelt", "dragon talon OK")
 
     -- Фаза 2: остров (sound)
     while not isOnIsland() and State.running and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
@@ -797,26 +801,29 @@ local function runNoBeltMode()
     if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
     LOG("NoBelt", "остров найден (sound)")
 
-    -- Фаза 3: 6,1 OFF → коллизии OFF → goTo → коллизии ON → 2,4 ON
+    -- Фаза 3: полностью вырубаем всё → коллизии OFF → goTo → коллизии ON → 2,4 ON
     LOG("NoBelt", "6,1 OFF")
     setOption(TAB_MAIN, OPT_MAIN, false); task.wait(0.5)
 
-    LOG("NoBelt", "ВКЛ флаг коллизий и первый сброс")
+    LOG("NoBelt", "2,4 OFF (ещё раз для гарантии)")
+    setOption(TAB_FARM, OPT_FARM, false); task.wait(0.5)
+
+    LOG("NoBelt", "ВКЛ флаг коллизий")
     collisionsDisabledGlobal = true
     disableCollisionsNow()
     task.wait(0.5)
 
-    LOG("NoBelt", "перемещаюсь к фиксированной точке (коллизии глушатся каждый кадр)")
+    LOG("NoBelt", "перемещаюсь к фиксированной точке")
     goToPosition(FIXED_POS)
     task.wait(0.5)
 
-    LOG("NoBelt", "ВЫКЛ флаг коллизий, восстанавливаю")
+    LOG("NoBelt", "ВЫКЛ флаг коллизий")
     collisionsDisabledGlobal = false
     restoreCollisionsNow()
     task.wait(0.5)
 
-    LOG("NoBelt", "2,4 ON")
-    setOption(2, 4, true)
+    LOG("NoBelt", "на точке → 2,4 ON")
+    setOption(TAB_FARM, OPT_FARM, true)
 
     -- Фаза 4: фарм до 500
     local lastMastery = getMastery() or 0
@@ -838,7 +845,7 @@ local function runNoBeltMode()
     if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
 
     -- Фаза 5: 2,4 OFF → 6,1 ON
-    setOption(2, 4, false); task.wait(0.5)
+    setOption(TAB_FARM, OPT_FARM, false); task.wait(0.5)
     setOption(TAB_MAIN, OPT_MAIN, true)
     State.nobeltDone = true
 end
@@ -892,6 +899,10 @@ local function runTradeMode()
         WARN("Trade", "6,1 всё ещё on — повтор")
         setOption(TAB_MAIN, OPT_MAIN, false); task.wait(0.5)
     end
+
+    LOG("Trade", "2,4 OFF (на всякий)")
+    setOption(TAB_FARM, OPT_FARM, false)
+    task.wait(0.5)
 
     local SEND_INVENTORY_INTERVAL = 20
     local CONFIG_POLL_INTERVAL    = 10
@@ -1633,7 +1644,7 @@ local function runTradeMode()
     disableCollisionsNow()
     task.wait(0.5)
 
-    LOG("PostTrade", "перемещаюсь к Dojo Trainer (коллизии глушатся каждый кадр)")
+    LOG("PostTrade", "перемещаюсь к Dojo Trainer")
     goToPosition(POST_TRADE_WAYPOINT)
     task.wait(1.5)
 
