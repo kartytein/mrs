@@ -9,7 +9,7 @@ local NOBELT_MASTERY_TIMEOUT= 60
 local STUCK_TIMEOUT         = 180
 local STUCK_CHECK_INTERVAL  = 30
 local STUCK_MOVE_THRESHOLD  = 5
-local SERVER_URL            = "http://192.168.1.100:8000"
+local SERVER_URL            = "http://192.168.31.89:8000"
 local BELT_ORDER            = {"White","Yellow","Orange","Green","Blue","Purple","Red","Black"}
 
 local SCROLL_STEP_PIXELS  = 10
@@ -238,12 +238,13 @@ local function callRemote(args, label)
 end
 
 -- ============================================================
--- ПЕРЕМЕЩЕНИЕ: X/Z через CFrame, Y через BodyVelocity (как в оригинале)
+-- ПЕРЕМЕЩЕНИЕ (X/Z через CFrame, Y через BV)
+-- Конфиг подобран так, чтобы реальная скорость была ~150 studs/s
 -- ============================================================
-local STEP_XZ          = 4
+local STEP_XZ          = 8
 local DELAY            = 0.03
 local TELEPORT_DIST_XZ = 12
-local Y_UP_SPEED       = 50
+local Y_UP_SPEED       = 100
 local Y_TOLERANCE      = 3
 local MAX_ITER         = 6000
 
@@ -262,7 +263,6 @@ local function goToPosition(targetPos)
     while iter < MAX_ITER do
         iter += 1
 
-        -- Каждый кадр глушим коллизии, если включён флаг
         if collisionsDisabledGlobal then
             disableCollisionsNow()
         end
@@ -311,7 +311,7 @@ local function goToPosition(targetPos)
         if dy > Y_TOLERANCE then
             velY = math.min(Y_UP_SPEED, dy * 2)
         elseif dy < -Y_TOLERANCE then
-            velY = -20
+            velY = -40
         end
         bv.Velocity = Vector3.new(0, velY, 0)
 
@@ -812,7 +812,7 @@ local function runNoBeltMode()
     LOG("NoBelt", "2,4 OFF")
     setOption(TAB_FARM, OPT_FARM, false); task.wait(0.5)
 
-    LOG("NoBelt", "ВКЛ коллизии OFF")
+    LOG("NoBelt", "коллизии OFF")
     collisionsDisabledGlobal = true
     disableCollisionsNow()
     task.wait(0.5)
@@ -1450,7 +1450,7 @@ local function runTradeMode()
 
     processLoadFruit(config.load_fruit_items or {})
 
-    LOG("Trade", "ВКЛ коллизии OFF (waypoint)")
+    LOG("Trade", "коллизии OFF (waypoint)")
     collisionsDisabledGlobal = true
     disableCollisionsNow()
     task.wait(0.5)
@@ -1557,7 +1557,7 @@ local function runTradeMode()
     LOG("PostTrade", "=== START ===")
     task.wait(2)
 
-    LOG("PostTrade", "ВКЛ коллизии OFF")
+    LOG("PostTrade", "коллизии OFF")
     collisionsDisabledGlobal = true
     disableCollisionsNow()
     task.wait(0.5)
