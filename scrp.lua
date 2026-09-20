@@ -9,7 +9,7 @@ local NOBELT_MASTERY_TIMEOUT= 60
 local STUCK_TIMEOUT         = 180
 local STUCK_CHECK_INTERVAL  = 30
 local STUCK_MOVE_THRESHOLD  = 5
-local SERVER_URL            = "ttp://192.168.31.179:8000"
+local SERVER_URL            = "http://192.168.31.179:8000"
 local BELT_ORDER            = {"White","Yellow","Orange","Green","Blue","Purple","Red","Black"}
 
 local SCROLL_STEP_PIXELS  = 10
