@@ -20,7 +20,8 @@ local SCROLL_FINAL_WAIT   = 1.0
 
 local FIXED_POS          = Vector3.new(9825.3, -1962.3, 9822.5)
 local TRADE_WAYPOINT     = Vector3.new(-12549.7, 337.5, -7501.1)
-local POST_TRADE_WAYPOINT = Vector3.new(5866.9, 1208.6, 872.0)
+-- POST_TRADE_WAYPOINT: поднят на +50 по Y, чтобы персонаж не проваливался сквозь текстуру
+local POST_TRADE_WAYPOINT = Vector3.new(5866.9, 1258.6, 872.0)
 local POST_TRADE_NPC_NAME = "Dojo Trainer"
 
 -- ============================================================
@@ -745,7 +746,6 @@ end
 
 -- ============================================================
 -- ОЖИДАНИЕ ГОТОВНОСТИ ХАБА
--- Если timeout == nil → ждём бесконечно, пока State.running
 -- ============================================================
 local function waitForHubReady(timeout)
     local t0 = tick()
@@ -1496,7 +1496,7 @@ local function runTradeMode()
     end
 
     -- ============================================================
-    -- ФАЗА 1: ТРЕЙД (бесконечный цикл до accept, без deadline)
+    -- ФАЗА 1: ТРЕЙД
     -- ============================================================
     local function doTradeOnce(config)
         collisionsDisabledGlobal = true
@@ -1593,17 +1593,23 @@ local function runTradeMode()
     end
 
     -- ============================================================
-    -- ФАЗА 2: ПОСТ-ТРЕЙД (NPC + ClaimQuest + Quest check)
+    -- ФАЗА 2: ПОСТ-ТРЕЙД
     -- ============================================================
     local function postTradeOnce()
         LOG("PostTrade", "=== START ===")
 
-        collisionsDisabledGlobal = false
-        restoreCollisionsNow()
+        LOG("PostTrade", "коллизии OFF")
+        collisionsDisabledGlobal = true
+        disableCollisionsNow()
         task.wait(0.5)
 
         LOG("PostTrade", "goTo POST_TRADE_WAYPOINT")
         goToPosition(POST_TRADE_WAYPOINT)
+        task.wait(0.3)
+
+        LOG("PostTrade", "коллизии ON")
+        collisionsDisabledGlobal = false
+        restoreCollisionsNow()
         task.wait(1.0)
 
         do
@@ -1724,9 +1730,6 @@ local function runTradeMode()
 
     processLoadFruit(config.load_fruit_items or {})
 
-    -- ============================================================
-    -- ВНЕШНИЙ ЦИКЛ РЕ-ТРЕЙДА (бесконечный, без лимита попыток)
-    -- ============================================================
     local claimed = false
 
     while not claimed and State.running do
