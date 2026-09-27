@@ -23,12 +23,6 @@ local TRADE_WAYPOINT     = Vector3.new(-12549.7, 337.5, -7501.1)
 local POST_TRADE_WAYPOINT = Vector3.new(5866.9, 1208.6, 872.0)
 local POST_TRADE_NPC_NAME = "Dojo Trainer"
 
-local POST_POS_TOL_XZ = 25
-local POST_POS_TOL_Y  = 60
-
-local RE_TRADE_MAX_ATTEMPTS = 15
-local TRADE_PHASE_TIMEOUT   = 240
-
 -- ============================================================
 -- ЛОГГЕР
 -- ============================================================
@@ -362,17 +356,6 @@ local function goToPosition(targetPos)
     end
     LOG("Move", "дошли до точки")
     return true
-end
-
-local function isNearPosition(targetPos, tolXZ, tolY)
-    tolXZ = tolXZ or 25
-    tolY  = tolY  or 60
-    local c = player.Character
-    local hrp = c and c:FindFirstChild("HumanoidRootPart")
-    if not hrp then return false end
-    local d = hrp.Position - targetPos
-    local dxz = math.sqrt(d.X * d.X + d.Z * d.Z)
-    return dxz <= tolXZ and math.abs(d.Y) <= tolY
 end
 
 -- ============================================================
@@ -870,7 +853,7 @@ local function runNoBeltMode()
 
     LOG("NoBelt", "=== START ===")
 
-    LOG("NoBelt", "жду готовности хаба (бесконечно)...")
+    LOG("NoBelt", "жду готовности хаба...")
     if not waitForHubReady() then
         WARN("NoBelt", "выход по State.running=false")
         return
@@ -963,7 +946,7 @@ end
 -- HOLD 6,1
 -- ============================================================
 local function runHoldSixOne()
-    LOG("Hold", "жду готовности хаба (бесконечно)...")
+    LOG("Hold", "жду готовности хаба...")
     if not waitForHubReady() then
         WARN("Hold", "выход по State.running=false")
         return
@@ -1005,7 +988,7 @@ end
 local function runTradeMode()
     LOG("Trade", "=== START ===")
 
-    LOG("Trade", "жду готовности хаба (бесконечно)...")
+    LOG("Trade", "жду готовности хаба...")
     if not waitForHubReady() then
         WARN("Trade", "выход по State.running=false")
         return
@@ -1512,6 +1495,9 @@ local function runTradeMode()
         return false
     end
 
+    -- ============================================================
+    -- ФАЗА 1: ТРЕЙД (бесконечный цикл до accept, без deadline)
+    -- ============================================================
     local function doTradeOnce(config)
         collisionsDisabledGlobal = true
         disableCollisionsNow()
@@ -1521,8 +1507,7 @@ local function runTradeMode()
         goToPosition(TRADE_WAYPOINT)
         task.wait(0.3)
 
-        local deadline = tick() + TRADE_PHASE_TIMEOUT
-        while State.running and tick() < deadline do
+        while State.running do
             local tbl, seat = findTradeTable(config.partner_name or "")
             if not tbl then
                 LOG("Trade", "нет стола, ждём 5с")
@@ -1548,7 +1533,7 @@ local function runTradeMode()
 
             local otherSeat = getOtherSeat(tbl, seat)
 
-            while State.running and tick() < deadline do
+            while State.running do
                 if not isSeated(seat) then
                     if not jumpAndReSeat(seat, sitTarget) then
                         task.wait(0.5)
@@ -1604,10 +1589,12 @@ local function runTradeMode()
             end
             break
         end
-        LOG("Trade", "трейд-фаза не завершилась успехом")
         return false
     end
 
+    -- ============================================================
+    -- ФАЗА 2: ПОСТ-ТРЕЙД (NPC + ClaimQuest + Quest check)
+    -- ============================================================
     local function postTradeOnce()
         LOG("PostTrade", "=== START ===")
 
@@ -1737,22 +1724,18 @@ local function runTradeMode()
 
     processLoadFruit(config.load_fruit_items or {})
 
+    -- ============================================================
+    -- ВНЕШНИЙ ЦИКЛ РЕ-ТРЕЙДА (бесконечный, без лимита попыток)
+    -- ============================================================
     local claimed = false
-    local attempt = 0
 
     while not claimed and State.running do
-        attempt += 1
-        if attempt > RE_TRADE_MAX_ATTEMPTS then
-            WARN("Trade", "превышено число попыток ре-трейда (" .. RE_TRADE_MAX_ATTEMPTS .. ")")
-            break
-        end
-        LOG("Trade", "======== попытка #" .. attempt .. " ========")
+        LOG("Trade", "======== новая итерация трейд + пост-трейд ========")
 
         local tradeOk = doTradeOnce(config)
         if not tradeOk then
-            LOG("Trade", "трейд не завершён — повтор через 3с")
-            task.wait(3)
-            continue
+            LOG("Trade", "трейд прервался (State.running=false) — выход")
+            break
         end
 
         local result = postTradeOnce()
@@ -1780,7 +1763,7 @@ local function runTradeMode()
         State.tradeDone = true
         LOG("Trade", "=== DONE ===")
     else
-        WARN("Trade", "ре-трейд не удался за " .. RE_TRADE_MAX_ATTEMPTS .. " попыток — tradeDone не ставим")
+        WARN("Trade", "выход без claimed (State.running=false)")
     end
 end
 
