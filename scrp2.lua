@@ -3,7 +3,7 @@
 -- КОНФИГ
 -- ============================================================
 local BELT_SCAN_INTERVAL    = 30
-local BELT_SCAN_RETRY_FAST  = 5     -- если cache не найден, пробуем чаще
+local BELT_SCAN_RETRY_FAST  = 5
 local HOLD_CHECK_INTERVAL   = 30
 local HOLD_TOGGLE_INTERVAL  = 90
 local NOBELT_MASTERY_TIMEOUT= 60
@@ -22,6 +22,14 @@ local FIXED_POS          = Vector3.new(9825.3, -1962.3, 9822.5)
 local TRADE_WAYPOINT     = Vector3.new(-12549.7, 337.5, -7501.1)
 local POST_TRADE_WAYPOINT = Vector3.new(5866.9, 1208.6, 872.0)
 local POST_TRADE_NPC_NAME = "Dojo Trainer"
+
+-- Пост-трейд: допуски близости к NPC
+local POST_POS_TOL_XZ = 25
+local POST_POS_TOL_Y  = 60
+
+-- Трейд: лимиты
+local RE_TRADE_MAX_ATTEMPTS = 15      -- сколько раз переигрывать весь трейд
+local TRADE_PHASE_TIMEOUT   = 240     -- сек на одну трейд-фазу (поиск стола + accept)
 
 -- ============================================================
 -- ЛОГГЕР
@@ -42,9 +50,30 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService       = game:GetService("HttpService")
 local Workspace         = game:GetService("Workspace")
 local CoreGui           = game:GetService("CoreGui")
+local RunService        = game:GetService("RunService")
 
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
+
+-- ============================================================
+-- ВЫБОР КОМАНДЫ СРАЗУ НА СТАРТЕ
+-- ============================================================
+do
+    local remotes = ReplicatedStorage and ReplicatedStorage:FindFirstChild("Remotes")
+    if remotes then
+        local commF = remotes:FindFirstChild("CommF_")
+        if commF then
+            pcall(function()
+                commF:InvokeServer("SetTeam", "Marines")
+            end)
+            LOG("Team", "SetTeam Marines (старт)")
+        else
+            WARN("Team", "нет Remotes.CommF_ на старте")
+        end
+    else
+        WARN("Team", "нет Remotes на старте")
+    end
+end
 
 local RF_InteractDragonQuest = nil
 do
@@ -68,7 +97,7 @@ local State = {
 }
 
 -- ============================================================
--- КОЛЛИЗИИ
+-- КОЛЛИЗИИ (оптимизировано)
 -- ============================================================
 local collisionsDisabledGlobal = false
 local savedCollisionsGlobal = {}
@@ -76,10 +105,17 @@ local savedCollisionsGlobal = {}
 local function disableCollisionsNow()
     pcall(function()
         local myChar = player.Character
+        local saved = savedCollisionsGlobal
         for _, obj in ipairs(Workspace:GetDescendants()) do
-            if obj:IsA("BasePart") and not (myChar and obj:IsDescendantOf(myChar)) then
-                if obj.CanCollide then savedCollisionsGlobal[obj] = true end
-                if obj.CanCollide then obj.CanCollide = false end
+            if obj:IsA("BasePart") then
+                if myChar and obj:IsDescendantOf(myChar) then
+                    -- не трогаем части персонажа
+                else
+                    if obj.CanCollide then
+                        saved[obj] = true
+                        obj.CanCollide = false
+                    end
+                end
             end
         end
     end)
@@ -98,8 +134,10 @@ task.spawn(function()
     while true do
         if collisionsDisabledGlobal then
             disableCollisionsNow()
+            task.wait(1.0)
+        else
+            task.wait(0.5)
         end
-        task.wait(0.1)
     end
 end)
 
@@ -237,7 +275,6 @@ end
 -- ПЕРЕМЕЩЕНИЕ
 -- ============================================================
 local STEP_XZ          = 4
-local DELAY            = 0.03
 local TELEPORT_DIST_XZ = 12
 local Y_UP_SPEED       = 50
 local Y_TOLERANCE      = 3
@@ -251,16 +288,27 @@ local function goToPosition(targetPos)
     if not hrp or not hum then return false end
 
     hum.PlatformStand = true
+
+    for _, v in ipairs(hrp:GetChildren()) do
+        if v:IsA("BodyPosition") or v:IsA("BodyGyro")
+           or v:IsA("AlignPosition") or v:IsA("AlignOrientation") then
+            v:Destroy()
+        end
+    end
+
+    local bv = hrp:FindFirstChildOfClass("BodyVelocity")
+    if not bv then
+        bv = Instance.new("BodyVelocity")
+        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        bv.Parent = hrp
+    end
+
     local lastLogAt = tick()
     local iter = 0
     LOG("Move", string.format("старт (%.0f,%.0f,%.0f)", targetPos.X, targetPos.Y, targetPos.Z))
 
     while iter < MAX_ITER do
         iter += 1
-
-        if collisionsDisabledGlobal then
-            disableCollisionsNow()
-        end
 
         char = player.Character
         if not char then break end
@@ -272,18 +320,11 @@ local function goToPosition(targetPos)
             break
         end
 
-        local bv = hrp:FindFirstChildOfClass("BodyVelocity")
+        bv = hrp:FindFirstChildOfClass("BodyVelocity")
         if not bv then
             bv = Instance.new("BodyVelocity")
             bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
             bv.Parent = hrp
-        end
-
-        for _, v in ipairs(hrp:GetChildren()) do
-            if v:IsA("BodyPosition") or v:IsA("BodyGyro")
-               or v:IsA("AlignPosition") or v:IsA("AlignOrientation") then
-                v:Destroy()
-            end
         end
 
         local cur = hrp.Position
@@ -314,16 +355,27 @@ local function goToPosition(targetPos)
             LOG("Move", string.format("dxz=%.1f dy=%.1f velY=%.1f", distXZ, dy, velY))
         end
 
-        task.wait(DELAY)
+        task.wait()
     end
 
     if char and hrp and hum then
         hum.PlatformStand = false
-        local bv = hrp:FindFirstChildOfClass("BodyVelocity")
-        if bv then bv:Destroy() end
+        local bv2 = hrp:FindFirstChildOfClass("BodyVelocity")
+        if bv2 then bv2:Destroy() end
     end
     LOG("Move", "дошли до точки")
     return true
+end
+
+local function isNearPosition(targetPos, tolXZ, tolY)
+    tolXZ = tolXZ or 25
+    tolY  = tolY  or 60
+    local c = player.Character
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    local d = hrp.Position - targetPos
+    local dxz = math.sqrt(d.X * d.X + d.Z * d.Z)
+    return dxz <= tolXZ and math.abs(d.Y) <= tolY
 end
 
 -- ============================================================
@@ -363,7 +415,6 @@ local function isUidKey(k)
     return type(k) == "string" and k:match("^%d+_[%w]+$") ~= nil
 end
 
--- Ищем таблицу, где больше всего UID-ключей (это инвентарь игрока)
 local function findInventoryCache()
     local best, bestN = nil, 0
     for _, obj in ipairs(getgc(true)) do
@@ -381,7 +432,6 @@ local function findInventoryCache()
     return best, bestN
 end
 
--- Возвращает наивысший пояс или "None", либо nil если cache не найден
 local function doBeltScan()
     local cache, count = findInventoryCache()
     if not cache then
@@ -391,9 +441,8 @@ local function doBeltScan()
 
     LOG("BeltScan", "cache найден, записей: " .. count)
 
-    -- Собираем все accessory-имена, содержащие "belt"
-    local foundBelts = {}   -- color -> name
-    local allAcc = {}       -- для debug
+    local foundBelts = {}
+    local allAcc = {}
     for k in pairs(cache) do
         local id = tonumber(k:match("^(%d+)_"))
         if id then
@@ -402,7 +451,6 @@ local function doBeltScan()
                 table.insert(allAcc, name)
                 local lname = name:lower()
                 if lname:find("belt", 1, true) then
-                    -- определяем цвет
                     for _, color in ipairs(BELT_ORDER) do
                         if lname:find(color:lower(), 1, true) then
                             foundBelts[color] = name
@@ -424,7 +472,6 @@ local function doBeltScan()
         LOG("BeltScan", "  найден belt-цвет: " .. color .. " ('" .. name .. "')")
     end
 
-    -- Выбираем высший
     local highest, highestIdx = nil, 0
     for color, _ in pairs(foundBelts) do
         for i, oc in ipairs(BELT_ORDER) do
@@ -446,7 +493,6 @@ end
 task.spawn(function()
     if not player.Character then player.CharacterAdded:Wait() end
 
-    -- Ждём, пока игра загрузит PlayerGui.Main
     local w = 0
     while not findHudButtonByName("Menu") and w < 90 do task.wait(1); w += 1 end
     if not findHudButtonByName("Menu") then
@@ -462,7 +508,6 @@ task.spawn(function()
             if not ok then
                 WARN("BeltScan", "ошибка: " .. tostring(belt))
             elseif belt == nil then
-                -- cache не найден, пробуем чаще
                 task.wait(BELT_SCAN_RETRY_FAST)
             elseif belt ~= State.currentBelt then
                 LOG("BeltScan", "НОВЫЙ РЕЖИМ: " .. State.currentBelt .. " -> " .. belt)
@@ -699,6 +744,25 @@ local function setOption(tabIndex, optIndex, wantOn)
     return false
 end
 
+local function ensureOptionState(tabIndex, optIndex, wantOn, maxTries)
+    maxTries = maxTries or 6
+    for i = 1, maxTries do
+        local st = getOptionState(tabIndex, optIndex)
+        if st == wantOn then return true end
+        setOption(tabIndex, optIndex, wantOn)
+        task.wait(0.4)
+    end
+    return getOptionState(tabIndex, optIndex) == wantOn
+end
+
+local function ensureOptionOff(tabIndex, optIndex, maxTries)
+    return ensureOptionState(tabIndex, optIndex, false, maxTries)
+end
+
+local function ensureOptionOn(tabIndex, optIndex, maxTries)
+    return ensureOptionState(tabIndex, optIndex, true, maxTries)
+end
+
 -- ============================================================
 -- STUCK WATCHDOG
 -- ============================================================
@@ -768,28 +832,38 @@ local function runNoBeltMode()
     LOG("NoBelt", "=== START ===")
 
     LOG("NoBelt", "2,4 OFF на старте")
-    setOption(TAB_FARM, OPT_FARM, false)
+    ensureOptionOff(TAB_FARM, OPT_FARM)
     task.wait(0.5)
 
     local guard = 0
-    while not hasDragonTalon() and State.running and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
-        setOption(TAB_MAIN, OPT_MAIN, true); task.wait(2); guard += 1
+    while not hasDragonTalon() and State.running
+          and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
+        ensureOptionOn(TAB_MAIN, OPT_MAIN)
+        task.wait(2.5); guard += 1
         if guard % 15 == 0 then LOG("NoBelt", "guard=" .. guard) end
     end
     if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
     LOG("NoBelt", "dragon talon OK")
 
-    while not isOnIsland() and State.running and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
-        setOption(TAB_MAIN, OPT_MAIN, true); task.wait(2)
+    while not isOnIsland() and State.running
+          and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
+        ensureOptionOn(TAB_MAIN, OPT_MAIN)
+        task.wait(2.5)
     end
     if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
     LOG("NoBelt", "остров найден (sound)")
 
     LOG("NoBelt", "6,1 OFF")
-    setOption(TAB_MAIN, OPT_MAIN, false); task.wait(0.5)
+    if not ensureOptionOff(TAB_MAIN, OPT_MAIN) then
+        WARN("NoBelt", "не удалось выключить 6,1")
+    end
 
-    LOG("NoBelt", "2,4 OFF")
-    setOption(TAB_FARM, OPT_FARM, false); task.wait(0.5)
+    LOG("NoBelt", "2,4 OFF (перед goToPosition)")
+    if not ensureOptionOff(TAB_FARM, OPT_FARM) then
+        WARN("NoBelt", "2,4 не выключилось — возможны конфликты при перемещении")
+    end
+
+    task.wait(1)
 
     LOG("NoBelt", "коллизии OFF")
     collisionsDisabledGlobal = true
@@ -800,13 +874,17 @@ local function runNoBeltMode()
     goToPosition(FIXED_POS)
     task.wait(0.5)
 
+    ensureOptionOff(TAB_FARM, OPT_FARM)
+
     LOG("NoBelt", "коллизии ON")
     collisionsDisabledGlobal = false
     restoreCollisionsNow()
     task.wait(0.5)
 
-    LOG("NoBelt", "2,4 ON")
-    setOption(TAB_FARM, OPT_FARM, true)
+    LOG("NoBelt", "2,4 ON (после перемещения)")
+    if not ensureOptionOn(TAB_FARM, OPT_FARM) then
+        WARN("NoBelt", "не удалось включить 2,4 — фарм не пойдёт")
+    end
 
     local lastMastery = getMastery() or 0
     local lastChangeAt = tick()
@@ -868,27 +946,28 @@ end
 -- ============================================================
 -- ТРЕЙД
 -- ============================================================
+-- Новая структура:
+--   runTradeMode()      — внешний цикл ре-трейда; ставит State.tradeDone
+--   doTradeOnce(cfg)    — одна попытка трейда; true если accept+закрытие прошло
+--   postTradeOnce()     — подход к NPC + ClaimQuest + проверка Quest.Progress/Goal
+--                         возвращает "claimed" | "retry_trade" | "error"
+-- ============================================================
 local function runTradeMode()
     LOG("Trade", "=== START ===")
     State.beltScanPaused = true
     State.inTrade = true
 
     LOG("Trade", "6,1 OFF")
-    setOption(TAB_MAIN, OPT_MAIN, false)
-    task.wait(0.5)
-    if getOptionState(TAB_MAIN, OPT_MAIN) == true then
-        setOption(TAB_MAIN, OPT_MAIN, false); task.wait(0.5)
-    end
+    ensureOptionOff(TAB_MAIN, OPT_MAIN)
+    task.wait(0.3)
 
     LOG("Trade", "2,4 OFF")
-    setOption(TAB_FARM, OPT_FARM, false)
-    task.wait(0.5)
+    ensureOptionOff(TAB_FARM, OPT_FARM)
+    task.wait(0.3)
 
-    LOG("Trade", "коллизии OFF (весь трейд-режим)")
-    collisionsDisabledGlobal = true
-    disableCollisionsNow()
-    task.wait(0.5)
-
+    -- ============================================================
+    -- ЛОКАЛЬНЫЕ ХЕЛПЕРЫ (trade-фаза)
+    -- ============================================================
     local SEND_INVENTORY_INTERVAL = 20
     local CONFIG_POLL_INTERVAL    = 10
 
@@ -1232,7 +1311,9 @@ local function runTradeMode()
     end
 
     local function resetSeatAndWait(seat, sitTarget)
-        while true do
+        local tries = 0
+        while tries < 30 do
+            tries += 1
             local c = player.Character
             if not c then return false end
             local h = c:FindFirstChild("Humanoid")
@@ -1241,6 +1322,7 @@ local function runTradeMode()
             if jumpAndReSeat(seat, sitTarget) then return true end
             task.wait(0.3)
         end
+        return false
     end
 
     local addBtnPath      = {"Main","Trade","Container","1","Frame","AddButton"}
@@ -1376,7 +1458,202 @@ local function runTradeMode()
         return false
     end
 
+    -- ============================================================
+    -- ФАЗА 1: ОДНА ПОПЫТКА ТРЕЙДА
+    -- Возвращает true если accept+закрытие прошло без явного отказа.
+    -- ============================================================
+    local function doTradeOnce(config)
+        -- коллизии OFF для перемещения к столу
+        collisionsDisabledGlobal = true
+        disableCollisionsNow()
+        task.wait(0.3)
+
+        LOG("Trade", "goTo TRADE_WAYPOINT")
+        goToPosition(TRADE_WAYPOINT)
+        task.wait(0.3)
+
+        local deadline = tick() + TRADE_PHASE_TIMEOUT
+        while State.running and tick() < deadline do
+            local tbl, seat = findTradeTable(config.partner_name or "")
+            if not tbl then
+                LOG("Trade", "нет стола, ждём 5с")
+                task.wait(5); continue
+            end
+            local sitTarget = seat.Position + Vector3.new(0, 3.5, 0)
+            LOG("Trade", "стол найден")
+
+            if not moveAndSitOnSeat(seat) then
+                WARN("Trade", "не сел, другой стол")
+                task.wait(2); continue
+            end
+            LOG("Trade", "СИЖУ")
+
+            local function getOtherSeat(tbl_, mySeat)
+                for _, part in ipairs(tbl_:GetDescendants()) do
+                    if (part:IsA("Seat") or part:IsA("VehicleSeat")) and part ~= mySeat then
+                        return part
+                    end
+                end
+                return nil
+            end
+
+            local otherSeat = getOtherSeat(tbl, seat)
+
+            while State.running and tick() < deadline do
+                if not isSeated(seat) then
+                    if not jumpAndReSeat(seat, sitTarget) then
+                        task.wait(0.5)
+                        if not isSeated(seat) then break end
+                    end
+                end
+
+                if otherSeat and otherSeat.Occupant then
+                    local otherHum = otherSeat.Occupant
+                    local otherChar = otherHum and otherHum.Parent
+                    local otherPlr = otherChar and Players:GetPlayerFromCharacter(otherChar)
+                    local ep = config.partner_name or ""
+                    if otherPlr and otherPlr ~= player and ep ~= "" and otherPlr.Name ~= ep then
+                        jumpAndReSeat(seat, sitTarget)
+                        task.wait(1)
+                    end
+                end
+
+                local pn = getPartnerName(tbl, seat)
+                local ep = config.partner_name or ""
+                if pn == nil then
+                    task.wait(0.2)
+                elseif ep ~= "" and pn ~= ep then
+                    jumpAndReSeat(seat, sitTarget)
+                    task.wait(1)
+                else
+                    local ok = true
+                    for _, item in ipairs(config.trade_items or {}) do
+                        if not isSeated(seat) or not processItem(item) then ok = false; break end
+                    end
+                    if not ok then
+                        if not resetSeatAndWait(seat, sitTarget) then break end
+                    else
+                        if acceptAndWait(config.load_fruit_items or {}, seat) then
+                            LOG("Trade", "accept прошёл")
+
+                            local c = player.Character
+                            if c then
+                                local h = c:FindFirstChild("Humanoid")
+                                if h then pcall(function() h.Sit = false end) end
+                            end
+                            task.wait(0.15)
+
+                            pcall(function()
+                                game:HttpGet(SERVER_URL .. "/trade_completed?nickname=" .. HttpService:UrlEncode(player.Name))
+                            end)
+                            return true
+                        else
+                            if not resetSeatAndWait(seat, sitTarget) then break end
+                        end
+                    end
+                end
+            end
+            break
+        end
+        LOG("Trade", "трейд-фаза не завершилась успехом")
+        return false
+    end
+
+    -- ============================================================
+    -- ФАЗА 2: ОДНА ПОПЫТКА ПОСТ-ТРЕЙДА (NPC + ClaimQuest + Quest check)
+    -- Возвращает "claimed" | "retry_trade" | "error"
+    -- ============================================================
+    local function postTradeOnce()
+        LOG("PostTrade", "=== START ===")
+
+        -- Коллизии ON, иначе персонаж провалится под карту и NPC будет далеко
+        collisionsDisabledGlobal = false
+        restoreCollisionsNow()
+        task.wait(0.5)
+
+        -- Подойти к NPC
+        local nearTries = 0
+        while State.running and nearTries < 8 do
+            nearTries += 1
+            if isNearPosition(POST_TRADE_WAYPOINT, POST_POS_TOL_XZ, POST_POS_TOL_Y) then break end
+            LOG("PostTrade", "не у NPC, goTo (попытка " .. nearTries .. ")")
+            goToPosition(POST_TRADE_WAYPOINT)
+            task.wait(1.0)
+        end
+        if not isNearPosition(POST_TRADE_WAYPOINT, POST_POS_TOL_XZ, POST_POS_TOL_Y) then
+            WARN("PostTrade", "не смогли подойти к NPC")
+            return "error"
+        end
+        LOG("PostTrade", "у NPC")
+
+        if not RF_InteractDragonQuest then
+            WARN("PostTrade", "нет RF/InteractDragonQuest")
+            return "error"
+        end
+
+        -- ClaimQuest
+        local claimOk, claimResp = pcall(function()
+            return RF_InteractDragonQuest:InvokeServer({NPC = POST_TRADE_NPC_NAME, Command = "ClaimQuest"})
+        end)
+        LOG("PostTrade", "ClaimQuest ok=" .. tostring(claimOk) .. " resp=" .. tostring(claimResp))
+
+        if claimOk and claimResp ~= false and claimResp ~= nil then
+            LOG("PostTrade", "=== CLAIMED ===")
+            return "claimed"
+        end
+
+        -- Claim не прошёл. Смотрим прогресс квеста.
+        local reqOk, reqResp = pcall(function()
+            return RF_InteractDragonQuest:InvokeServer({NPC = POST_TRADE_NPC_NAME, Command = "RequestQuest"})
+        end)
+
+        local progress, goal, qname = nil, nil, nil
+        if reqOk and type(reqResp) == "table" and type(reqResp.Quest) == "table" then
+            local q = reqResp.Quest
+            qname    = q.QuestName
+            progress = q.Progress
+            goal     = q.Goal
+        end
+
+        LOG("PostTrade", string.format(
+            "Quest info: name=%s progress=%s goal=%s",
+            tostring(qname), tostring(progress), tostring(goal)
+        ))
+
+        -- Нет квеста / нет чисел → трейд не засчитан → повторяем трейд
+        if type(progress) ~= "number" or type(goal) ~= "number" then
+            WARN("PostTrade", "нет данных о квесте — считаем что трейд не прошёл")
+            return "retry_trade"
+        end
+
+        if progress >= goal then
+            -- Трейд ок, но claim не сработал. Ещё раз claim (после короткой паузы).
+            task.wait(2)
+            local ok2, resp2 = pcall(function()
+                return RF_InteractDragonQuest:InvokeServer({NPC = POST_TRADE_NPC_NAME, Command = "ClaimQuest"})
+            end)
+            LOG("PostTrade", "ClaimQuest retry ok=" .. tostring(ok2) .. " resp=" .. tostring(resp2))
+            if ok2 and resp2 ~= false and resp2 ~= nil then
+                LOG("PostTrade", "=== CLAIMED (retry) ===")
+                return "claimed"
+            end
+            WARN("PostTrade", "claim не сработал даже при готовом квесте — ре-трейд")
+            return "retry_trade"
+        else
+            -- Прогресс не полный → трейд не засчитан → ре-трейд
+            LOG("PostTrade", string.format("квест не выполнен (%d/%d) — ре-трейд", progress, goal))
+            return "retry_trade"
+        end
+    end
+
+    -- ============================================================
+    -- ПОДГОТОВКА: коллизии OFF, команда, конфиг, телепорт, LoadFruit
+    -- ============================================================
     selectTeam()
+
+    collisionsDisabledGlobal = true
+    disableCollisionsNow()
+    task.wait(0.3)
 
     local config = nil
     local att = 0
@@ -1393,6 +1670,7 @@ local function runTradeMode()
         if not config then task.wait(SEND_INVENTORY_INTERVAL) end
     end
     if not config then
+        WARN("Trade", "не получили config — выход")
         State.beltScanPaused = false
         State.inTrade = false
         collisionsDisabledGlobal = false
@@ -1411,6 +1689,7 @@ local function runTradeMode()
             task.wait(2)
         end
         if game.JobId ~= tele then
+            WARN("Trade", "телепорт не удался — выход")
             State.beltScanPaused = false
             State.inTrade = false
             collisionsDisabledGlobal = false
@@ -1421,130 +1700,61 @@ local function runTradeMode()
 
     processLoadFruit(config.load_fruit_items or {})
 
-    LOG("Trade", "goTo TRADE_WAYPOINT")
-    goToPosition(TRADE_WAYPOINT)
-    task.wait(0.5)
+    -- ============================================================
+    -- ВНЕШНИЙ ЦИКЛ РЕ-ТРЕЙДА
+    -- ============================================================
+    local claimed = false
+    local attempt = 0
 
-    LOG("Trade", "ищу стол")
-
-    local done = false
-    while not done and State.running do
-        local tbl, seat = findTradeTable(config.partner_name or "")
-        if not tbl then
-            LOG("Trade", "нет стола, ждём 5с")
-            task.wait(5); continue
+    while not claimed and State.running do
+        attempt += 1
+        if attempt > RE_TRADE_MAX_ATTEMPTS then
+            WARN("Trade", "превышено число попыток ре-трейда (" .. RE_TRADE_MAX_ATTEMPTS .. ")")
+            break
         end
-        local sitTarget = seat.Position + Vector3.new(0, 3.5, 0)
-        LOG("Trade", "стол найден")
+        LOG("Trade", "======== попытка #" .. attempt .. " ========")
 
-        if not moveAndSitOnSeat(seat) then
-            WARN("Trade", "не сел, другой стол")
-            task.wait(2); continue
-        end
-        LOG("Trade", "СИЖУ")
-
-        local function getOtherSeat(tbl_, mySeat)
-            for _, part in ipairs(tbl_:GetDescendants()) do
-                if (part:IsA("Seat") or part:IsA("VehicleSeat")) and part ~= mySeat then
-                    return part
-                end
-            end
-            return nil
+        local tradeOk = doTradeOnce(config)
+        if not tradeOk then
+            LOG("Trade", "трейд не завершён — повтор через 3с")
+            task.wait(3)
+            -- не считаем это за полноценную попытку: инкремент был, но считаем
+            -- как реальную итерацию (attempt уже +1)
+            goto continue
         end
 
-        local otherSeat = getOtherSeat(tbl, seat)
-
-        while not done and State.running do
-            if not isSeated(seat) then
-                if not jumpAndReSeat(seat, sitTarget) then
-                    task.wait(0.5)
-                    if not isSeated(seat) then break end
-                end
-            end
-
-            if otherSeat and otherSeat.Occupant then
-                local otherHum = otherSeat.Occupant
-                local otherChar = otherHum and otherHum.Parent
-                local otherPlr = otherChar and Players:GetPlayerFromCharacter(otherChar)
-                local ep = config.partner_name or ""
-                if otherPlr and otherPlr ~= player and ep ~= "" and otherPlr.Name ~= ep then
-                    jumpAndReSeat(seat, sitTarget)
-                    task.wait(1)
-                end
-            end
-
-            local pn = getPartnerName(tbl, seat)
-            local ep = config.partner_name or ""
-            if pn == nil then
-                task.wait(0.2)
-            elseif ep ~= "" and pn ~= ep then
-                jumpAndReSeat(seat, sitTarget)
-                task.wait(1)
-            else
-                local ok = true
-                for _, item in ipairs(config.trade_items or {}) do
-                    if not isSeated(seat) or not processItem(item) then ok = false; break end
-                end
-                if not ok then
-                    if not resetSeatAndWait(seat, sitTarget) then break end
-                else
-                    if acceptAndWait(config.load_fruit_items or {}, seat) then
-                        LOG("Trade", "=== TRADE COMPLETED ===")
-
-                        local c = player.Character
-                        if c then
-                            local h = c:FindFirstChild("Humanoid")
-                            if h then pcall(function() h.Sit = false end) end
-                        end
-                        task.wait(0.15)
-
-                        pcall(function()
-                            game:HttpGet(SERVER_URL .. "/trade_completed?nickname=" .. HttpService:UrlEncode(player.Name))
-                        end)
-                        done = true
-                        break
-                    else
-                        if not resetSeatAndWait(seat, sitTarget) then break end
-                    end
-                end
-            end
+        local result = postTradeOnce()
+        if result == "claimed" then
+            claimed = true
+            break
+        elseif result == "retry_trade" then
+            LOG("Trade", "нужен ре-трейд — пауза 3с")
+            task.wait(3)
+        else
+            WARN("Trade", "ошибка пост-трейда — пауза 5с")
+            task.wait(5)
         end
+
+        ::continue::
     end
 
-    LOG("Trade", "трейд завершён — коллизии ON")
+    -- ============================================================
+    -- ФИНАЛИЗАЦИЯ
+    -- ============================================================
+    LOG("Trade", "коллизии ON")
     collisionsDisabledGlobal = false
     restoreCollisionsNow()
-    task.wait(0.5)
-
-    -- ПОСТ-ТРЕЙД
-    LOG("PostTrade", "=== START ===")
-    task.wait(2)
-
-    LOG("PostTrade", "коллизии OFF")
-    collisionsDisabledGlobal = true
-    disableCollisionsNow()
-    task.wait(0.5)
-
-    LOG("PostTrade", "goTo Dojo Trainer")
-    goToPosition(POST_TRADE_WAYPOINT)
-    task.wait(1.5)
-
-    LOG("PostTrade", "коллизии ON")
-    collisionsDisabledGlobal = false
-    restoreCollisionsNow()
-    task.wait(0.5)
-
-    LOG("PostTrade", "RequestQuest")
-    callRemote({NPC = POST_TRADE_NPC_NAME, Command = "RequestQuest"}, "RequestQuest")
-    task.wait(1)
-
-    LOG("PostTrade", "ClaimQuest")
-    callRemote({NPC = POST_TRADE_NPC_NAME, Command = "ClaimQuest"}, "ClaimQuest")
+    task.wait(0.3)
 
     State.beltScanPaused = false
     State.inTrade = false
-    State.tradeDone = true
-    LOG("Trade", "=== DONE ===")
+
+    if claimed then
+        State.tradeDone = true
+        LOG("Trade", "=== DONE ===")
+    else
+        WARN("Trade", "ре-трейд не удался за " .. RE_TRADE_MAX_ATTEMPTS .. " попыток — tradeDone не ставим")
+    end
 end
 
 -- ============================================================
