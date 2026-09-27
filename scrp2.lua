@@ -29,6 +29,8 @@ local POST_POS_TOL_Y  = 60
 local RE_TRADE_MAX_ATTEMPTS = 15
 local TRADE_PHASE_TIMEOUT   = 240
 
+local HUB_READY_TIMEOUT = 120
+
 -- ============================================================
 -- ЛОГГЕР
 -- ============================================================
@@ -94,7 +96,7 @@ local State = {
 }
 
 -- ============================================================
--- КОЛЛИЗИИ (оптимизировано)
+-- КОЛЛИЗИИ
 -- ============================================================
 local collisionsDisabledGlobal = false
 local savedCollisionsGlobal = {}
@@ -106,7 +108,7 @@ local function disableCollisionsNow()
         for _, obj in ipairs(Workspace:GetDescendants()) do
             if obj:IsA("BasePart") then
                 if myChar and obj:IsDescendantOf(myChar) then
-                    -- не трогаем части персонажа
+                    -- skip
                 else
                     if obj.CanCollide then
                         saved[obj] = true
@@ -386,7 +388,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- СКАНЕР ПОЯСА ЧЕРЕЗ ACCESSORIES (ItemId + GC cache)
+-- СКАНЕР ПОЯСА
 -- ============================================================
 local ItemId = nil
 do
@@ -761,6 +763,31 @@ local function ensureOptionOn(tabIndex, optIndex, maxTries)
 end
 
 -- ============================================================
+-- ОЖИДАНИЕ ГОТОВНОСТИ ХАБА
+-- ============================================================
+local function waitForHubReady(timeout)
+    timeout = timeout or HUB_READY_TIMEOUT
+    local t0 = tick()
+    local firstSeen = false
+    while tick() - t0 < timeout and State.running do
+        if getRoot() then
+            if not firstSeen then
+                firstSeen = true
+                LOG("Hub", "root появился, жду опции...")
+            end
+            -- ждём, пока появятся опции в контейнере
+            if waitForOptions(1, 2) then
+                LOG("Hub", "готов (t=" .. string.format("%.1f", tick() - t0) .. "s)")
+                return true
+            end
+        end
+        task.wait(0.5)
+    end
+    WARN("Hub", "не готов за " .. timeout .. "с")
+    return false
+end
+
+-- ============================================================
 -- STUCK WATCHDOG
 -- ============================================================
 task.spawn(function()
@@ -828,6 +855,12 @@ end
 local function runNoBeltMode()
     LOG("NoBelt", "=== START ===")
 
+    LOG("NoBelt", "жду готовности хаба...")
+    if not waitForHubReady(HUB_READY_TIMEOUT) then
+        WARN("NoBelt", "хаб не готов — выход, попробуем позже")
+        return
+    end
+
     LOG("NoBelt", "2,4 OFF на старте")
     ensureOptionOff(TAB_FARM, OPT_FARM)
     task.wait(0.5)
@@ -857,7 +890,9 @@ local function runNoBeltMode()
 
     LOG("NoBelt", "2,4 OFF (перед goToPosition)")
     if not ensureOptionOff(TAB_FARM, OPT_FARM) then
-        WARN("NoBelt", "2,4 не выключилось — возможны конфликты при перемещении")
+        WARN("NoBelt", "2,4 не выключилось — повторная попытка после ожидания хаба")
+        waitForHubReady(30)
+        ensureOptionOff(TAB_FARM, OPT_FARM)
     end
 
     task.wait(1)
@@ -910,6 +945,12 @@ end
 -- HOLD 6,1
 -- ============================================================
 local function runHoldSixOne()
+    LOG("Hold", "жду готовности хаба...")
+    if not waitForHubReady(HUB_READY_TIMEOUT) then
+        WARN("Hold", "хаб не готов — выход")
+        return
+    end
+
     local modeAtStart = State.currentBelt
     pcall(function() setOption(TAB_MAIN, OPT_MAIN, true) end)
     local lastToggleAt, lastStatusCheck = tick(), tick()
@@ -945,6 +986,13 @@ end
 -- ============================================================
 local function runTradeMode()
     LOG("Trade", "=== START ===")
+
+    LOG("Trade", "жду готовности хаба...")
+    if not waitForHubReady(HUB_READY_TIMEOUT) then
+        WARN("Trade", "хаб не готов — выход")
+        return
+    end
+
     State.beltScanPaused = true
     State.inTrade = true
 
@@ -1446,9 +1494,6 @@ local function runTradeMode()
         return false
     end
 
-    -- ============================================================
-    -- ФАЗА 1: ОДНА ПОПЫТКА ТРЕЙДА
-    -- ============================================================
     local function doTradeOnce(config)
         collisionsDisabledGlobal = true
         disableCollisionsNow()
@@ -1545,9 +1590,6 @@ local function runTradeMode()
         return false
     end
 
-    -- ============================================================
-    -- ФАЗА 2: ОДНА ПОПЫТКА ПОСТ-ТРЕЙДА
-    -- ============================================================
     local function postTradeOnce()
         LOG("PostTrade", "=== START ===")
 
@@ -1624,9 +1666,6 @@ local function runTradeMode()
         end
     end
 
-    -- ============================================================
-    -- ПОДГОТОВКА
-    -- ============================================================
     selectTeam()
 
     collisionsDisabledGlobal = true
@@ -1678,9 +1717,6 @@ local function runTradeMode()
 
     processLoadFruit(config.load_fruit_items or {})
 
-    -- ============================================================
-    -- ВНЕШНИЙ ЦИКЛ РЕ-ТРЕЙДА (continue вместо goto)
-    -- ============================================================
     local claimed = false
     local attempt = 0
 
@@ -1712,9 +1748,6 @@ local function runTradeMode()
         end
     end
 
-    -- ============================================================
-    -- ФИНАЛИЗАЦИЯ
-    -- ============================================================
     LOG("Trade", "коллизии ON")
     collisionsDisabledGlobal = false
     restoreCollisionsNow()
@@ -1735,6 +1768,9 @@ end
 -- ГЛАВНЫЙ ДИСПЕТЧЕР
 -- ============================================================
 LOG("Main", "=== START === Me: " .. player.Name)
+
+LOG("Main", "жду готовности хаба (до старта режимов)...")
+waitForHubReady(HUB_READY_TIMEOUT)
 
 local waitStart = tick()
 while State.currentBelt == "Unknown" and tick() - waitStart < 90 do task.wait(1) end
