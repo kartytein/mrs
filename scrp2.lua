@@ -29,8 +29,6 @@ local POST_POS_TOL_Y  = 60
 local RE_TRADE_MAX_ATTEMPTS = 15
 local TRADE_PHASE_TIMEOUT   = 240
 
-local HUB_READY_TIMEOUT = 120
-
 -- ============================================================
 -- ЛОГГЕР
 -- ============================================================
@@ -764,12 +762,13 @@ end
 
 -- ============================================================
 -- ОЖИДАНИЕ ГОТОВНОСТИ ХАБА
+-- Если timeout == nil → ждём бесконечно, пока State.running
 -- ============================================================
 local function waitForHubReady(timeout)
-    timeout = timeout or HUB_READY_TIMEOUT
     local t0 = tick()
     local firstSeen = false
-    while tick() - t0 < timeout and State.running do
+    local lastLogAt = tick()
+    while State.running do
         if getRoot() then
             if not firstSeen then
                 firstSeen = true
@@ -780,9 +779,17 @@ local function waitForHubReady(timeout)
                 return true
             end
         end
+        if timeout and (tick() - t0) >= timeout then
+            WARN("Hub", "не готов за " .. timeout .. "с")
+            return false
+        end
+        if tick() - lastLogAt >= 30 then
+            lastLogAt = tick()
+            LOG("Hub", string.format("жду... %.0fс (root=%s)",
+                tick() - t0, tostring(getRoot() ~= nil)))
+        end
         task.wait(0.5)
     end
-    WARN("Hub", "не готов за " .. timeout .. "с")
     return false
 end
 
@@ -851,12 +858,26 @@ local function getMastery()
     return tonumber(string.match(lbl.Text or "", "%d+"))
 end
 
+local function isNoBeltActive()
+    return State.currentBelt == "None" or State.currentBelt == "Unknown"
+end
+
 local function runNoBeltMode()
+    if not isNoBeltActive() then
+        LOG("NoBelt", "belt=" .. State.currentBelt .. " — не наш режим, выход")
+        return
+    end
+
     LOG("NoBelt", "=== START ===")
 
-    LOG("NoBelt", "жду готовности хаба...")
-    if not waitForHubReady(HUB_READY_TIMEOUT) then
-        WARN("NoBelt", "хаб не готов — выход, попробуем позже")
+    LOG("NoBelt", "жду готовности хаба (бесконечно)...")
+    if not waitForHubReady() then
+        WARN("NoBelt", "выход по State.running=false")
+        return
+    end
+
+    if not isNoBeltActive() then
+        LOG("NoBelt", "belt сменился на " .. State.currentBelt .. " — выход")
         return
     end
 
@@ -865,21 +886,19 @@ local function runNoBeltMode()
     task.wait(0.5)
 
     local guard = 0
-    while not hasDragonTalon() and State.running
-          and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
+    while not hasDragonTalon() and State.running and isNoBeltActive() do
         ensureOptionOn(TAB_MAIN, OPT_MAIN)
         task.wait(2.5); guard += 1
         if guard % 15 == 0 then LOG("NoBelt", "guard=" .. guard) end
     end
-    if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
+    if not isNoBeltActive() then return end
     LOG("NoBelt", "dragon talon OK")
 
-    while not isOnIsland() and State.running
-          and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
+    while not isOnIsland() and State.running and isNoBeltActive() do
         ensureOptionOn(TAB_MAIN, OPT_MAIN)
         task.wait(2.5)
     end
-    if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
+    if not isNoBeltActive() then return end
     LOG("NoBelt", "остров найден (sound)")
 
     LOG("NoBelt", "6,1 OFF")
@@ -890,7 +909,7 @@ local function runNoBeltMode()
     LOG("NoBelt", "2,4 OFF (перед goToPosition)")
     if not ensureOptionOff(TAB_FARM, OPT_FARM) then
         WARN("NoBelt", "2,4 не выключилось — повторная попытка после ожидания хаба")
-        waitForHubReady(30)
+        waitForHubReady(60)
         ensureOptionOff(TAB_FARM, OPT_FARM)
     end
 
@@ -919,7 +938,7 @@ local function runNoBeltMode()
 
     local lastMastery = getMastery() or 0
     local lastChangeAt = tick()
-    while State.running and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
+    while State.running and isNoBeltActive() do
         task.wait(5)
         local m = getMastery() or 0
         if m > lastMastery then
@@ -933,7 +952,7 @@ local function runNoBeltMode()
             return
         end
     end
-    if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
+    if not isNoBeltActive() then return end
 
     setOption(TAB_FARM, OPT_FARM, false); task.wait(0.5)
     setOption(TAB_MAIN, OPT_MAIN, true)
@@ -944,9 +963,9 @@ end
 -- HOLD 6,1
 -- ============================================================
 local function runHoldSixOne()
-    LOG("Hold", "жду готовности хаба...")
-    if not waitForHubReady(HUB_READY_TIMEOUT) then
-        WARN("Hold", "хаб не готов — выход")
+    LOG("Hold", "жду готовности хаба (бесконечно)...")
+    if not waitForHubReady() then
+        WARN("Hold", "выход по State.running=false")
         return
     end
 
@@ -986,9 +1005,9 @@ end
 local function runTradeMode()
     LOG("Trade", "=== START ===")
 
-    LOG("Trade", "жду готовности хаба...")
-    if not waitForHubReady(HUB_READY_TIMEOUT) then
-        WARN("Trade", "хаб не готов — выход")
+    LOG("Trade", "жду готовности хаба (бесконечно)...")
+    if not waitForHubReady() then
+        WARN("Trade", "выход по State.running=false")
         return
     end
 
@@ -1592,17 +1611,14 @@ local function runTradeMode()
     local function postTradeOnce()
         LOG("PostTrade", "=== START ===")
 
-        -- Коллизии ON, чтобы не провалиться
         collisionsDisabledGlobal = false
         restoreCollisionsNow()
         task.wait(0.5)
 
-        -- Один подход к NPC (без цикла залипания на позиции)
         LOG("PostTrade", "goTo POST_TRADE_WAYPOINT")
         goToPosition(POST_TRADE_WAYPOINT)
         task.wait(1.0)
 
-        -- Просто логируем позицию — не гейтим по ней
         do
             local c = player.Character
             local hrp = c and c:FindFirstChild("HumanoidRootPart")
@@ -1620,7 +1636,6 @@ local function runTradeMode()
             return "error"
         end
 
-        -- 1) Пробуем сдать квест
         local claimOk, claimResp = pcall(function()
             return RF_InteractDragonQuest:InvokeServer({NPC = POST_TRADE_NPC_NAME, Command = "ClaimQuest"})
         end)
@@ -1631,7 +1646,6 @@ local function runTradeMode()
             return "claimed"
         end
 
-        -- 2) Claim не прошёл — смотрим прогресс через RequestQuest
         local reqOk, reqResp = pcall(function()
             return RF_InteractDragonQuest:InvokeServer({NPC = POST_TRADE_NPC_NAME, Command = "RequestQuest"})
         end)
@@ -1649,14 +1663,12 @@ local function runTradeMode()
             tostring(qname), tostring(progress), tostring(goal)
         ))
 
-        -- Нет чисел → трейд не засчитан → ре-трейд
         if type(progress) ~= "number" or type(goal) ~= "number" then
             WARN("PostTrade", "нет данных о квесте — считаем что трейд не прошёл")
             return "retry_trade"
         end
 
         if progress >= goal then
-            -- Квест готов, claim не сработал — короткая пауза и ещё раз
             task.wait(2)
             local ok2, resp2 = pcall(function()
                 return RF_InteractDragonQuest:InvokeServer({NPC = POST_TRADE_NPC_NAME, Command = "ClaimQuest"})
@@ -1777,8 +1789,8 @@ end
 -- ============================================================
 LOG("Main", "=== START === Me: " .. player.Name)
 
-LOG("Main", "жду готовности хаба (до старта режимов)...")
-waitForHubReady(HUB_READY_TIMEOUT)
+LOG("Main", "жду готовности хаба (бесконечно, до State.running=false)...")
+waitForHubReady()
 
 local waitStart = tick()
 while State.currentBelt == "Unknown" and tick() - waitStart < 90 do task.wait(1) end
@@ -1790,14 +1802,19 @@ while State.running do
     LOG("Main", "---- цикл #" .. loop .. " belt=" .. State.currentBelt .. " ----")
 
     local belt = State.currentBelt
+
     if belt == "Yellow" and not State.tradeDone then
         if getOptionState(TAB_MAIN, OPT_MAIN) == true then
             setOption(TAB_MAIN, OPT_MAIN, false)
             task.wait(0.5)
         end
         runTradeMode()
-    elseif not State.nobeltDone then
-        runNoBeltMode()
+    elseif belt == "None" or belt == "Unknown" then
+        if not State.nobeltDone then
+            runNoBeltMode()
+        else
+            runHoldSixOne()
+        end
     else
         runHoldSixOne()
     end
