@@ -3,6 +3,7 @@
 -- КОНФИГ
 -- ============================================================
 local BELT_SCAN_INTERVAL    = 30
+local BELT_SCAN_RETRY_FAST  = 5
 local HOLD_CHECK_INTERVAL   = 30
 local HOLD_TOGGLE_INTERVAL  = 90
 local NOBELT_MASTERY_TIMEOUT= 60
@@ -21,6 +22,12 @@ local FIXED_POS          = Vector3.new(9825.3, -1962.3, 9822.5)
 local TRADE_WAYPOINT     = Vector3.new(-12549.7, 337.5, -7501.1)
 local POST_TRADE_WAYPOINT = Vector3.new(5866.9, 1208.6, 872.0)
 local POST_TRADE_NPC_NAME = "Dojo Trainer"
+
+local POST_POS_TOL_XZ = 25
+local POST_POS_TOL_Y  = 60
+
+local RE_TRADE_MAX_ATTEMPTS = 15
+local TRADE_PHASE_TIMEOUT   = 240
 
 -- ============================================================
 -- ЛОГГЕР
@@ -45,6 +52,26 @@ local CoreGui           = game:GetService("CoreGui")
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
+-- ============================================================
+-- ВЫБОР КОМАНДЫ СРАЗУ НА СТАРТЕ
+-- ============================================================
+do
+    local remotes = ReplicatedStorage and ReplicatedStorage:FindFirstChild("Remotes")
+    if remotes then
+        local commF = remotes:FindFirstChild("CommF_")
+        if commF then
+            pcall(function()
+                commF:InvokeServer("SetTeam", "Marines")
+            end)
+            LOG("Team", "SetTeam Marines (старт)")
+        else
+            WARN("Team", "нет Remotes.CommF_ на старте")
+        end
+    else
+        WARN("Team", "нет Remotes на старте")
+    end
+end
+
 local RF_InteractDragonQuest = nil
 do
     local modules = ReplicatedStorage:FindFirstChild("Modules")
@@ -53,11 +80,6 @@ do
         if net then
             RF_InteractDragonQuest = net:FindFirstChild("RF/InteractDragonQuest")
         end
-    end
-    if RF_InteractDragonQuest then
-        LOG("Remote", "RF/InteractDragonQuest найден")
-    else
-        WARN("Remote", "RF/InteractDragonQuest НЕ найден")
     end
 end
 
@@ -72,7 +94,7 @@ local State = {
 }
 
 -- ============================================================
--- КОЛЛИЗИИ
+-- КОЛЛИЗИИ (оптимизировано)
 -- ============================================================
 local collisionsDisabledGlobal = false
 local savedCollisionsGlobal = {}
@@ -80,10 +102,17 @@ local savedCollisionsGlobal = {}
 local function disableCollisionsNow()
     pcall(function()
         local myChar = player.Character
+        local saved = savedCollisionsGlobal
         for _, obj in ipairs(Workspace:GetDescendants()) do
-            if obj:IsA("BasePart") and not (myChar and obj:IsDescendantOf(myChar)) then
-                if obj.CanCollide then savedCollisionsGlobal[obj] = true end
-                if obj.CanCollide then obj.CanCollide = false end
+            if obj:IsA("BasePart") then
+                if myChar and obj:IsDescendantOf(myChar) then
+                    -- не трогаем части персонажа
+                else
+                    if obj.CanCollide then
+                        saved[obj] = true
+                        obj.CanCollide = false
+                    end
+                end
             end
         end
     end)
@@ -102,8 +131,10 @@ task.spawn(function()
     while true do
         if collisionsDisabledGlobal then
             disableCollisionsNow()
+            task.wait(1.0)
+        else
+            task.wait(0.5)
         end
-        task.wait(0.1)
     end
 end)
 
@@ -240,10 +271,9 @@ end
 -- ============================================================
 -- ПЕРЕМЕЩЕНИЕ
 -- ============================================================
-local STEP_XZ          = 8
-local DELAY            = 0.03
+local STEP_XZ          = 4
 local TELEPORT_DIST_XZ = 12
-local Y_UP_SPEED       = 100
+local Y_UP_SPEED       = 50
 local Y_TOLERANCE      = 3
 local MAX_ITER         = 6000
 
@@ -255,16 +285,27 @@ local function goToPosition(targetPos)
     if not hrp or not hum then return false end
 
     hum.PlatformStand = true
+
+    for _, v in ipairs(hrp:GetChildren()) do
+        if v:IsA("BodyPosition") or v:IsA("BodyGyro")
+           or v:IsA("AlignPosition") or v:IsA("AlignOrientation") then
+            v:Destroy()
+        end
+    end
+
+    local bv = hrp:FindFirstChildOfClass("BodyVelocity")
+    if not bv then
+        bv = Instance.new("BodyVelocity")
+        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        bv.Parent = hrp
+    end
+
     local lastLogAt = tick()
     local iter = 0
     LOG("Move", string.format("старт (%.0f,%.0f,%.0f)", targetPos.X, targetPos.Y, targetPos.Z))
 
     while iter < MAX_ITER do
         iter += 1
-
-        if collisionsDisabledGlobal then
-            disableCollisionsNow()
-        end
 
         char = player.Character
         if not char then break end
@@ -275,20 +316,12 @@ local function goToPosition(targetPos)
             WARN("Move", "персонаж мёртв")
             break
         end
-        if hum.Sit then break end
 
-        local bv = hrp:FindFirstChildOfClass("BodyVelocity")
+        bv = hrp:FindFirstChildOfClass("BodyVelocity")
         if not bv then
             bv = Instance.new("BodyVelocity")
             bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
             bv.Parent = hrp
-        end
-
-        for _, v in ipairs(hrp:GetChildren()) do
-            if v:IsA("BodyPosition") or v:IsA("BodyGyro")
-               or v:IsA("AlignPosition") or v:IsA("AlignOrientation") then
-                v:Destroy()
-            end
         end
 
         local cur = hrp.Position
@@ -310,7 +343,7 @@ local function goToPosition(targetPos)
         if dy > Y_TOLERANCE then
             velY = math.min(Y_UP_SPEED, dy * 2)
         elseif dy < -Y_TOLERANCE then
-            velY = -40
+            velY = -20
         end
         bv.Velocity = Vector3.new(0, velY, 0)
 
@@ -319,16 +352,27 @@ local function goToPosition(targetPos)
             LOG("Move", string.format("dxz=%.1f dy=%.1f velY=%.1f", distXZ, dy, velY))
         end
 
-        task.wait(DELAY)
+        task.wait()
     end
 
     if char and hrp and hum then
         hum.PlatformStand = false
-        local bv = hrp:FindFirstChildOfClass("BodyVelocity")
-        if bv then bv:Destroy() end
+        local bv2 = hrp:FindFirstChildOfClass("BodyVelocity")
+        if bv2 then bv2:Destroy() end
     end
     LOG("Move", "дошли до точки")
     return true
+end
+
+local function isNearPosition(targetPos, tolXZ, tolY)
+    tolXZ = tolXZ or 25
+    tolY  = tolY  or 60
+    local c = player.Character
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    local d = hrp.Position - targetPos
+    local dxz = math.sqrt(d.X * d.X + d.Z * d.Z)
+    return dxz <= tolXZ and math.abs(d.Y) <= tolY
 end
 
 -- ============================================================
@@ -342,133 +386,116 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- БЕЛТ-СКАНЕР
+-- СКАНЕР ПОЯСА ЧЕРЕЗ ACCESSORIES (ItemId + GC cache)
 -- ============================================================
-local function extractBeltFromTile(tileObject)
-    local details = tileObject:FindFirstChild("Details")
-    if details then
-        for _, o in ipairs(details:GetDescendants()) do
-            if o:IsA("TextLabel") and o.Text and o.Text:find("Belt %(") then
-                return o.Text
-            end
-        end
-        for _, o in ipairs(details:GetDescendants()) do
-            if o:IsA("TextLabel") and o.Text and o.Text:find("Belt") then
-                return o.Text
-            end
-        end
+local ItemId = nil
+do
+    local ok, mod = pcall(require, ReplicatedStorage.Economy.ItemId)
+    if ok then
+        ItemId = mod
+        LOG("BeltScan", "ItemId модуль загружен")
+    else
+        WARN("BeltScan", "не удалось загрузить ItemId")
     end
-    for _, o in ipairs(tileObject:GetDescendants()) do
-        if o:IsA("TextLabel") and o.Text and o.Text:find("Belt %(") then
-            return o.Text
-        end
-    end
-    return nil
 end
 
-local function scanTilesOnce(tileGrid, scrollingFrame)
-    local collected, beltList = {}, {}
-    local function collectVisible()
-        local nf = 0
-        for _, child in ipairs(tileGrid:GetDescendants()) do
-            if child:IsA("ImageButton") and child.Name:sub(1,5) == "Tile-" then
-                if not collected[child.Name] then
-                    collected[child.Name] = true
-                    local t = extractBeltFromTile(child)
-                    if t then table.insert(beltList, t); nf += 1 end
+local function getItemInfo(id)
+    if not ItemId then return nil, nil end
+    local ok, d = pcall(ItemId.getDataFromId, id)
+    if not ok or type(d) ~= "table" then return nil, nil end
+    local n = d._ok or d.value or d
+    if type(n) ~= "table" then return nil, nil end
+    return n.StorageKey or n.Name, n.Type
+end
+
+local function isUidKey(k)
+    return type(k) == "string" and k:match("^%d+_[%w]+$") ~= nil
+end
+
+local function findInventoryCache()
+    local best, bestN = nil, 0
+    for _, obj in ipairs(getgc(true)) do
+        if type(obj) == "table" then
+            local n = 0
+            pcall(function()
+                for k in pairs(obj) do
+                    if isUidKey(k) then n += 1 end
+                    if n > 500 then break end
                 end
-            end
+            end)
+            if n > bestN then best, bestN = obj, n end
         end
-        return nf
     end
-
-    if scrollingFrame then
-        local cy = scrollingFrame.AbsoluteCanvasSize.Y
-        local wy = scrollingFrame.AbsoluteSize.Y
-        scrollingFrame.CanvasPosition = Vector2.new(0, 0)
-        task.wait(SCROLL_INITIAL_WAIT)
-        collectVisible()
-
-        local maxY = math.max(0, cy - wy)
-        local y, s = 0, 0
-        while y < maxY and s < 1000 do
-            y = math.min(y + SCROLL_STEP_PIXELS, maxY)
-            scrollingFrame.CanvasPosition = Vector2.new(0, y)
-            task.wait(SCROLL_WAIT_TIME)
-            collectVisible()
-            s += 1
-        end
-        scrollingFrame.CanvasPosition = Vector2.new(0, maxY)
-        task.wait(SCROLL_FINAL_WAIT)
-        collectVisible()
-    else
-        collectVisible()
-    end
-
-    return beltList
+    return best, bestN
 end
 
 local function doBeltScan()
-    local category3 = ensureCategoryOpen("Category3")
-    if not category3 then WARN("BeltScan", "нет Category3"); return nil end
-
-    local tileGrid = waitForObjectByPath({"Inventory","Inventory","Main","PageContent","TileGrid"}, 5)
-    if not tileGrid then
-        local inv = playerGui:FindFirstChild("Inventory")
-        if inv then tileGrid = inv:FindFirstChild("TileGrid", true) end
-    end
-    if not tileGrid then WARN("BeltScan", "нет TileGrid"); return nil end
-
-    local scrollingFrame = nil
-    local obj = tileGrid
-    while obj do
-        if obj:IsA("ScrollingFrame") then scrollingFrame = obj; break end
-        obj = obj.Parent
-    end
-    if not scrollingFrame then WARN("BeltScan", "нет ScrollingFrame"); return nil end
-
-    local beltList = scanTilesOnce(tileGrid, scrollingFrame)
-    if #beltList == 0 then
-        LOG("BeltScan", "0 тайлов, повторный клик Category3")
-        fireSequence(category3); task.wait(3.0)
-        tileGrid = waitForObjectByPath({"Inventory","Inventory","Main","PageContent","TileGrid"}, 3) or tileGrid
-        if not tileGrid then return nil end
-        beltList = scanTilesOnce(tileGrid, scrollingFrame)
+    local cache, count = findInventoryCache()
+    if not cache then
+        LOG("BeltScan", "cache не найден (инвентарь ни разу не открыт)")
+        return nil
     end
 
-    if #beltList == 0 then
-        LOG("BeltScan", "0 тайлов → None")
-        return "None"
-    end
+    LOG("BeltScan", "cache найден, записей: " .. count)
 
-    local highestBelt, highestIdx = nil, 0
-    for _, t in ipairs(beltList) do
-        local bp = t:find("Belt %(")
-        if bp then
-            local sp = bp + 6
-            local ep = t:find(")", sp)
-            if ep then
-                local color = t:sub(sp, ep - 1)
-                for i, oc in ipairs(BELT_ORDER) do
-                    if color == oc and i > highestIdx then
-                        highestIdx = i; highestBelt = color; break
+    local foundBelts = {}
+    local allAcc = {}
+    for k in pairs(cache) do
+        local id = tonumber(k:match("^(%d+)_"))
+        if id then
+            local name, tp = getItemInfo(id)
+            if tp == "Accessory" and name then
+                table.insert(allAcc, name)
+                local lname = name:lower()
+                if lname:find("belt", 1, true) then
+                    for _, color in ipairs(BELT_ORDER) do
+                        if lname:find(color:lower(), 1, true) then
+                            foundBelts[color] = name
+                            break
+                        end
                     end
                 end
             end
         end
     end
-    if highestBelt then return highestBelt end
+
+    LOG("BeltScan", "accessory всего: " .. #allAcc .. " | belt-like: " .. (function()
+        local n = 0
+        for _ in pairs(foundBelts) do n += 1 end
+        return n
+    end)())
+
+    for color, name in pairs(foundBelts) do
+        LOG("BeltScan", "  найден belt-цвет: " .. color .. " ('" .. name .. "')")
+    end
+
+    local highest, highestIdx = nil, 0
+    for color, _ in pairs(foundBelts) do
+        for i, oc in ipairs(BELT_ORDER) do
+            if color == oc and i > highestIdx then
+                highestIdx = i; highest = color; break
+            end
+        end
+    end
+
+    if highest then
+        LOG("BeltScan", "результат: " .. highest)
+        return highest
+    end
+
+    LOG("BeltScan", "результат: None (belt не найден, но cache есть)")
     return "None"
 end
 
 task.spawn(function()
     if not player.Character then player.CharacterAdded:Wait() end
+
     local w = 0
     while not findHudButtonByName("Menu") and w < 90 do task.wait(1); w += 1 end
     if not findHudButtonByName("Menu") then
         WARN("BeltScan", "HUD Menu не появилась"); return
     end
-    task.wait(3)
+    task.wait(5)
 
     local iter = 0
     while State.running do
@@ -477,7 +504,9 @@ task.spawn(function()
             local ok, belt = pcall(doBeltScan)
             if not ok then
                 WARN("BeltScan", "ошибка: " .. tostring(belt))
-            elseif belt and belt ~= State.currentBelt then
+            elseif belt == nil then
+                task.wait(BELT_SCAN_RETRY_FAST)
+            elseif belt ~= State.currentBelt then
                 LOG("BeltScan", "НОВЫЙ РЕЖИМ: " .. State.currentBelt .. " -> " .. belt)
                 State.currentBelt = belt
                 State.beltChangedAt = tick()
@@ -515,8 +544,6 @@ local function serverHop()
     end
 
     for attempt = 1, 5 do
-        LOG("Hop", "попытка #" .. attempt)
-
         local w = 0
         while not findSB() and w < 10 do task.wait(0.5); w += 0.5 end
         local sb = findSB()
@@ -559,27 +586,22 @@ local function serverHop()
         if #btns == 0 then WARN("Hop", "нет Join кнопок"); task.wait(2); continue end
 
         local chosen = btns[math.random(1, #btns)]
-        LOG("Hop", "жму Join")
         fireSequence(chosen)
 
         task.wait(10)
         if game.JobId ~= originalJobId then
-            LOG("Hop", "ТЕЛЕПОРТ УСПЕШЕН: " .. originalJobId .. " -> " .. game.JobId)
+            LOG("Hop", "ТЕЛЕПОРТ: " .. originalJobId .. " -> " .. game.JobId)
             task.wait(8)
             State.nobeltDone    = false
             State.tradeDone     = false
             State.currentBelt   = "Unknown"
             State.beltChangedAt = tick()
             State.beltScanPaused = false
-            LOG("Hop", "State сброшен")
             return true
         end
-
-        WARN("Hop", "попытка #" .. attempt .. " провалена")
         task.wait(1)
     end
 
-    WARN("Hop", "не удалось за 5 попыток")
     State.beltScanPaused = false
     return false
 end
@@ -719,6 +741,25 @@ local function setOption(tabIndex, optIndex, wantOn)
     return false
 end
 
+local function ensureOptionState(tabIndex, optIndex, wantOn, maxTries)
+    maxTries = maxTries or 6
+    for i = 1, maxTries do
+        local st = getOptionState(tabIndex, optIndex)
+        if st == wantOn then return true end
+        setOption(tabIndex, optIndex, wantOn)
+        task.wait(0.4)
+    end
+    return getOptionState(tabIndex, optIndex) == wantOn
+end
+
+local function ensureOptionOff(tabIndex, optIndex, maxTries)
+    return ensureOptionState(tabIndex, optIndex, false, maxTries)
+end
+
+local function ensureOptionOn(tabIndex, optIndex, maxTries)
+    return ensureOptionState(tabIndex, optIndex, true, maxTries)
+end
+
 -- ============================================================
 -- STUCK WATCHDOG
 -- ============================================================
@@ -788,28 +829,38 @@ local function runNoBeltMode()
     LOG("NoBelt", "=== START ===")
 
     LOG("NoBelt", "2,4 OFF на старте")
-    setOption(TAB_FARM, OPT_FARM, false)
+    ensureOptionOff(TAB_FARM, OPT_FARM)
     task.wait(0.5)
 
     local guard = 0
-    while not hasDragonTalon() and State.running and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
-        setOption(TAB_MAIN, OPT_MAIN, true); task.wait(2); guard += 1
+    while not hasDragonTalon() and State.running
+          and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
+        ensureOptionOn(TAB_MAIN, OPT_MAIN)
+        task.wait(2.5); guard += 1
         if guard % 15 == 0 then LOG("NoBelt", "guard=" .. guard) end
     end
     if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
     LOG("NoBelt", "dragon talon OK")
 
-    while not isOnIsland() and State.running and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
-        setOption(TAB_MAIN, OPT_MAIN, true); task.wait(2)
+    while not isOnIsland() and State.running
+          and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
+        ensureOptionOn(TAB_MAIN, OPT_MAIN)
+        task.wait(2.5)
     end
     if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
     LOG("NoBelt", "остров найден (sound)")
 
     LOG("NoBelt", "6,1 OFF")
-    setOption(TAB_MAIN, OPT_MAIN, false); task.wait(0.5)
+    if not ensureOptionOff(TAB_MAIN, OPT_MAIN) then
+        WARN("NoBelt", "не удалось выключить 6,1")
+    end
 
-    LOG("NoBelt", "2,4 OFF")
-    setOption(TAB_FARM, OPT_FARM, false); task.wait(0.5)
+    LOG("NoBelt", "2,4 OFF (перед goToPosition)")
+    if not ensureOptionOff(TAB_FARM, OPT_FARM) then
+        WARN("NoBelt", "2,4 не выключилось — возможны конфликты при перемещении")
+    end
+
+    task.wait(1)
 
     LOG("NoBelt", "коллизии OFF")
     collisionsDisabledGlobal = true
@@ -820,13 +871,17 @@ local function runNoBeltMode()
     goToPosition(FIXED_POS)
     task.wait(0.5)
 
+    ensureOptionOff(TAB_FARM, OPT_FARM)
+
     LOG("NoBelt", "коллизии ON")
     collisionsDisabledGlobal = false
     restoreCollisionsNow()
     task.wait(0.5)
 
-    LOG("NoBelt", "2,4 ON")
-    setOption(TAB_FARM, OPT_FARM, true)
+    LOG("NoBelt", "2,4 ON (после перемещения)")
+    if not ensureOptionOn(TAB_FARM, OPT_FARM) then
+        WARN("NoBelt", "не удалось включить 2,4 — фарм не пойдёт")
+    end
 
     local lastMastery = getMastery() or 0
     local lastChangeAt = tick()
@@ -862,7 +917,7 @@ local function runHoldSixOne()
 
     while State.running do
         if State.currentBelt ~= modeAtStart then
-            LOG("Hold", "belt сменился: " .. modeAtStart .. " -> " .. State.currentBelt .. " — выход")
+            LOG("Hold", "belt сменился — выход")
             return
         end
         if tick() - lastToggleAt > HOLD_TOGGLE_INTERVAL then
@@ -886,40 +941,20 @@ local function runHoldSixOne()
 end
 
 -- ============================================================
--- ТРЕЙД (с диагностикой, коллизии OFF весь режим)
+-- ТРЕЙД
 -- ============================================================
 local function runTradeMode()
-    LOG("Trade", "=============== START ===============")
+    LOG("Trade", "=== START ===")
     State.beltScanPaused = true
     State.inTrade = true
 
-    do
-        local c = player.Character
-        local hrp = c and c:FindFirstChild("HumanoidRootPart")
-        LOG("Trade", "[DIAG] player=" .. player.Name
-            .. " belt=" .. tostring(State.currentBelt)
-            .. " pos=" .. (hrp and string.format("(%.0f,%.0f,%.0f)", hrp.Position.X, hrp.Position.Y, hrp.Position.Z) or "no-hrp"))
-        LOG("Trade", "[DIAG] jobId=" .. game.JobId)
-    end
-
     LOG("Trade", "6,1 OFF")
-    setOption(TAB_MAIN, OPT_MAIN, false)
-    task.wait(0.5)
-    if getOptionState(TAB_MAIN, OPT_MAIN) == true then
-        setOption(TAB_MAIN, OPT_MAIN, false); task.wait(0.5)
-    end
+    ensureOptionOff(TAB_MAIN, OPT_MAIN)
+    task.wait(0.3)
 
     LOG("Trade", "2,4 OFF")
-    setOption(TAB_FARM, OPT_FARM, false)
-    task.wait(0.5)
-
-    -- ============================================================
-    -- КОЛЛИЗИИ OFF НА ВЕСЬ TRADE РЕЖИМ
-    -- ============================================================
-    LOG("Trade", "КОЛЛИЗИИ OFF (держать до конца трейда)")
-    collisionsDisabledGlobal = true
-    disableCollisionsNow()
-    task.wait(0.5)
+    ensureOptionOff(TAB_FARM, OPT_FARM)
+    task.wait(0.3)
 
     local SEND_INVENTORY_INTERVAL = 20
     local CONFIG_POLL_INTERVAL    = 10
@@ -937,9 +972,7 @@ local function runTradeMode()
             local hrp = char:FindFirstChild("HumanoidRootPart")
             if not hum or not hrp then return false end
 
-            if hum.Sit and hum.SeatPart == targetSeat then
-                return true
-            end
+            if hum.Sit and hum.SeatPart == targetSeat then return true end
 
             hum.PlatformStand = true
             local bv = hrp:FindFirstChildOfClass("BodyVelocity")
@@ -960,7 +993,6 @@ local function runTradeMode()
             if hum.Sit and hum.SeatPart == targetSeat then
                 bv:Destroy()
                 hum.PlatformStand = false
-                LOG("Sit", "СЕЛ успешно на " .. targetSeat.Name)
                 return true
             else
                 bv:Destroy()
@@ -969,21 +1001,14 @@ local function runTradeMode()
                 task.wait(0.2)
             end
         end
-        WARN("Sit", "не сел на " .. targetSeat.Name)
         return false
     end
 
     local function moveAndSitOnSeat(seat)
         local sitTarget = seat.Position + Vector3.new(0, 3.5, 0)
-        LOG("Move", string.format("иду к seat (%s) pos=(%.0f,%.0f,%.0f)",
-            seat.Name, sitTarget.X, sitTarget.Y, sitTarget.Z))
+        LOG("Move", "иду к seat")
         goToPosition(sitTarget)
-        LOG("Move", "у цели, пробую сесть")
         for i = 1, 5 do
-            local c = player.Character
-            local hrp = c and c:FindFirstChild("HumanoidRootPart")
-            local distToSeat = hrp and (hrp.Position - sitTarget).Magnitude or -1
-            LOG("Move", string.format("попытка посадки %d, dist_to_seat=%.1f", i, distToSeat))
             if fastSitOnSeat(seat, 1) then
                 LOG("Move", "СЕЛ")
                 return true
@@ -995,7 +1020,6 @@ local function runTradeMode()
     end
 
     local function jumpAndReSeat(seat, sitTarget)
-        LOG("ReSeat", "=== перепосадка ===")
         local c = player.Character
         if c then
             local h = c:FindFirstChild("Humanoid")
@@ -1007,9 +1031,7 @@ local function runTradeMode()
             end
         end
         goToPosition(sitTarget)
-        local ok = fastSitOnSeat(seat, 3)
-        LOG("ReSeat", "результат: " .. tostring(ok))
-        return ok
+        return fastSitOnSeat(seat, 3)
     end
 
     local function selectTeam()
@@ -1053,7 +1075,7 @@ local function runTradeMode()
         local category2 = ensureCategoryOpen("Category2")
         if not category2 then WARN("Inv", "нет Category2"); return {} end
         local tileGrid = waitForObjectByPath({"Inventory","Inventory","Main","PageContent","TileGrid"}, 5)
-        if not tileGrid then WARN("Inv", "нет TileGrid"); return {} end
+        if not tileGrid then return {} end
         local scrollingFrame = nil
         local obj = tileGrid
         while obj do
@@ -1096,7 +1118,7 @@ local function runTradeMode()
         table.sort(list, function(a,b) return a.Number < b.Number end)
         local fruits = {}
         for _, t in ipairs(list) do if t.Text ~= "" then table.insert(fruits, t.Text) end end
-        LOG("Inv", "собрано: " .. #fruits .. " items")
+        LOG("Inv", "собрано: " .. #fruits)
         return fruits
     end
 
@@ -1104,9 +1126,7 @@ local function runTradeMode()
         local url = SERVER_URL .. "/send_inventory?nickname=" .. HttpService:UrlEncode(player.Name)
             .. "&fruits=" .. HttpService:UrlEncode(table.concat(fruits, ","))
             .. "&job_id=" .. HttpService:UrlEncode(game.JobId)
-        local ok, err = pcall(function() return game:HttpGet(url) end)
-        if ok then LOG("HTTP", "send_inventory OK")
-        else WARN("HTTP", "send_inventory error: " .. tostring(err)) end
+        pcall(function() return game:HttpGet(url) end)
     end
 
     local function fetchConfig()
@@ -1115,11 +1135,7 @@ local function runTradeMode()
         if not ok then return nil end
         local ok2, data = pcall(function() return HttpService:JSONDecode(response) end)
         if not ok2 then return nil end
-        if data and data.partner_name then
-            LOG("HTTP", "config: partner=" .. tostring(data.partner_name)
-                .. " teleport_to_job_id=" .. tostring(data.teleport_to_job_id))
-            return data
-        end
+        if data and data.partner_name then return data end
         return nil
     end
 
@@ -1130,7 +1146,6 @@ local function runTradeMode()
     end
 
     local function invokeLoadFruit(f)
-        LOG("Fruit", "LoadFruit " .. f)
         pcall(function() ReplicatedStorage.Remotes.CommF_:InvokeServer("LoadFruit", f) end)
     end
 
@@ -1152,8 +1167,7 @@ local function runTradeMode()
 
     local function processLoadFruit(items)
         if #items == 0 then return true end
-        for i, item in ipairs(items) do
-            LOG("Fruit", string.format("[%d/%d] %s", i, #items, item))
+        for _, item in ipairs(items) do
             invokeLoadFruit(formatItemName(item))
             respawn(); waitRespawn(); task.wait(1)
         end
@@ -1286,9 +1300,8 @@ local function runTradeMode()
 
     local function resetSeatAndWait(seat, sitTarget)
         local tries = 0
-        while true do
+        while tries < 30 do
             tries += 1
-            if tries > 20 then return false end
             local c = player.Character
             if not c then return false end
             local h = c:FindFirstChild("Humanoid")
@@ -1297,6 +1310,7 @@ local function runTradeMode()
             if jumpAndReSeat(seat, sitTarget) then return true end
             task.wait(0.3)
         end
+        return false
     end
 
     local addBtnPath      = {"Main","Trade","Container","1","Frame","AddButton"}
@@ -1432,7 +1446,192 @@ local function runTradeMode()
         return false
     end
 
+    -- ============================================================
+    -- ФАЗА 1: ОДНА ПОПЫТКА ТРЕЙДА
+    -- ============================================================
+    local function doTradeOnce(config)
+        collisionsDisabledGlobal = true
+        disableCollisionsNow()
+        task.wait(0.3)
+
+        LOG("Trade", "goTo TRADE_WAYPOINT")
+        goToPosition(TRADE_WAYPOINT)
+        task.wait(0.3)
+
+        local deadline = tick() + TRADE_PHASE_TIMEOUT
+        while State.running and tick() < deadline do
+            local tbl, seat = findTradeTable(config.partner_name or "")
+            if not tbl then
+                LOG("Trade", "нет стола, ждём 5с")
+                task.wait(5); continue
+            end
+            local sitTarget = seat.Position + Vector3.new(0, 3.5, 0)
+            LOG("Trade", "стол найден")
+
+            if not moveAndSitOnSeat(seat) then
+                WARN("Trade", "не сел, другой стол")
+                task.wait(2); continue
+            end
+            LOG("Trade", "СИЖУ")
+
+            local function getOtherSeat(tbl_, mySeat)
+                for _, part in ipairs(tbl_:GetDescendants()) do
+                    if (part:IsA("Seat") or part:IsA("VehicleSeat")) and part ~= mySeat then
+                        return part
+                    end
+                end
+                return nil
+            end
+
+            local otherSeat = getOtherSeat(tbl, seat)
+
+            while State.running and tick() < deadline do
+                if not isSeated(seat) then
+                    if not jumpAndReSeat(seat, sitTarget) then
+                        task.wait(0.5)
+                        if not isSeated(seat) then break end
+                    end
+                end
+
+                if otherSeat and otherSeat.Occupant then
+                    local otherHum = otherSeat.Occupant
+                    local otherChar = otherHum and otherHum.Parent
+                    local otherPlr = otherChar and Players:GetPlayerFromCharacter(otherChar)
+                    local ep = config.partner_name or ""
+                    if otherPlr and otherPlr ~= player and ep ~= "" and otherPlr.Name ~= ep then
+                        jumpAndReSeat(seat, sitTarget)
+                        task.wait(1)
+                    end
+                end
+
+                local pn = getPartnerName(tbl, seat)
+                local ep = config.partner_name or ""
+                if pn == nil then
+                    task.wait(0.2)
+                elseif ep ~= "" and pn ~= ep then
+                    jumpAndReSeat(seat, sitTarget)
+                    task.wait(1)
+                else
+                    local ok = true
+                    for _, item in ipairs(config.trade_items or {}) do
+                        if not isSeated(seat) or not processItem(item) then ok = false; break end
+                    end
+                    if not ok then
+                        if not resetSeatAndWait(seat, sitTarget) then break end
+                    else
+                        if acceptAndWait(config.load_fruit_items or {}, seat) then
+                            LOG("Trade", "accept прошёл")
+
+                            local c = player.Character
+                            if c then
+                                local h = c:FindFirstChild("Humanoid")
+                                if h then pcall(function() h.Sit = false end) end
+                            end
+                            task.wait(0.15)
+
+                            pcall(function()
+                                game:HttpGet(SERVER_URL .. "/trade_completed?nickname=" .. HttpService:UrlEncode(player.Name))
+                            end)
+                            return true
+                        else
+                            if not resetSeatAndWait(seat, sitTarget) then break end
+                        end
+                    end
+                end
+            end
+            break
+        end
+        LOG("Trade", "трейд-фаза не завершилась успехом")
+        return false
+    end
+
+    -- ============================================================
+    -- ФАЗА 2: ОДНА ПОПЫТКА ПОСТ-ТРЕЙДА
+    -- ============================================================
+    local function postTradeOnce()
+        LOG("PostTrade", "=== START ===")
+
+        collisionsDisabledGlobal = false
+        restoreCollisionsNow()
+        task.wait(0.5)
+
+        local nearTries = 0
+        while State.running and nearTries < 8 do
+            nearTries += 1
+            if isNearPosition(POST_TRADE_WAYPOINT, POST_POS_TOL_XZ, POST_POS_TOL_Y) then break end
+            LOG("PostTrade", "не у NPC, goTo (попытка " .. nearTries .. ")")
+            goToPosition(POST_TRADE_WAYPOINT)
+            task.wait(1.0)
+        end
+        if not isNearPosition(POST_TRADE_WAYPOINT, POST_POS_TOL_XZ, POST_POS_TOL_Y) then
+            WARN("PostTrade", "не смогли подойти к NPC")
+            return "error"
+        end
+        LOG("PostTrade", "у NPC")
+
+        if not RF_InteractDragonQuest then
+            WARN("PostTrade", "нет RF/InteractDragonQuest")
+            return "error"
+        end
+
+        local claimOk, claimResp = pcall(function()
+            return RF_InteractDragonQuest:InvokeServer({NPC = POST_TRADE_NPC_NAME, Command = "ClaimQuest"})
+        end)
+        LOG("PostTrade", "ClaimQuest ok=" .. tostring(claimOk) .. " resp=" .. tostring(claimResp))
+
+        if claimOk and claimResp ~= false and claimResp ~= nil then
+            LOG("PostTrade", "=== CLAIMED ===")
+            return "claimed"
+        end
+
+        local reqOk, reqResp = pcall(function()
+            return RF_InteractDragonQuest:InvokeServer({NPC = POST_TRADE_NPC_NAME, Command = "RequestQuest"})
+        end)
+
+        local progress, goal, qname = nil, nil, nil
+        if reqOk and type(reqResp) == "table" and type(reqResp.Quest) == "table" then
+            local q = reqResp.Quest
+            qname    = q.QuestName
+            progress = q.Progress
+            goal     = q.Goal
+        end
+
+        LOG("PostTrade", string.format(
+            "Quest info: name=%s progress=%s goal=%s",
+            tostring(qname), tostring(progress), tostring(goal)
+        ))
+
+        if type(progress) ~= "number" or type(goal) ~= "number" then
+            WARN("PostTrade", "нет данных о квесте — считаем что трейд не прошёл")
+            return "retry_trade"
+        end
+
+        if progress >= goal then
+            task.wait(2)
+            local ok2, resp2 = pcall(function()
+                return RF_InteractDragonQuest:InvokeServer({NPC = POST_TRADE_NPC_NAME, Command = "ClaimQuest"})
+            end)
+            LOG("PostTrade", "ClaimQuest retry ok=" .. tostring(ok2) .. " resp=" .. tostring(resp2))
+            if ok2 and resp2 ~= false and resp2 ~= nil then
+                LOG("PostTrade", "=== CLAIMED (retry) ===")
+                return "claimed"
+            end
+            WARN("PostTrade", "claim не сработал даже при готовом квесте — ре-трейд")
+            return "retry_trade"
+        else
+            LOG("PostTrade", string.format("квест не выполнен (%d/%d) — ре-трейд", progress, goal))
+            return "retry_trade"
+        end
+    end
+
+    -- ============================================================
+    -- ПОДГОТОВКА
+    -- ============================================================
     selectTeam()
+
+    collisionsDisabledGlobal = true
+    disableCollisionsNow()
+    task.wait(0.3)
 
     local config = nil
     local att = 0
@@ -1449,6 +1648,7 @@ local function runTradeMode()
         if not config then task.wait(SEND_INVENTORY_INTERVAL) end
     end
     if not config then
+        WARN("Trade", "не получили config — выход")
         State.beltScanPaused = false
         State.inTrade = false
         collisionsDisabledGlobal = false
@@ -1467,6 +1667,7 @@ local function runTradeMode()
             task.wait(2)
         end
         if game.JobId ~= tele then
+            WARN("Trade", "телепорт не удался — выход")
             State.beltScanPaused = false
             State.inTrade = false
             collisionsDisabledGlobal = false
@@ -1477,146 +1678,57 @@ local function runTradeMode()
 
     processLoadFruit(config.load_fruit_items or {})
 
-    LOG("Trade", "goTo TRADE_WAYPOINT (коллизии остаются OFF)")
-    goToPosition(TRADE_WAYPOINT)
-    task.wait(0.5)
+    -- ============================================================
+    -- ВНЕШНИЙ ЦИКЛ РЕ-ТРЕЙДА (continue вместо goto)
+    -- ============================================================
+    local claimed = false
+    local attempt = 0
 
-    LOG("Trade", "=== начинаю искать стол ===")
-
-    local done = false
-    while not done and State.running do
-        local tbl, seat = findTradeTable(config.partner_name or "")
-        if not tbl then
-            LOG("Trade", "нет стола, ждём 5с")
-            task.wait(5); continue
+    while not claimed and State.running do
+        attempt += 1
+        if attempt > RE_TRADE_MAX_ATTEMPTS then
+            WARN("Trade", "превышено число попыток ре-трейда (" .. RE_TRADE_MAX_ATTEMPTS .. ")")
+            break
         end
-        local sitTarget = seat.Position + Vector3.new(0, 3.5, 0)
-        LOG("Trade", string.format("стол найден: %s | seat %s | pos=(%.0f,%.0f,%.0f)",
-            tbl.Name, seat.Name, sitTarget.X, sitTarget.Y, sitTarget.Z))
+        LOG("Trade", "======== попытка #" .. attempt .. " ========")
 
-        if not moveAndSitOnSeat(seat) then
-            WARN("Trade", "не сел, другой стол")
-            task.wait(2); continue
-        end
-        LOG("Trade", "=== СИЖУ НА СТУЛЕ ===")
-
-        local function getOtherSeat(tbl_, mySeat)
-            for _, part in ipairs(tbl_:GetDescendants()) do
-                if (part:IsA("Seat") or part:IsA("VehicleSeat")) and part ~= mySeat then
-                    return part
-                end
-            end
-            return nil
+        local tradeOk = doTradeOnce(config)
+        if not tradeOk then
+            LOG("Trade", "трейд не завершён — повтор через 3с")
+            task.wait(3)
+            continue
         end
 
-        local otherSeat = getOtherSeat(tbl, seat)
-        local lastStatus = tick()
-
-        while not done and State.running do
-            if tick() - lastStatus >= 3 then
-                lastStatus = tick()
-                local pn = getPartnerName(tbl, seat)
-                local pct = getPercent()
-                LOG("Trade", string.format(
-                    "[status] seated=%s partner=%s expected=%s percent=%s",
-                    tostring(isSeated(seat)), tostring(pn),
-                    tostring(config.partner_name), tostring(pct)))
-            end
-
-            if not isSeated(seat) then
-                LOG("Trade", "слетел — jumpAndReSeat")
-                if not jumpAndReSeat(seat, sitTarget) then
-                    task.wait(0.5)
-                    if not isSeated(seat) then break end
-                end
-            end
-
-            if otherSeat and otherSeat.Occupant then
-                local otherHum = otherSeat.Occupant
-                local otherChar = otherHum and otherHum.Parent
-                local otherPlr = otherChar and Players:GetPlayerFromCharacter(otherChar)
-                local ep = config.partner_name or ""
-                if otherPlr and otherPlr ~= player and ep ~= "" and otherPlr.Name ~= ep then
-                    LOG("Trade", "чужой: " .. otherPlr.Name .. " — jumpAndReSeat")
-                    jumpAndReSeat(seat, sitTarget)
-                    task.wait(1)
-                end
-            end
-
-            local pn = getPartnerName(tbl, seat)
-            local ep = config.partner_name or ""
-            if pn == nil then
-                task.wait(0.2)
-            elseif ep ~= "" and pn ~= ep then
-                LOG("Trade", "чужой (getPartnerName): " .. pn)
-                jumpAndReSeat(seat, sitTarget)
-                task.wait(1)
-            else
-                local ok = true
-                for _, item in ipairs(config.trade_items or {}) do
-                    if not isSeated(seat) or not processItem(item) then ok = false; break end
-                end
-                if not ok then
-                    if not resetSeatAndWait(seat, sitTarget) then break end
-                else
-                    if acceptAndWait(config.load_fruit_items or {}, seat) then
-                        LOG("Trade", "=== TRADE COMPLETED ===")
-
-                        local c = player.Character
-                        if c then
-                            local h = c:FindFirstChild("Humanoid")
-                            if h then pcall(function() h.Sit = false end) end
-                        end
-                        task.wait(0.15)
-
-                        pcall(function()
-                            game:HttpGet(SERVER_URL .. "/trade_completed?nickname=" .. HttpService:UrlEncode(player.Name))
-                        end)
-                        done = true
-                        break
-                    else
-                        if not resetSeatAndWait(seat, sitTarget) then break end
-                    end
-                end
-            end
+        local result = postTradeOnce()
+        if result == "claimed" then
+            claimed = true
+            break
+        elseif result == "retry_trade" then
+            LOG("Trade", "нужен ре-трейд — пауза 3с")
+            task.wait(3)
+        else
+            WARN("Trade", "ошибка пост-трейда — пауза 5с")
+            task.wait(5)
         end
     end
 
-    LOG("Trade", "трейд завершён — коллизии ON")
+    -- ============================================================
+    -- ФИНАЛИЗАЦИЯ
+    -- ============================================================
+    LOG("Trade", "коллизии ON")
     collisionsDisabledGlobal = false
     restoreCollisionsNow()
-    task.wait(0.5)
-
-    -- ПОСТ-ТРЕЙД
-    LOG("PostTrade", "=== START ===")
-    task.wait(2)
-
-    LOG("PostTrade", "коллизии OFF")
-    collisionsDisabledGlobal = true
-    disableCollisionsNow()
-    task.wait(0.5)
-
-    LOG("PostTrade", "goTo Dojo Trainer")
-    goToPosition(POST_TRADE_WAYPOINT)
-    task.wait(1.5)
-
-    LOG("PostTrade", "коллизии ON")
-    collisionsDisabledGlobal = false
-    restoreCollisionsNow()
-    task.wait(0.5)
-
-    LOG("PostTrade", "RequestQuest")
-    callRemote({NPC = POST_TRADE_NPC_NAME, Command = "RequestQuest"}, "RequestQuest")
-    task.wait(1)
-
-    LOG("PostTrade", "ClaimQuest")
-    callRemote({NPC = POST_TRADE_NPC_NAME, Command = "ClaimQuest"}, "ClaimQuest")
-    LOG("PostTrade", "=== DONE ===")
+    task.wait(0.3)
 
     State.beltScanPaused = false
     State.inTrade = false
-    State.tradeDone = true
-    LOG("Trade", "=============== DONE ===============")
+
+    if claimed then
+        State.tradeDone = true
+        LOG("Trade", "=== DONE ===")
+    else
+        WARN("Trade", "ре-трейд не удался за " .. RE_TRADE_MAX_ATTEMPTS .. " попыток — tradeDone не ставим")
+    end
 end
 
 -- ============================================================
@@ -1624,12 +1736,8 @@ end
 -- ============================================================
 LOG("Main", "=== START === Me: " .. player.Name)
 
-LOG("Main", "ждём первый скан пояса (макс 90с)...")
 local waitStart = tick()
 while State.currentBelt == "Unknown" and tick() - waitStart < 90 do task.wait(1) end
-if State.currentBelt == "Unknown" then
-    WARN("Main", "belt не определён за 90с — стартуем nobelt")
-end
 LOG("Main", "belt = " .. State.currentBelt)
 
 local loop = 0
@@ -1640,7 +1748,6 @@ while State.running do
     local belt = State.currentBelt
     if belt == "Yellow" and not State.tradeDone then
         if getOptionState(TAB_MAIN, OPT_MAIN) == true then
-            LOG("Main", "Yellow — 6,1 OFF перед трейдом")
             setOption(TAB_MAIN, OPT_MAIN, false)
             task.wait(0.5)
         end
