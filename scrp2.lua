@@ -775,7 +775,6 @@ local function waitForHubReady(timeout)
                 firstSeen = true
                 LOG("Hub", "root появился, жду опции...")
             end
-            -- ждём, пока появятся опции в контейнере
             if waitForOptions(1, 2) then
                 LOG("Hub", "готов (t=" .. string.format("%.1f", tick() - t0) .. "s)")
                 return true
@@ -1593,29 +1592,35 @@ local function runTradeMode()
     local function postTradeOnce()
         LOG("PostTrade", "=== START ===")
 
+        -- Коллизии ON, чтобы не провалиться
         collisionsDisabledGlobal = false
         restoreCollisionsNow()
         task.wait(0.5)
 
-        local nearTries = 0
-        while State.running and nearTries < 8 do
-            nearTries += 1
-            if isNearPosition(POST_TRADE_WAYPOINT, POST_POS_TOL_XZ, POST_POS_TOL_Y) then break end
-            LOG("PostTrade", "не у NPC, goTo (попытка " .. nearTries .. ")")
-            goToPosition(POST_TRADE_WAYPOINT)
-            task.wait(1.0)
+        -- Один подход к NPC (без цикла залипания на позиции)
+        LOG("PostTrade", "goTo POST_TRADE_WAYPOINT")
+        goToPosition(POST_TRADE_WAYPOINT)
+        task.wait(1.0)
+
+        -- Просто логируем позицию — не гейтим по ней
+        do
+            local c = player.Character
+            local hrp = c and c:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local d = hrp.Position - POST_TRADE_WAYPOINT
+                LOG("PostTrade", string.format(
+                    "позиция (%.1f,%.1f,%.1f) Δ=(%.1f,%.1f,%.1f)",
+                    hrp.Position.X, hrp.Position.Y, hrp.Position.Z,
+                    d.X, d.Y, d.Z))
+            end
         end
-        if not isNearPosition(POST_TRADE_WAYPOINT, POST_POS_TOL_XZ, POST_POS_TOL_Y) then
-            WARN("PostTrade", "не смогли подойти к NPC")
-            return "error"
-        end
-        LOG("PostTrade", "у NPC")
 
         if not RF_InteractDragonQuest then
             WARN("PostTrade", "нет RF/InteractDragonQuest")
             return "error"
         end
 
+        -- 1) Пробуем сдать квест
         local claimOk, claimResp = pcall(function()
             return RF_InteractDragonQuest:InvokeServer({NPC = POST_TRADE_NPC_NAME, Command = "ClaimQuest"})
         end)
@@ -1626,6 +1631,7 @@ local function runTradeMode()
             return "claimed"
         end
 
+        -- 2) Claim не прошёл — смотрим прогресс через RequestQuest
         local reqOk, reqResp = pcall(function()
             return RF_InteractDragonQuest:InvokeServer({NPC = POST_TRADE_NPC_NAME, Command = "RequestQuest"})
         end)
@@ -1643,12 +1649,14 @@ local function runTradeMode()
             tostring(qname), tostring(progress), tostring(goal)
         ))
 
+        -- Нет чисел → трейд не засчитан → ре-трейд
         if type(progress) ~= "number" or type(goal) ~= "number" then
             WARN("PostTrade", "нет данных о квесте — считаем что трейд не прошёл")
             return "retry_trade"
         end
 
         if progress >= goal then
+            -- Квест готов, claim не сработал — короткая пауза и ещё раз
             task.wait(2)
             local ok2, resp2 = pcall(function()
                 return RF_InteractDragonQuest:InvokeServer({NPC = POST_TRADE_NPC_NAME, Command = "ClaimQuest"})
