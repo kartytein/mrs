@@ -23,13 +23,11 @@ local TRADE_WAYPOINT     = Vector3.new(-12549.7, 337.5, -7501.1)
 local POST_TRADE_WAYPOINT = Vector3.new(5866.9, 1208.6, 872.0)
 local POST_TRADE_NPC_NAME = "Dojo Trainer"
 
--- Пост-трейд: допуски близости к NPC
 local POST_POS_TOL_XZ = 25
 local POST_POS_TOL_Y  = 60
 
--- Трейд: лимиты
-local RE_TRADE_MAX_ATTEMPTS = 15      -- сколько раз переигрывать весь трейд
-local TRADE_PHASE_TIMEOUT   = 240     -- сек на одну трейд-фазу (поиск стола + accept)
+local RE_TRADE_MAX_ATTEMPTS = 15
+local TRADE_PHASE_TIMEOUT   = 240
 
 -- ============================================================
 -- ЛОГГЕР
@@ -50,7 +48,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService       = game:GetService("HttpService")
 local Workspace         = game:GetService("Workspace")
 local CoreGui           = game:GetService("CoreGui")
-local RunService        = game:GetService("RunService")
 
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -946,12 +943,6 @@ end
 -- ============================================================
 -- ТРЕЙД
 -- ============================================================
--- Новая структура:
---   runTradeMode()      — внешний цикл ре-трейда; ставит State.tradeDone
---   doTradeOnce(cfg)    — одна попытка трейда; true если accept+закрытие прошло
---   postTradeOnce()     — подход к NPC + ClaimQuest + проверка Quest.Progress/Goal
---                         возвращает "claimed" | "retry_trade" | "error"
--- ============================================================
 local function runTradeMode()
     LOG("Trade", "=== START ===")
     State.beltScanPaused = true
@@ -965,9 +956,6 @@ local function runTradeMode()
     ensureOptionOff(TAB_FARM, OPT_FARM)
     task.wait(0.3)
 
-    -- ============================================================
-    -- ЛОКАЛЬНЫЕ ХЕЛПЕРЫ (trade-фаза)
-    -- ============================================================
     local SEND_INVENTORY_INTERVAL = 20
     local CONFIG_POLL_INTERVAL    = 10
 
@@ -1460,10 +1448,8 @@ local function runTradeMode()
 
     -- ============================================================
     -- ФАЗА 1: ОДНА ПОПЫТКА ТРЕЙДА
-    -- Возвращает true если accept+закрытие прошло без явного отказа.
     -- ============================================================
     local function doTradeOnce(config)
-        -- коллизии OFF для перемещения к столу
         collisionsDisabledGlobal = true
         disableCollisionsNow()
         task.wait(0.3)
@@ -1560,18 +1546,15 @@ local function runTradeMode()
     end
 
     -- ============================================================
-    -- ФАЗА 2: ОДНА ПОПЫТКА ПОСТ-ТРЕЙДА (NPC + ClaimQuest + Quest check)
-    -- Возвращает "claimed" | "retry_trade" | "error"
+    -- ФАЗА 2: ОДНА ПОПЫТКА ПОСТ-ТРЕЙДА
     -- ============================================================
     local function postTradeOnce()
         LOG("PostTrade", "=== START ===")
 
-        -- Коллизии ON, иначе персонаж провалится под карту и NPC будет далеко
         collisionsDisabledGlobal = false
         restoreCollisionsNow()
         task.wait(0.5)
 
-        -- Подойти к NPC
         local nearTries = 0
         while State.running and nearTries < 8 do
             nearTries += 1
@@ -1591,7 +1574,6 @@ local function runTradeMode()
             return "error"
         end
 
-        -- ClaimQuest
         local claimOk, claimResp = pcall(function()
             return RF_InteractDragonQuest:InvokeServer({NPC = POST_TRADE_NPC_NAME, Command = "ClaimQuest"})
         end)
@@ -1602,7 +1584,6 @@ local function runTradeMode()
             return "claimed"
         end
 
-        -- Claim не прошёл. Смотрим прогресс квеста.
         local reqOk, reqResp = pcall(function()
             return RF_InteractDragonQuest:InvokeServer({NPC = POST_TRADE_NPC_NAME, Command = "RequestQuest"})
         end)
@@ -1620,14 +1601,12 @@ local function runTradeMode()
             tostring(qname), tostring(progress), tostring(goal)
         ))
 
-        -- Нет квеста / нет чисел → трейд не засчитан → повторяем трейд
         if type(progress) ~= "number" or type(goal) ~= "number" then
             WARN("PostTrade", "нет данных о квесте — считаем что трейд не прошёл")
             return "retry_trade"
         end
 
         if progress >= goal then
-            -- Трейд ок, но claim не сработал. Ещё раз claim (после короткой паузы).
             task.wait(2)
             local ok2, resp2 = pcall(function()
                 return RF_InteractDragonQuest:InvokeServer({NPC = POST_TRADE_NPC_NAME, Command = "ClaimQuest"})
@@ -1640,14 +1619,13 @@ local function runTradeMode()
             WARN("PostTrade", "claim не сработал даже при готовом квесте — ре-трейд")
             return "retry_trade"
         else
-            -- Прогресс не полный → трейд не засчитан → ре-трейд
             LOG("PostTrade", string.format("квест не выполнен (%d/%d) — ре-трейд", progress, goal))
             return "retry_trade"
         end
     end
 
     -- ============================================================
-    -- ПОДГОТОВКА: коллизии OFF, команда, конфиг, телепорт, LoadFruit
+    -- ПОДГОТОВКА
     -- ============================================================
     selectTeam()
 
@@ -1701,7 +1679,7 @@ local function runTradeMode()
     processLoadFruit(config.load_fruit_items or {})
 
     -- ============================================================
-    -- ВНЕШНИЙ ЦИКЛ РЕ-ТРЕЙДА
+    -- ВНЕШНИЙ ЦИКЛ РЕ-ТРЕЙДА (continue вместо goto)
     -- ============================================================
     local claimed = false
     local attempt = 0
@@ -1718,9 +1696,7 @@ local function runTradeMode()
         if not tradeOk then
             LOG("Trade", "трейд не завершён — повтор через 3с")
             task.wait(3)
-            -- не считаем это за полноценную попытку: инкремент был, но считаем
-            -- как реальную итерацию (attempt уже +1)
-            goto continue
+            continue
         end
 
         local result = postTradeOnce()
@@ -1734,8 +1710,6 @@ local function runTradeMode()
             WARN("Trade", "ошибка пост-трейда — пауза 5с")
             task.wait(5)
         end
-
-        ::continue::
     end
 
     -- ============================================================
