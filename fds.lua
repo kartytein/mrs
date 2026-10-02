@@ -1,7 +1,6 @@
 --!nocheck
 -- ============================================================
 -- GREEN MODE — АВТОНОМНЫЙ ТЕСТ
--- Персонажи смотрят друг на друга (по координатам партнёра)
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -19,8 +18,9 @@ local playerGui = player:WaitForChild("PlayerGui")
 local SERVER_URL          = "http://192.168.31.179:8000"
 local POST_TRADE_NPC_NAME = "Dojo Trainer"
 
-local GREEN_HOST_POS   = Vector3.new(5841.1, 1208.6, 887.2)
-local GREEN_GUEST_POS  = Vector3.new(5848.3, 1208.6, 881.5)
+-- Y поднят на +50, чтобы не проваливаться сквозь текстуры
+local GREEN_HOST_POS   = Vector3.new(5841.1, 1258.6, 887.2)
+local GREEN_GUEST_POS  = Vector3.new(5848.3, 1258.6, 881.5)
 
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
@@ -66,7 +66,7 @@ do
 end
 
 -- ============================================================
--- КОЛЛИЗИИ
+-- КОЛЛИЗИИ (без фонового таска — race устранён)
 -- ============================================================
 local collisionsDisabledGlobal = false
 local savedCollisionsGlobal = {}
@@ -97,17 +97,6 @@ local function restoreCollisionsNow()
     savedCollisionsGlobal = {}
 end
 
-task.spawn(function()
-    while State.running do
-        if collisionsDisabledGlobal then
-            disableCollisionsNow()
-            task.wait(1.0)
-        else
-            task.wait(0.5)
-        end
-    end
-end)
-
 -- ============================================================
 -- FIRE SEQUENCE
 -- ============================================================
@@ -132,7 +121,7 @@ local function fireSequence(btn)
 end
 
 -- ============================================================
--- ХАБ: поиск
+-- ХАБ
 -- ============================================================
 local function getRoot()
     for _, c in ipairs(CoreGui:GetChildren()) do
@@ -302,7 +291,7 @@ local function waitForHubReady(timeout)
 end
 
 -- ============================================================
--- ТЕЛЕПОРТ ЧЕРЕЗ ХАБ
+-- ТЕЛЕПОРТ
 -- ============================================================
 local function findNthTabButton(ts, idx)
     local btn, cnt = nil, 0
@@ -369,7 +358,8 @@ local Y_UP_SPEED       = 50
 local Y_TOLERANCE      = 3
 local MAX_ITER         = 6000
 
-local function goToPosition(targetPos)
+-- Как goToPosition, но НЕ отпускает PlatformStand. Персонаж висит в воздухе.
+local function goToPositionHoldAir(targetPos)
     local char = player.Character
     if not char then return false end
     local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -394,7 +384,8 @@ local function goToPosition(targetPos)
 
     local lastLogAt = tick()
     local iter = 0
-    LOG("Move", string.format("старт (%.0f,%.0f,%.0f)", targetPos.X, targetPos.Y, targetPos.Z))
+    LOG("Move", string.format("старт-hold (%.0f,%.0f,%.0f)",
+        targetPos.X, targetPos.Y, targetPos.Z))
 
     while iter < MAX_ITER do
         iter += 1
@@ -438,43 +429,32 @@ local function goToPosition(targetPos)
 
         if tick() - lastLogAt >= 2 then
             lastLogAt = tick()
-            LOG("Move", string.format("dxz=%.1f dy=%.1f velY=%.1f", distXZ, dy, velY))
+            LOG("Move", string.format("hold dxz=%.1f dy=%.1f velY=%.1f", distXZ, dy, velY))
         end
 
         task.wait()
     end
 
-    if char and hrp and hum then
-        hum.PlatformStand = false
-        local bv2 = hrp:FindFirstChildOfClass("BodyVelocity")
-        if bv2 then bv2:Destroy() end
-    end
-    LOG("Move", "дошли до точки")
+    -- ВАЖНО: НЕ отпускаем персонажа. BodyVelocity виснет, PlatformStand=true.
+    bv.Velocity = Vector3.zero
+    LOG("Move", "hold: дошли, зависли в воздухе")
     return true
 end
 
--- ============================================================
--- РАЗВОРОТ НА ТОЧКУ (смотрит НА партнёра, не по вектору)
--- ============================================================
 local function faceTowards(targetPoint)
     local char = player.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     local hum = char and char:FindFirstChild("Humanoid")
     if not hrp or not hum then return end
 
-    -- flat: игнорируем Y, чтобы тело не наклонялось
     local myPos = hrp.Position
     local flatDir = Vector3.new(targetPoint.X - myPos.X, 0, targetPoint.Z - myPos.Z)
     if flatDir.Magnitude < 1e-4 then return end
 
     local cf = CFrame.lookAt(myPos, myPos + flatDir.Unit)
-
-    -- AutoRotate выключить один раз — держится до конца режима
     hum.AutoRotate = false
-
     hrp.CFrame = cf
 
-    -- фиксация через BodyGyro (короткая, чтобы физика успела принять ориентацию)
     local bg = Instance.new("BodyGyro")
     bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
     bg.P = 50000
@@ -486,9 +466,30 @@ local function faceTowards(targetPoint)
     bg:Destroy()
 end
 
+-- Порядок: летим (коллизии OFF) → восстановили коллизии → отпустили
+-- → упали на 50 стадов на пол → развернулись
 local function goToAndFace(targetPos, lookAtPoint)
-    goToPosition(targetPos)
+    -- 1) летим с коллизиями OFF, держим PlatformStand=true
+    goToPositionHoldAir(targetPos)
     task.wait(0.3)
+
+    -- 2) коллизии ON, пока персонаж висит (пол включится под ним)
+    collisionsDisabledGlobal = false
+    restoreCollisionsNow()
+    task.wait(1.0)
+
+    -- 3) отпускаем — падает на пол (коллизии уже работают)
+    local char = player.Character
+    local hum = char and char:FindFirstChild("Humanoid")
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if hum and hrp then
+        hum.PlatformStand = false
+        local bv = hrp:FindFirstChildOfClass("BodyVelocity")
+        if bv then bv:Destroy() end
+    end
+    task.wait(1.5)   -- время упасть и устаканиться
+
+    -- 4) разворот
     faceTowards(lookAtPoint)
 end
 
@@ -660,7 +661,7 @@ local function runGreenMode()
         requestMatch()
     end
 
-    -- 4) Своя позиция + смотрим на партнёра
+    -- 4) Позиция + разворот на партнёра
     local myPos, partnerPos
     if match.role == "host" then
         myPos, partnerPos = GREEN_HOST_POS, GREEN_GUEST_POS
@@ -668,22 +669,49 @@ local function runGreenMode()
         myPos, partnerPos = GREEN_GUEST_POS, GREEN_HOST_POS
     end
 
+    LOG("Green", "goTo " .. string.format("(%.1f,%.1f,%.1f)",
+        myPos.X, myPos.Y, myPos.Z))
+    LOG("Green", "looking at partner " .. string.format("(%.1f,%.1f,%.1f)",
+        partnerPos.X, partnerPos.Y, partnerPos.Z))
+
+    -- коллизии OFF → летим → коллизии ON → отпускаем → падаем на пол
     collisionsDisabledGlobal = true
     disableCollisionsNow()
     task.wait(0.3)
-    goToAndFace(myPos, partnerPos)   -- смотрим на координату партнёра
-    collisionsDisabledGlobal = false
-    restoreCollisionsNow()
+    goToAndFace(myPos, partnerPos)
     task.wait(0.5)
+
+    -- Лог позиции
+    do
+        local c = player.Character
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local d = hrp.Position - myPos
+            LOG("Green", string.format(
+                "позиция (%.1f,%.1f,%.1f) Δ=(%.1f,%.1f,%.1f)",
+                hrp.Position.X, hrp.Position.Y, hrp.Position.Z,
+                d.X, d.Y, d.Z))
+        end
+    end
 
     -- 5) Host: 7,7 ON → ждём fruit → 7,7 OFF
     if match.role == "host" then
         LOG("Green", "host: 7,7 ON")
-        ensureOptionOn(TAB_FRUIT, OPT_FRUIT)
+        local ok77 = ensureOptionOn(TAB_FRUIT, OPT_FRUIT)
+        LOG("Green", "host: 7,7 ON result = " .. tostring(ok77))
+        if not ok77 then
+            WARN("Green", "host: НЕ УДАЛОСЬ включить 7,7")
+        end
+
         LOG("Green", "host: ждём fruit-tool...")
-        waitFruitTool()
-        LOG("Green", "host: fruit есть → 7,7 OFF")
-        ensureOptionOff(TAB_FRUIT, OPT_FRUIT)
+        local tool = waitFruitTool()
+        LOG("Green", "host: fruit появился = " .. tostring(tool and tool.Name))
+
+        LOG("Green", "host: 7,7 OFF")
+        local off77 = ensureOptionOff(TAB_FRUIT, OPT_FRUIT)
+        LOG("Green", "host: 7,7 OFF result = " .. tostring(off77))
+    else
+        LOG("Green", "guest: 7,7 не трогаю (активирует host)")
     end
 
     -- 6) Ping-pong
