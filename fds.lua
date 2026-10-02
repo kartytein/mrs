@@ -1,9 +1,7 @@
 --!nocheck
 -- ============================================================
 -- GREEN MODE — АВТОНОМНЫЙ ТЕСТ
--- ============================================================
--- Запускается как отдельный скрипт. Ничего от main не требует.
--- Работает только green-режим: матч → позиция → обмен фруктами → claim
+-- Персонажи смотрят друг на друга (по координатам партнёра)
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -22,17 +20,17 @@ local SERVER_URL          = "http://192.168.31.179:8000"
 local POST_TRADE_NPC_NAME = "Dojo Trainer"
 
 local GREEN_HOST_POS   = Vector3.new(5841.1, 1208.6, 887.2)
-local GREEN_HOST_LOOK  = Vector3.new(0.7591, 0.0000, -0.6509)
-
 local GREEN_GUEST_POS  = Vector3.new(5848.3, 1208.6, 881.5)
-local GREEN_GUEST_LOOK = Vector3.new(-0.7111, 0.0000, 0.7031)
 
--- Вкладки/опции хаба
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
 local TAB_FRUIT, OPT_FRUIT = 7, 7
 
-local HUB_READY_TIMEOUT   = 120
+local TELEPORT_TAB          = 19
+local TELEPORT_OPT_TEXT     = 2
+local TELEPORT_OPT_ACTIVATE = 3
+
+local HUB_READY_TIMEOUT = 120
 
 -- ============================================================
 -- ЛОГГЕР
@@ -46,7 +44,7 @@ local function WARN(tag, msg)
 end
 
 -- ============================================================
--- STATE (локальный)
+-- STATE
 -- ============================================================
 local State = {
     running = true,
@@ -111,7 +109,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- FIRE SEQUENCE (клик по кнопке хаба)
+-- FIRE SEQUENCE
 -- ============================================================
 local function fireSequence(btn)
     if not btn then return false end
@@ -134,7 +132,7 @@ local function fireSequence(btn)
 end
 
 -- ============================================================
--- ХАБ: поиск опций
+-- ХАБ: поиск
 -- ============================================================
 local function getRoot()
     for _, c in ipairs(CoreGui:GetChildren()) do
@@ -304,6 +302,65 @@ local function waitForHubReady(timeout)
 end
 
 -- ============================================================
+-- ТЕЛЕПОРТ ЧЕРЕЗ ХАБ
+-- ============================================================
+local function findNthTabButton(ts, idx)
+    local btn, cnt = nil, 0
+    local function rec(p)
+        if btn then return end
+        for _, c in ipairs(p:GetChildren()) do
+            if c:IsA("TextButton") or c:IsA("ImageButton") then
+                cnt += 1
+                if cnt == idx then btn = c; return end
+            end
+            rec(c)
+        end
+    end
+    rec(ts)
+    return btn
+end
+
+local function findNthOption(cont, idx)
+    local btn, cnt = nil, 0
+    for _, c in ipairs(cont:GetChildren()) do
+        if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
+            cnt += 1
+            if cnt == idx then btn = c; break end
+        end
+    end
+    return btn
+end
+
+local function teleportToJobId(jobId)
+    local root = getRoot() if not root then return false end
+    local ts = safeFind(root, "Window","Components","TabsScroll")
+    if not ts then return false end
+    local tb = findNthTabButton(ts, TELEPORT_TAB)
+    if not tb then return false end
+    fireSequence(tb); task.wait(0.5)
+    local cont = safeFind(root, "Window","Components","Containers","Container")
+    if not cont then return false end
+    local optText = findNthOption(cont, TELEPORT_OPT_TEXT)
+    if not optText then return false end
+    local function findTB(p)
+        for _, c in ipairs(p:GetChildren()) do
+            if c:IsA("TextBox") then return c end
+            local f = findTB(c)
+            if f then return f end
+        end
+    end
+    local tx = findTB(optText)
+    if not tx then return false end
+    tx:CaptureFocus(); task.wait(0.2)
+    tx.Text = jobId; task.wait(0.2)
+    tx:ReleaseFocus(true); task.wait(0.3)
+    local optAct = findNthOption(cont, TELEPORT_OPT_ACTIVATE)
+    if not optAct then return false end
+    fireSequence(optAct)
+    return true
+end
+
+-- ============================================================
 -- ПЕРЕМЕЩЕНИЕ
 -- ============================================================
 local STEP_XZ          = 4
@@ -396,24 +453,47 @@ local function goToPosition(targetPos)
     return true
 end
 
-local function faceDirection(look)
+-- ============================================================
+-- РАЗВОРОТ НА ТОЧКУ (смотрит НА партнёра, не по вектору)
+-- ============================================================
+local function faceTowards(targetPoint)
     local char = player.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    local flat = Vector3.new(look.X, 0, look.Z)
-    if flat.Magnitude < 1e-4 then return end
-    local target = hrp.Position + flat.Unit
-    hrp.CFrame = CFrame.lookAt(hrp.Position, target)
+    local hum = char and char:FindFirstChild("Humanoid")
+    if not hrp or not hum then return end
+
+    -- flat: игнорируем Y, чтобы тело не наклонялось
+    local myPos = hrp.Position
+    local flatDir = Vector3.new(targetPoint.X - myPos.X, 0, targetPoint.Z - myPos.Z)
+    if flatDir.Magnitude < 1e-4 then return end
+
+    local cf = CFrame.lookAt(myPos, myPos + flatDir.Unit)
+
+    -- AutoRotate выключить один раз — держится до конца режима
+    hum.AutoRotate = false
+
+    hrp.CFrame = cf
+
+    -- фиксация через BodyGyro (короткая, чтобы физика успела принять ориентацию)
+    local bg = Instance.new("BodyGyro")
+    bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    bg.P = 50000
+    bg.D = 500
+    bg.CFrame = cf
+    bg.Parent = hrp
+
+    task.wait(0.3)
+    bg:Destroy()
 end
 
-local function goToAndFace(targetPos, look)
+local function goToAndFace(targetPos, lookAtPoint)
     goToPosition(targetPos)
     task.wait(0.3)
-    faceDirection(look)
+    faceTowards(lookAtPoint)
 end
 
 -- ============================================================
--- HTTP: /match, /unmatch
+-- HTTP
 -- ============================================================
 local function requestMatch()
     local url = SERVER_URL
@@ -540,44 +620,58 @@ local function runGreenMode()
     LOG("Green", "role=" .. tostring(match.role)
         .. " partner=" .. tostring(match.partner_name))
 
-    -- 2) Guest телепорт
-    if match.role == "guest"
-       and match.job_id and match.job_id ~= ""
-       and match.job_id ~= game.JobId then
-        LOG("Green", "guest: нужен телепорт на " .. tostring(match.job_id))
-        WARN("Green", "авто-телепорт не реализован в этом тесте — переключись на сервер вручную")
-        -- ждём, пока пользователь сам сменит сервер
-        local w = 0
-        while w < 600 and game.JobId ~= match.job_id do
-            task.wait(1); w += 1
-        end
-        if game.JobId ~= match.job_id then
-            WARN("Green", "job_id так и не совпал — выход")
-            requestUnmatch()
-            State.mode = "none"
-            return
-        end
-        task.wait(2)
-        requestMatch()
-    end
-
-    -- 3) Ждём хаб
+    -- 2) Хаб
     if not waitForHubReady() then
         State.mode = "none"; return
     end
 
-    -- 4) Позиция
-    local myPos, myLook
+    -- 3) Guest телепорт
+    if match.role == "guest"
+       and match.job_id and match.job_id ~= ""
+       and match.job_id ~= game.JobId then
+
+        LOG("Green", "guest: телепорт на " .. tostring(match.job_id))
+
+        local teleported = false
+        for attempt = 1, 5 do
+            if teleportToJobId(match.job_id) then
+                local w = 0
+                while w < 30 and game.JobId ~= match.job_id do
+                    task.wait(1); w += 1
+                end
+                if game.JobId == match.job_id then
+                    teleported = true
+                    break
+                end
+            end
+            LOG("Green", "guest: телепорт попытка #" .. attempt .. " не удалась, повтор")
+            task.wait(2)
+        end
+
+        if not teleported then
+            WARN("Green", "guest: телепорт не удался — выход")
+            requestUnmatch()
+            State.mode = "none"
+            return
+        end
+
+        LOG("Green", "guest: перелетели, ждём загрузку")
+        task.wait(8)
+        requestMatch()
+    end
+
+    -- 4) Своя позиция + смотрим на партнёра
+    local myPos, partnerPos
     if match.role == "host" then
-        myPos, myLook = GREEN_HOST_POS, GREEN_HOST_LOOK
+        myPos, partnerPos = GREEN_HOST_POS, GREEN_GUEST_POS
     else
-        myPos, myLook = GREEN_GUEST_POS, GREEN_GUEST_LOOK
+        myPos, partnerPos = GREEN_GUEST_POS, GREEN_HOST_POS
     end
 
     collisionsDisabledGlobal = true
     disableCollisionsNow()
     task.wait(0.3)
-    goToAndFace(myPos, myLook)
+    goToAndFace(myPos, partnerPos)   -- смотрим на координату партнёра
     collisionsDisabledGlobal = false
     restoreCollisionsNow()
     task.wait(0.5)
@@ -625,6 +719,7 @@ local function runGreenMode()
     end
 
     LOG("Green", "=== DONE claimed=" .. tostring(claimedMe) .. " ===")
+
     requestUnmatch()
     State.mode = "none"
 end
