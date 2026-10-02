@@ -1,14 +1,442 @@
+--!nocheck
 -- ============================================================
--- GREEN MODE — обмен фруктами (host/guest)
+-- GREEN MODE — АВТОНОМНЫЙ ТЕСТ
 -- ============================================================
-local GREEN_HOST_POS   = SIMPLE_HOST_POS
-local GREEN_HOST_LOOK  = SIMPLE_HOST_LOOK
-local GREEN_GUEST_POS  = SIMPLE_GUEST_POS
-local GREEN_GUEST_LOOK = SIMPLE_GUEST_LOOK
+-- Запускается как отдельный скрипт. Ничего от main не требует.
+-- Работает только green-режим: матч → позиция → обмен фруктами → claim
+-- ============================================================
 
+local Players           = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService       = game:GetService("HttpService")
+local Workspace         = game:GetService("Workspace")
+local CoreGui           = game:GetService("CoreGui")
+
+local player    = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- ============================================================
+-- КОНФИГ
+-- ============================================================
+local SERVER_URL          = "http://192.168.31.179:8000"
+local POST_TRADE_NPC_NAME = "Dojo Trainer"
+
+local GREEN_HOST_POS   = Vector3.new(5841.1, 1208.6, 887.2)
+local GREEN_HOST_LOOK  = Vector3.new(0.7591, 0.0000, -0.6509)
+
+local GREEN_GUEST_POS  = Vector3.new(5848.3, 1208.6, 881.5)
+local GREEN_GUEST_LOOK = Vector3.new(-0.7111, 0.0000, 0.7031)
+
+-- Вкладки/опции хаба
+local COLOR_ON  = "0.345098, 0.396078, 0.94902"
+local COLOR_OFF = "0.239216, 0.262745, 0.529412"
 local TAB_FRUIT, OPT_FRUIT = 7, 7
 
--- --- Fruit helpers ---
+local HUB_READY_TIMEOUT   = 120
+
+-- ============================================================
+-- ЛОГГЕР
+-- ============================================================
+local T0 = tick()
+local function LOG(tag, msg)
+    print(string.format("[%7.2fs][%s] %s", tick() - T0, tag, msg))
+end
+local function WARN(tag, msg)
+    warn(string.format("[%7.2fs][%s] %s", tick() - T0, tag, msg))
+end
+
+-- ============================================================
+-- STATE (локальный)
+-- ============================================================
+local State = {
+    running = true,
+    mode    = "none",
+}
+
+-- ============================================================
+-- RF/InteractDragonQuest
+-- ============================================================
+local RF_InteractDragonQuest = nil
+do
+    local modules = ReplicatedStorage:FindFirstChild("Modules")
+    if modules then
+        local net = modules:FindFirstChild("Net")
+        if net then
+            RF_InteractDragonQuest = net:FindFirstChild("RF/InteractDragonQuest")
+        end
+    end
+end
+
+-- ============================================================
+-- КОЛЛИЗИИ
+-- ============================================================
+local collisionsDisabledGlobal = false
+local savedCollisionsGlobal = {}
+
+local function disableCollisionsNow()
+    pcall(function()
+        local myChar = player.Character
+        local saved = savedCollisionsGlobal
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj:IsA("BasePart") then
+                if not (myChar and obj:IsDescendantOf(myChar)) then
+                    if obj.CanCollide then
+                        saved[obj] = true
+                        obj.CanCollide = false
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function restoreCollisionsNow()
+    for part, _ in pairs(savedCollisionsGlobal) do
+        if part and part.Parent then
+            pcall(function() part.CanCollide = true end)
+        end
+    end
+    savedCollisionsGlobal = {}
+end
+
+task.spawn(function()
+    while State.running do
+        if collisionsDisabledGlobal then
+            disableCollisionsNow()
+            task.wait(1.0)
+        else
+            task.wait(0.5)
+        end
+    end
+end)
+
+-- ============================================================
+-- FIRE SEQUENCE (клик по кнопке хаба)
+-- ============================================================
+local function fireSequence(btn)
+    if not btn then return false end
+    if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return false end
+    local fired = false
+    for _, sigName in ipairs({"MouseEnter","MouseButton1Down","MouseButton1Click","MouseButton1Up","Activated","MouseLeave"}) do
+        local sig = btn[sigName]
+        if sig then
+            local ok, conns = pcall(function() return getconnections(sig) end)
+            if ok and conns then
+                for _, conn in ipairs(conns) do
+                    if conn.Enabled and type(conn.Function) == "function" then
+                        pcall(conn.Function); fired = true
+                    end
+                end
+            end
+        end
+    end
+    return fired
+end
+
+-- ============================================================
+-- ХАБ: поиск опций
+-- ============================================================
+local function getRoot()
+    for _, c in ipairs(CoreGui:GetChildren()) do
+        local obj = c:FindFirstChild("redz-library-v5")
+        if obj then return obj end
+    end
+    return nil
+end
+
+local function safeFind(obj, ...)
+    for _, name in ipairs({...}) do
+        if not obj then return nil end
+        obj = obj:FindFirstChild(name)
+    end
+    return obj
+end
+
+local function findIndicatorFrame(parent)
+    for _, child in ipairs(parent:GetChildren()) do
+        if child:IsA("Frame") then
+            local col = tostring(child.BackgroundColor3)
+            if col == COLOR_ON or col == COLOR_OFF then return child end
+        end
+        local found = findIndicatorFrame(child)
+        if found then return found end
+    end
+    return nil
+end
+
+local function findTab(root, tabIndex)
+    local ts = safeFind(root, "Window","Components","TabsScroll")
+    if not ts then return nil end
+    local btn, count = nil, 0
+    local function scan(p)
+        if btn then return end
+        for _, c in ipairs(p:GetChildren()) do
+            if c:IsA("TextButton") or c:IsA("ImageButton") then
+                count += 1
+                if count == tabIndex then btn = c; return end
+            end
+            scan(c)
+        end
+    end
+    scan(ts)
+    return btn
+end
+
+local function findOption(root, optIndex)
+    local cont = safeFind(root, "Window","Components","Containers","Container")
+    if not cont then return nil end
+    local btn, count = nil, 0
+    for _, c in ipairs(cont:GetChildren()) do
+        if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
+            count += 1
+            if count == optIndex then btn = c; break end
+        end
+    end
+    return btn
+end
+
+local function waitForOptions(expectedMin, timeout)
+    timeout = timeout or 8
+    expectedMin = expectedMin or 1
+    local t0 = tick()
+    local last, stable = -1, 0
+    while tick() - t0 < timeout do
+        local root = getRoot()
+        local cont = root and safeFind(root, "Window","Components","Containers","Container")
+        local count = 0
+        if cont then
+            for _, c in ipairs(cont:GetChildren()) do
+                if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
+                    count += 1
+                end
+            end
+        end
+        if count >= expectedMin then
+            if count == last then
+                stable += 1
+                if stable >= 2 then return true end
+            else stable, last = 0, count end
+        else last, stable = -1, 0 end
+        task.wait(0.15)
+    end
+    return false
+end
+
+local function getOptionState(tabIndex, optIndex)
+    local root = getRoot()
+    if not root then return nil end
+    local tb = findTab(root, tabIndex)
+    if not tb then return nil end
+    fireSequence(tb)
+    if not waitForOptions(optIndex, 8) then return nil end
+    local opt = findOption(root, optIndex)
+    if not opt then return nil end
+    local ind = findIndicatorFrame(opt)
+    if not ind then return nil end
+    local col = tostring(ind.BackgroundColor3)
+    if col == COLOR_ON then return true end
+    if col == COLOR_OFF then return false end
+    return nil
+end
+
+local function setOption(tabIndex, optIndex, wantOn)
+    local root = getRoot()
+    if not root then return false end
+    local tb = findTab(root, tabIndex)
+    if not tb then return false end
+    fireSequence(tb)
+    if not waitForOptions(optIndex, 8) then return false end
+
+    local opt = findOption(root, optIndex)
+    if not opt then return false end
+    local ind = findIndicatorFrame(opt)
+    if not ind then return false end
+    local isOn = (tostring(ind.BackgroundColor3) == COLOR_ON)
+    if isOn == wantOn then return true end
+
+    fireSequence(opt); task.wait(0.2)
+    for _ = 1, 5 do
+        local i2 = findIndicatorFrame(opt)
+        if i2 and (tostring(i2.BackgroundColor3) == COLOR_ON) == wantOn then return true end
+        fireSequence(opt); task.wait(0.25)
+    end
+    return false
+end
+
+local function ensureOptionState(tabIndex, optIndex, wantOn, maxTries)
+    maxTries = maxTries or 6
+    for i = 1, maxTries do
+        local st = getOptionState(tabIndex, optIndex)
+        if st == wantOn then return true end
+        setOption(tabIndex, optIndex, wantOn)
+        task.wait(0.4)
+    end
+    return getOptionState(tabIndex, optIndex) == wantOn
+end
+
+local function ensureOptionOff(tabIndex, optIndex, maxTries)
+    return ensureOptionState(tabIndex, optIndex, false, maxTries)
+end
+
+local function ensureOptionOn(tabIndex, optIndex, maxTries)
+    return ensureOptionState(tabIndex, optIndex, true, maxTries)
+end
+
+local function waitForHubReady(timeout)
+    timeout = timeout or HUB_READY_TIMEOUT
+    local t0 = tick()
+    local firstSeen = false
+    while tick() - t0 < timeout and State.running do
+        if getRoot() then
+            if not firstSeen then
+                firstSeen = true
+                LOG("Hub", "root появился, жду опции...")
+            end
+            if waitForOptions(1, 2) then
+                LOG("Hub", "готов (t=" .. string.format("%.1f", tick() - t0) .. "s)")
+                return true
+            end
+        end
+        task.wait(0.5)
+    end
+    WARN("Hub", "не готов за " .. timeout .. "с")
+    return false
+end
+
+-- ============================================================
+-- ПЕРЕМЕЩЕНИЕ
+-- ============================================================
+local STEP_XZ          = 4
+local TELEPORT_DIST_XZ = 12
+local Y_UP_SPEED       = 50
+local Y_TOLERANCE      = 3
+local MAX_ITER         = 6000
+
+local function goToPosition(targetPos)
+    local char = player.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChild("Humanoid")
+    if not hrp or not hum then return false end
+
+    hum.PlatformStand = true
+
+    for _, v in ipairs(hrp:GetChildren()) do
+        if v:IsA("BodyPosition") or v:IsA("BodyGyro")
+           or v:IsA("AlignPosition") or v:IsA("AlignOrientation") then
+            v:Destroy()
+        end
+    end
+
+    local bv = hrp:FindFirstChildOfClass("BodyVelocity")
+    if not bv then
+        bv = Instance.new("BodyVelocity")
+        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        bv.Parent = hrp
+    end
+
+    local lastLogAt = tick()
+    local iter = 0
+    LOG("Move", string.format("старт (%.0f,%.0f,%.0f)", targetPos.X, targetPos.Y, targetPos.Z))
+
+    while iter < MAX_ITER do
+        iter += 1
+
+        char = player.Character
+        if not char then break end
+        hrp = char:FindFirstChild("HumanoidRootPart")
+        hum = char:FindFirstChild("Humanoid")
+        if not hrp or not hum then break end
+        if hum.Health <= 0 then break end
+
+        bv = hrp:FindFirstChildOfClass("BodyVelocity")
+        if not bv then
+            bv = Instance.new("BodyVelocity")
+            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+            bv.Parent = hrp
+        end
+
+        local cur = hrp.Position
+        local dx, dz = targetPos.X - cur.X, targetPos.Z - cur.Z
+        local dy = targetPos.Y - cur.Y
+        local distXZ = math.sqrt(dx*dx + dz*dz)
+
+        if distXZ < 1 and math.abs(dy) < Y_TOLERANCE then break end
+
+        if distXZ < TELEPORT_DIST_XZ and distXZ > 0 then
+            hrp.CFrame = CFrame.new(targetPos.X, cur.Y, targetPos.Z)
+        elseif distXZ >= TELEPORT_DIST_XZ then
+            local step = math.min(STEP_XZ, distXZ)
+            local nx, nz = dx / distXZ, dz / distXZ
+            hrp.CFrame = CFrame.new(cur.X + nx * step, cur.Y, cur.Z + nz * step)
+        end
+
+        local velY = 0
+        if dy > Y_TOLERANCE then
+            velY = math.min(Y_UP_SPEED, dy * 2)
+        elseif dy < -Y_TOLERANCE then
+            velY = -20
+        end
+        bv.Velocity = Vector3.new(0, velY, 0)
+
+        if tick() - lastLogAt >= 2 then
+            lastLogAt = tick()
+            LOG("Move", string.format("dxz=%.1f dy=%.1f velY=%.1f", distXZ, dy, velY))
+        end
+
+        task.wait()
+    end
+
+    if char and hrp and hum then
+        hum.PlatformStand = false
+        local bv2 = hrp:FindFirstChildOfClass("BodyVelocity")
+        if bv2 then bv2:Destroy() end
+    end
+    LOG("Move", "дошли до точки")
+    return true
+end
+
+local function faceDirection(look)
+    local char = player.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local flat = Vector3.new(look.X, 0, look.Z)
+    if flat.Magnitude < 1e-4 then return end
+    local target = hrp.Position + flat.Unit
+    hrp.CFrame = CFrame.lookAt(hrp.Position, target)
+end
+
+local function goToAndFace(targetPos, look)
+    goToPosition(targetPos)
+    task.wait(0.3)
+    faceDirection(look)
+end
+
+-- ============================================================
+-- HTTP: /match, /unmatch
+-- ============================================================
+local function requestMatch()
+    local url = SERVER_URL
+        .. "/match?nickname=" .. HttpService:UrlEncode(player.Name)
+        .. "&job_id="    .. HttpService:UrlEncode(game.JobId)
+    local ok, resp = pcall(function() return game:HttpGet(url) end)
+    if not ok then return nil, "http fail: " .. tostring(resp) end
+    local ok2, data = pcall(function() return HttpService:JSONDecode(resp) end)
+    if not ok2 or type(data) ~= "table" then
+        return nil, "bad json: " .. tostring(resp)
+    end
+    return data
+end
+
+local function requestUnmatch()
+    local url = SERVER_URL
+        .. "/unmatch?nickname=" .. HttpService:UrlEncode(player.Name)
+    pcall(function() return game:HttpGet(url) end)
+end
+
+-- ============================================================
+-- FRUIT HELPERS
+-- ============================================================
 local function hasFruitTool()
     local char = player.Character
     local backpack = player:FindFirstChild("Backpack")
@@ -33,7 +461,47 @@ local function waitFruitTool()
     return nil
 end
 
--- Один вызов ClaimQuest
+local function eatFruitDrop()
+    local char = player.Character
+    if not char then return false, "нет Character" end
+    local hum = char:FindFirstChild("Humanoid")
+    if not hum then return false, "нет Humanoid" end
+
+    local tool = hasFruitTool()
+    if not tool then return false, "fruit-tool не найден" end
+
+    if tool.Parent ~= char then
+        hum:EquipTool(tool)
+    end
+
+    if tool.Parent ~= char then
+        local t0 = tick()
+        while tool.Parent ~= char and tick() - t0 < 2 do
+            task.wait()
+        end
+    end
+
+    if tool.Parent ~= char then
+        return false, "не экипировалось: " .. tool.Name
+    end
+
+    task.wait(1)
+
+    local eatRemote = tool:FindFirstChild("EatRemote")
+    if not eatRemote or not eatRemote:IsA("RemoteFunction") then
+        return false, "нет EatRemote"
+    end
+
+    local ok, result = pcall(function()
+        return eatRemote:InvokeServer("Drop")
+    end)
+    if not ok then return false, "eat error: " .. tostring(result) end
+    return true, result
+end
+
+-- ============================================================
+-- CLAIM QUEST
+-- ============================================================
 local function claimQuestOnce()
     if not RF_InteractDragonQuest then return false, "no RF" end
     local ok, resp = pcall(function()
@@ -46,7 +514,9 @@ local function claimQuestOnce()
     return true, resp
 end
 
--- --- Основная функция ---
+-- ============================================================
+-- ОСНОВНАЯ ФУНКЦИЯ
+-- ============================================================
 local function runGreenMode()
     State.mode = "green"
     LOG("Green", "=== START ===")
@@ -70,32 +540,33 @@ local function runGreenMode()
     LOG("Green", "role=" .. tostring(match.role)
         .. " partner=" .. tostring(match.partner_name))
 
-    -- 2) Guest телепортится на job_id хоста
+    -- 2) Guest телепорт
     if match.role == "guest"
        and match.job_id and match.job_id ~= ""
        and match.job_id ~= game.JobId then
-
-        LOG("Green", "guest: телепорт на " .. tostring(match.job_id))
-        pcall(function() teleportToJobId(match.job_id) end)
+        LOG("Green", "guest: нужен телепорт на " .. tostring(match.job_id))
+        WARN("Green", "авто-телепорт не реализован в этом тесте — переключись на сервер вручную")
+        -- ждём, пока пользователь сам сменит сервер
         local w = 0
-        while w < 60 and game.JobId ~= match.job_id do
+        while w < 600 and game.JobId ~= match.job_id do
             task.wait(1); w += 1
         end
         if game.JobId ~= match.job_id then
-            WARN("Green", "телепорт не удался — выход")
+            WARN("Green", "job_id так и не совпал — выход")
             requestUnmatch()
             State.mode = "none"
             return
         end
         task.wait(2)
-        requestMatch()  -- обновляем job_id на сервере
+        requestMatch()
     end
 
-    -- 3) Ждём хаб и идём на позицию
+    -- 3) Ждём хаб
     if not waitForHubReady() then
         State.mode = "none"; return
     end
 
+    -- 4) Позиция
     local myPos, myLook
     if match.role == "host" then
         myPos, myLook = GREEN_HOST_POS, GREEN_HOST_LOOK
@@ -111,7 +582,7 @@ local function runGreenMode()
     restoreCollisionsNow()
     task.wait(0.5)
 
-    -- 4) Host активирует 7,7 и ждёт фрукт
+    -- 5) Host: 7,7 ON → ждём fruit → 7,7 OFF
     if match.role == "host" then
         LOG("Green", "host: 7,7 ON")
         ensureOptionOn(TAB_FRUIT, OPT_FRUIT)
@@ -121,7 +592,7 @@ local function runGreenMode()
         ensureOptionOff(TAB_FRUIT, OPT_FRUIT)
     end
 
-    -- 5) Ping-pong цикл. Идём до ClaimQuest == true.
+    -- 6) Ping-pong
     local claimedMe = false
     local iteration = 0
 
@@ -130,7 +601,8 @@ local function runGreenMode()
 
         if match.role == "host" then
             LOG("Green", "host #" .. iteration .. ": drop")
-            eatFruitDrop()
+            local ok, err = eatFruitDrop()
+            if not ok then WARN("Green", "eat: " .. tostring(err)) end
 
             local _, resp = claimQuestOnce()
             LOG("Green", "host #" .. iteration .. ": ClaimQuest → " .. tostring(resp))
@@ -143,7 +615,8 @@ local function runGreenMode()
             waitFruitTool()
 
             LOG("Green", "guest #" .. iteration .. ": drop")
-            eatFruitDrop()
+            local ok, err = eatFruitDrop()
+            if not ok then WARN("Green", "eat: " .. tostring(err)) end
 
             local _, resp = claimQuestOnce()
             LOG("Green", "guest #" .. iteration .. ": ClaimQuest → " .. tostring(resp))
@@ -155,3 +628,10 @@ local function runGreenMode()
     requestUnmatch()
     State.mode = "none"
 end
+
+-- ============================================================
+-- ЗАПУСК
+-- ============================================================
+LOG("Main", "=== GREEN TEST START === Me: " .. player.Name)
+runGreenMode()
+LOG("Main", "=== GREEN TEST END ===")
