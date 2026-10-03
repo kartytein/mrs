@@ -1,9 +1,9 @@
 --!nocheck
 -- ============================================================
--- GREEN MODE — АВТОНОМНЫЙ ТЕСТ (v3)
--- • Noclip CFrame-lerp движение 250 studs/s
--- • Хаб: КАЖДЫЙ раз переключаем таб заново (как в boat-скрипте)
---   никаких кэшей — иначе опции читаются из старого контейнера
+-- GREEN MODE — АВТОНОМНЫЙ ТЕСТ (v4)
+-- • fireSequence ВЕРНУЛ КАК В ОРИГИНАЛЕ (с Activated) — телепорт работает
+-- • Noclip CFrame-lerp 250 studs/s
+-- • Хаб: переключение таба ПЕРЕД каждой операцией с опцией
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -85,11 +85,11 @@ local function waitForInterface()
     return getRoot() and safeFind(getRoot(), "Window", "Components", "TabsScroll")
 end
 
--- Только click-сигналы (без Activated → иначе двойной toggle)
+-- ОРИГИНАЛ (с Activated) — для табов и телепорта
 local function fireSequence(btn)
     if not btn then return end
     if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return end
-    for _, sig in ipairs({"MouseEnter", "MouseButton1Down", "MouseButton1Click", "MouseButton1Up", "MouseLeave"}) do
+    for _, sig in ipairs({"MouseEnter","MouseButton1Down","MouseButton1Click","MouseButton1Up","Activated","MouseLeave"}) do
         local event = btn[sig]
         if event then
             for _, conn in ipairs(getconnections(event) or {}) do
@@ -110,18 +110,14 @@ local function findIndicatorFrame(parent)
     end
 end
 
--- Найти N-й таб
-local function findNthTabButton(tabIndex)
-    local root = getRoot() if not root then return nil end
-    local ts = safeFind(root, "Window", "Components", "TabsScroll")
-    if not ts then return nil end
+local function findNthTabButton(ts, idx)
     local btn, cnt = nil, 0
     local function rec(p)
         if btn then return end
         for _, c in ipairs(p:GetChildren()) do
             if c:IsA("TextButton") or c:IsA("ImageButton") then
                 cnt += 1
-                if cnt == tabIndex then btn = c; return end
+                if cnt == idx then btn = c; return end
             end
             rec(c)
         end
@@ -130,64 +126,42 @@ local function findNthTabButton(tabIndex)
     return btn
 end
 
--- Найти N-ю опцию в текущем контейнере
-local function findNthOption(optIndex)
-    local root = getRoot() if not root then return nil end
-    local cont = safeFind(root, "Window", "Components", "Containers", "Container")
-    if not cont then return nil end
+local function findNthOption(cont, idx)
     local btn, cnt = nil, 0
     for _, c in ipairs(cont:GetChildren()) do
         if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
             cnt += 1
-            if cnt == optIndex then btn = c; break end
+            if cnt == idx then btn = c; break end
         end
     end
     return btn
 end
 
-local function describeOption(btn)
-    if not btn then return "nil" end
-    local tl = btn:FindFirstChildWhichIsA("TextLabel", true)
-    local txt = tl and (" text=\"" .. tl.Text .. "\"") or ""
-    return btn.Name .. txt
-end
-
--- ============================================================
--- АКТИВАЦИЯ ОПЦИИ: ВСЕГДА переключаем таб, затем читаем/кликаем опцию
--- ============================================================
--- Возвращает: (optBtn, indicator)
+-- Открыть таб и вернуть (optBtn, indicator) — ОДИН раз переключаем таб
 local function openTabAndGetOption(tabIndex, optIndex)
-    local tabBtn = findNthTabButton(tabIndex)
+    local root = getRoot() if not root then return nil, nil end
+    local ts = safeFind(root, "Window", "Components", "TabsScroll")
+    if not ts then return nil, nil end
+    local tabBtn = findNthTabButton(ts, tabIndex)
     if not tabBtn then
         WARN("Hub", "таб " .. tabIndex .. " не найден")
         return nil, nil
     end
     fireSequence(tabBtn)
-    task.wait(0.45)   -- даём хабу отрисовать контейнер
+    task.wait(0.5)
 
-    local optBtn = findNthOption(optIndex)
+    local cont = safeFind(root, "Window", "Components", "Containers", "Container")
+    if not cont then return nil, nil end
+
+    local optBtn = findNthOption(cont, optIndex)
     if not optBtn then
         WARN("Hub", "опция " .. optIndex .. " не найдена в табе " .. tabIndex)
         return nil, nil
     end
-
-    local ind = findIndicatorFrame(optBtn)
-    if not ind then
-        WARN("Hub", "индикатор не найден у " .. describeOption(optBtn))
-        return optBtn, nil
-    end
-    return optBtn, ind
+    return optBtn, findIndicatorFrame(optBtn)
 end
 
-local function readOption(tabIndex, optIndex)
-    local _, ind = openTabAndGetOption(tabIndex, optIndex)
-    if not ind then return nil end
-    local col = tostring(ind.BackgroundColor3)
-    if col == COLOR_ON  then return "on"  end
-    if col == COLOR_OFF then return "off" end
-    return nil
-end
-
+-- Гарантирует состояние "on"/"off" — на каждой итерации ЗАНОВО открывает таб
 local function ensureOptionState(tabIndex, optIndex, desiredState, tries)
     tries = tries or 8
     local wantOn = (desiredState == "on")
@@ -201,27 +175,23 @@ local function ensureOptionState(tabIndex, optIndex, desiredState, tries)
 
         local isOn = (tostring(ind.BackgroundColor3) == COLOR_ON)
         if isOn == wantOn then
-            LOG("Hub", string.format("%d,%d = %s (try %d, %s)",
-                tabIndex, optIndex, string.upper(desiredState), i, describeOption(optBtn)))
+            LOG("Hub", string.format("%d,%d = %s (try %d)",
+                tabIndex, optIndex, string.upper(desiredState), i))
             return true
         end
 
-        LOG("Hub", string.format("%d,%d state=%s %s → клик %s (try %d)",
-            tabIndex, optIndex,
-            isOn and "ON" or "OFF",
-            describeOption(optBtn),
+        LOG("Hub", string.format("%d,%d state=%s → клик %s (try %d)",
+            tabIndex, optIndex, isOn and "ON" or "OFF",
             string.upper(desiredState), i))
 
         fireSequence(optBtn)
         task.wait(0.5)
-
-        -- перечитать индикатор в контейнере этой же вкладки
-        -- (openTabAndGetOption заново вызовется на след. итерации)
     end
 
-    local final = readOption(tabIndex, optIndex)
-    WARN("Hub", string.format("%d,%d FAILED final=%s", tabIndex, optIndex, tostring(final)))
-    return final == desiredState
+    local _, indFinal = openTabAndGetOption(tabIndex, optIndex)
+    local col = indFinal and tostring(indFinal.BackgroundColor3) or "nil"
+    WARN("Hub", string.format("%d,%d FAILED final=%s", tabIndex, optIndex, col))
+    return false
 end
 
 local function ensureOptionOn(tabIndex, optIndex, tries)
@@ -243,21 +213,19 @@ local function waitForHubReady()
 end
 
 -- ============================================================
--- ТЕЛЕПОРТ (кнопки хаба)
+-- ТЕЛЕПОРТ — КАК В ОРИГИНАЛЕ (НЕ ТРОГАЛ)
 -- ============================================================
 local function teleportToJobId(jobId)
     local root = getRoot() if not root then return false end
     local ts = safeFind(root, "Window","Components","TabsScroll")
     if not ts then return false end
-    local tb = findNthTabButton(TELEPORT_TAB)
+    local tb = findNthTabButton(ts, TELEPORT_TAB)
     if not tb then return false end
     fireSequence(tb); task.wait(0.5)
-
     local cont = safeFind(root, "Window","Components","Containers","Container")
     if not cont then return false end
-    local optText = findNthOption(TELEPORT_OPT_TEXT)
+    local optText = findNthOption(cont, TELEPORT_OPT_TEXT)
     if not optText then return false end
-
     local function findTB(p)
         for _, c in ipairs(p:GetChildren()) do
             if c:IsA("TextBox") then return c end
@@ -270,8 +238,7 @@ local function teleportToJobId(jobId)
     tx:CaptureFocus(); task.wait(0.2)
     tx.Text = jobId; task.wait(0.2)
     tx:ReleaseFocus(true); task.wait(0.3)
-
-    local optAct = findNthOption(TELEPORT_OPT_ACTIVATE)
+    local optAct = findNthOption(cont, TELEPORT_OPT_ACTIVATE)
     if not optAct then return false end
     fireSequence(optAct)
     return true
@@ -471,7 +438,6 @@ local function runGreenMode()
     State.mode = "green"
     LOG("Green", "=== START ===")
 
-    -- 1) Матч
     local match = nil
     while State.running and not match do
         local data, err = requestMatch()
@@ -490,12 +456,11 @@ local function runGreenMode()
     LOG("Green", "role=" .. tostring(match.role)
         .. " partner=" .. tostring(match.partner_name))
 
-    -- 2) Хаб
     if not waitForHubReady() then
         State.mode = "none"; return
     end
 
-    -- 3) Guest телепорт
+    -- Guest телепорт
     if match.role == "guest"
        and match.job_id and match.job_id ~= ""
        and match.job_id ~= game.JobId then
@@ -528,11 +493,10 @@ local function runGreenMode()
         LOG("Green", "guest: перелетели, ждём загрузку")
         task.wait(8)
         requestMatch()
-        -- после телепорта интерфейс мог перезагрузиться
         waitForHubReady()
     end
 
-    -- 4) Позиция + разворот
+    -- Позиция + разворот
     local myPos, partnerPos
     if match.role == "host" then
         myPos, partnerPos = GREEN_HOST_POS, GREEN_GUEST_POS
@@ -546,7 +510,7 @@ local function runGreenMode()
     goToAndFace(myPos, partnerPos, MOVE_SPEED)
     task.wait(0.3)
 
-    -- 5) Host: 7,7 ON → ждём fruit → 7,7 OFF
+    -- Host: 7,7 ON → fruit → 7,7 OFF
     if match.role == "host" then
         LOG("Green", "host: 7,7 ON")
         local ok77 = ensureOptionOn(TAB_FRUIT, OPT_FRUIT)
@@ -563,7 +527,7 @@ local function runGreenMode()
         LOG("Green", "guest: 7,7 не трогаю (активирует host)")
     end
 
-    -- 6) Ping-pong
+    -- Ping-pong
     local claimedMe = false
     local iteration = 0
 
