@@ -1,9 +1,9 @@
 --!nocheck
 -- ============================================================
--- GREEN MODE — АВТОНОМНЫЙ ТЕСТ (v4)
--- • fireSequence ВЕРНУЛ КАК В ОРИГИНАЛЕ (с Activated) — телепорт работает
+-- GREEN MODE — АВТОНОМНЫЙ ТЕСТ (v5)
+-- • Хаб: код ОДИН-В-ОДИН как в рабочем boat-скрипте
+--   (fireSequence с Activated + waitForOptions + setOption с 5 ретраями)
 -- • Noclip CFrame-lerp 250 studs/s
--- • Хаб: переключение таба ПЕРЕД каждой операцией с опцией
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -64,13 +64,14 @@ do
 end
 
 -- ============================================================
--- ХАБ
+-- ХАБ — 1:1 с boat-скрипта
 -- ============================================================
 local function getRoot()
-    for _, child in ipairs(CoreGui:GetChildren()) do
-        local obj = child:FindFirstChild("redz-library-v5")
+    for _, c in ipairs(CoreGui:GetChildren()) do
+        local obj = c:FindFirstChild("redz-library-v5")
         if obj then return obj end
     end
+    return nil
 end
 
 local function safeFind(obj, ...)
@@ -81,35 +82,195 @@ local function safeFind(obj, ...)
     return obj
 end
 
-local function waitForInterface()
-    return getRoot() and safeFind(getRoot(), "Window", "Components", "TabsScroll")
-end
-
--- ОРИГИНАЛ (с Activated) — для табов и телепорта
-local function fireSequence(btn)
-    if not btn then return end
-    if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return end
-    for _, sig in ipairs({"MouseEnter","MouseButton1Down","MouseButton1Click","MouseButton1Up","Activated","MouseLeave"}) do
-        local event = btn[sig]
-        if event then
-            for _, conn in ipairs(getconnections(event) or {}) do
-                if conn.Enabled then pcall(conn.Function) end
-            end
-        end
-    end
-end
-
 local function findIndicatorFrame(parent)
     for _, child in ipairs(parent:GetChildren()) do
         if child:IsA("Frame") then
-            local c = tostring(child.BackgroundColor3)
-            if c == COLOR_ON or c == COLOR_OFF then return child end
+            local col = tostring(child.BackgroundColor3)
+            if col == COLOR_ON or col == COLOR_OFF then return child end
         end
         local found = findIndicatorFrame(child)
         if found then return found end
     end
+    return nil
 end
 
+local function fireSequence(btn)
+    if not btn then return false end
+    if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return false end
+    local fired = false
+    for _, sigName in ipairs({"MouseEnter","MouseButton1Down","MouseButton1Click","MouseButton1Up","Activated","MouseLeave"}) do
+        local sig = btn[sigName]
+        if sig then
+            local ok, conns = pcall(function() return getconnections(sig) end)
+            if ok and conns then
+                for _, conn in ipairs(conns) do
+                    if conn.Enabled and type(conn.Function) == "function" then
+                        pcall(conn.Function); fired = true
+                    end
+                end
+            end
+        end
+    end
+    return fired
+end
+
+local function findTab(root, tabIndex)
+    local ts = safeFind(root, "Window","Components","TabsScroll")
+    if not ts then return nil end
+    local btn, count = nil, 0
+    local function scan(p)
+        if btn then return end
+        for _, c in ipairs(p:GetChildren()) do
+            if c:IsA("TextButton") or c:IsA("ImageButton") then
+                count += 1
+                if count == tabIndex then btn = c; return end
+            end
+            scan(c)
+        end
+    end
+    scan(ts)
+    return btn
+end
+
+local function findOption(root, optIndex)
+    local cont = safeFind(root, "Window","Components","Containers","Container")
+    if not cont then return nil end
+    local btn, count = nil, 0
+    for _, c in ipairs(cont:GetChildren()) do
+        if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
+            count += 1
+            if count == optIndex then btn = c; break end
+        end
+    end
+    return btn
+end
+
+local function countOptions(root)
+    local cont = root and safeFind(root, "Window","Components","Containers","Container")
+    if not cont then return 0 end
+    local n = 0
+    for _, c in ipairs(cont:GetChildren()) do
+        if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
+            n += 1
+        end
+    end
+    return n
+end
+
+-- Ждём пока опции прогрузятся и "устоятся"
+local function waitForOptions(expectedMin, timeout)
+    timeout = timeout or 8
+    expectedMin = expectedMin or 1
+    local t0 = tick()
+    local last, stable = -1, 0
+    while tick() - t0 < timeout do
+        local root = getRoot()
+        local count = countOptions(root)
+        if count >= expectedMin then
+            if count == last then
+                stable += 1
+                if stable >= 2 then return true end
+            else
+                stable, last = 0, count
+            end
+        else
+            last, stable = -1, 0
+        end
+        task.wait(0.15)
+    end
+    return false
+end
+
+-- Читаем состояние опции (как в boat)
+local function getOptionState(tabIndex, optIndex)
+    local root = getRoot()
+    if not root then return nil end
+    local tb = findTab(root, tabIndex)
+    if not tb then return nil end
+    fireSequence(tb)
+    if not waitForOptions(optIndex, 8) then return nil end
+    local opt = findOption(root, optIndex)
+    if not opt then return nil end
+    local ind = findIndicatorFrame(opt)
+    if not ind then return nil end
+    local col = tostring(ind.BackgroundColor3)
+    if col == COLOR_ON  then return true  end
+    if col == COLOR_OFF then return false end
+    return nil
+end
+
+-- Устанавливаем состояние опции (как в boat, с 5 ретраями)
+local function setOption(tabIndex, optIndex, wantOn)
+    local root = getRoot()
+    if not root then return false end
+    local tb = findTab(root, tabIndex)
+    if not tb then return false end
+    fireSequence(tb)
+    if not waitForOptions(optIndex, 8) then return false end
+
+    local opt = findOption(root, optIndex)
+    if not opt then return false end
+    local ind = findIndicatorFrame(opt)
+    if not ind then return false end
+    local isOn = (tostring(ind.BackgroundColor3) == COLOR_ON)
+    if isOn == wantOn then return true end
+
+    fireSequence(opt); task.wait(0.2)
+    for _ = 1, 5 do
+        local i2 = findIndicatorFrame(opt)
+        if i2 and ((tostring(i2.BackgroundColor3) == COLOR_ON) == wantOn) then
+            return true
+        end
+        fireSequence(opt); task.wait(0.25)
+    end
+    return false
+end
+
+local function ensureOptionState(tabIndex, optIndex, wantOn, maxTries)
+    maxTries = maxTries or 6
+    for i = 1, maxTries do
+        local st = getOptionState(tabIndex, optIndex)
+        if st == wantOn then return true end
+        setOption(tabIndex, optIndex, wantOn)
+        task.wait(0.4)
+    end
+    return getOptionState(tabIndex, optIndex) == wantOn
+end
+
+local function ensureOptionOn(tabIndex, optIndex, tries)
+    return ensureOptionState(tabIndex, optIndex, true, tries)
+end
+
+local function ensureOptionOff(tabIndex, optIndex, tries)
+    return ensureOptionState(tabIndex, optIndex, false, tries)
+end
+
+local function waitForHubReady(timeout)
+    local t0 = tick()
+    local firstSeen = false
+    while State.running do
+        if getRoot() then
+            if not firstSeen then
+                firstSeen = true
+                LOG("Hub", "root появился, жду опции...")
+            end
+            if waitForOptions(1, 2) then
+                LOG("Hub", "готов (t=" .. string.format("%.1f", tick() - t0) .. "s)")
+                return true
+            end
+        end
+        if timeout and (tick() - t0) >= timeout then
+            WARN("Hub", "не готов за " .. timeout .. "с")
+            return false
+        end
+        task.wait(0.5)
+    end
+    return false
+end
+
+-- ============================================================
+-- ТЕЛЕПОРТ (как в boat)
+-- ============================================================
 local function findNthTabButton(ts, idx)
     local btn, cnt = nil, 0
     local function rec(p)
@@ -137,84 +298,6 @@ local function findNthOption(cont, idx)
     return btn
 end
 
--- Открыть таб и вернуть (optBtn, indicator) — ОДИН раз переключаем таб
-local function openTabAndGetOption(tabIndex, optIndex)
-    local root = getRoot() if not root then return nil, nil end
-    local ts = safeFind(root, "Window", "Components", "TabsScroll")
-    if not ts then return nil, nil end
-    local tabBtn = findNthTabButton(ts, tabIndex)
-    if not tabBtn then
-        WARN("Hub", "таб " .. tabIndex .. " не найден")
-        return nil, nil
-    end
-    fireSequence(tabBtn)
-    task.wait(0.5)
-
-    local cont = safeFind(root, "Window", "Components", "Containers", "Container")
-    if not cont then return nil, nil end
-
-    local optBtn = findNthOption(cont, optIndex)
-    if not optBtn then
-        WARN("Hub", "опция " .. optIndex .. " не найдена в табе " .. tabIndex)
-        return nil, nil
-    end
-    return optBtn, findIndicatorFrame(optBtn)
-end
-
--- Гарантирует состояние "on"/"off" — на каждой итерации ЗАНОВО открывает таб
-local function ensureOptionState(tabIndex, optIndex, desiredState, tries)
-    tries = tries or 8
-    local wantOn = (desiredState == "on")
-
-    for i = 1, tries do
-        local optBtn, ind = openTabAndGetOption(tabIndex, optIndex)
-        if not optBtn or not ind then
-            task.wait(0.4)
-            continue
-        end
-
-        local isOn = (tostring(ind.BackgroundColor3) == COLOR_ON)
-        if isOn == wantOn then
-            LOG("Hub", string.format("%d,%d = %s (try %d)",
-                tabIndex, optIndex, string.upper(desiredState), i))
-            return true
-        end
-
-        LOG("Hub", string.format("%d,%d state=%s → клик %s (try %d)",
-            tabIndex, optIndex, isOn and "ON" or "OFF",
-            string.upper(desiredState), i))
-
-        fireSequence(optBtn)
-        task.wait(0.5)
-    end
-
-    local _, indFinal = openTabAndGetOption(tabIndex, optIndex)
-    local col = indFinal and tostring(indFinal.BackgroundColor3) or "nil"
-    WARN("Hub", string.format("%d,%d FAILED final=%s", tabIndex, optIndex, col))
-    return false
-end
-
-local function ensureOptionOn(tabIndex, optIndex, tries)
-    return ensureOptionState(tabIndex, optIndex, "on", tries)
-end
-
-local function ensureOptionOff(tabIndex, optIndex, tries)
-    return ensureOptionState(tabIndex, optIndex, "off", tries)
-end
-
-local function waitForHubReady()
-    local t0 = tick()
-    while State.running and not waitForInterface() do
-        task.wait(0.5)
-        if tick() - t0 > 300 then return false end
-    end
-    LOG("Hub", "готов")
-    return true
-end
-
--- ============================================================
--- ТЕЛЕПОРТ — КАК В ОРИГИНАЛЕ (НЕ ТРОГАЛ)
--- ============================================================
 local function teleportToJobId(jobId)
     local root = getRoot() if not root then return false end
     local ts = safeFind(root, "Window","Components","TabsScroll")
@@ -277,7 +360,7 @@ player.CharacterAdded:Connect(function(char)
 end)
 
 -- ============================================================
--- ПОСТАНОВКА НА ТОЧКУ + РАЗВОРОТ (noclip CFrame-lerp)
+-- ДВИЖЕНИЕ (noclip CFrame-lerp)
 -- ============================================================
 local function goToAndFace(targetPos, lookAtPoint, speed)
     speed = speed or MOVE_SPEED
@@ -298,9 +381,7 @@ local function goToAndFace(targetPos, lookAtPoint, speed)
     if lookDir.Magnitude < 1e-4 then
         lookDir = Vector3.new(delta.X, 0, delta.Z)
     end
-    if lookDir.Magnitude < 1e-4 then
-        lookDir = Vector3.new(0, 0, 1)
-    end
+    if lookDir.Magnitude < 1e-4 then lookDir = Vector3.new(0, 0, 1) end
     lookDir = lookDir.Unit
 
     if dist < 0.1 then
@@ -387,17 +468,11 @@ local function eatFruitDrop()
     local tool = hasFruitTool()
     if not tool then return false, "fruit-tool не найден" end
 
-    if tool.Parent ~= char then
-        hum:EquipTool(tool)
-    end
-
+    if tool.Parent ~= char then hum:EquipTool(tool) end
     if tool.Parent ~= char then
         local t0 = tick()
-        while tool.Parent ~= char and tick() - t0 < 2 do
-            task.wait()
-        end
+        while tool.Parent ~= char and tick() - t0 < 2 do task.wait() end
     end
-
     if tool.Parent ~= char then
         return false, "не экипировалось: " .. tool.Name
     end
@@ -409,9 +484,7 @@ local function eatFruitDrop()
         return false, "нет EatRemote"
     end
 
-    local ok, result = pcall(function()
-        return eatRemote:InvokeServer("Drop")
-    end)
+    local ok, result = pcall(function() return eatRemote:InvokeServer("Drop") end)
     if not ok then return false, "eat error: " .. tostring(result) end
     return true, result
 end
@@ -432,7 +505,7 @@ local function claimQuestOnce()
 end
 
 -- ============================================================
--- ОСНОВНАЯ ФУНКЦИЯ
+-- ОСНОВНОЙ РЕЖИМ
 -- ============================================================
 local function runGreenMode()
     State.mode = "green"
@@ -456,7 +529,7 @@ local function runGreenMode()
     LOG("Green", "role=" .. tostring(match.role)
         .. " partner=" .. tostring(match.partner_name))
 
-    if not waitForHubReady() then
+    if not waitForHubReady(300) then
         State.mode = "none"; return
     end
 
@@ -479,7 +552,7 @@ local function runGreenMode()
                     break
                 end
             end
-            LOG("Green", "guest: телепорт попытка #" .. attempt .. " не удалась, повтор")
+            LOG("Green", "guest: телепорт попытка #" .. attempt .. " не удалась")
             task.wait(2)
         end
 
@@ -493,7 +566,7 @@ local function runGreenMode()
         LOG("Green", "guest: перелетели, ждём загрузку")
         task.wait(8)
         requestMatch()
-        waitForHubReady()
+        waitForHubReady(300)
     end
 
     -- Позиция + разворот
@@ -508,7 +581,7 @@ local function runGreenMode()
         myPos.X, myPos.Y, myPos.Z))
 
     goToAndFace(myPos, partnerPos, MOVE_SPEED)
-    task.wait(0.3)
+    task.wait(0.5)
 
     -- Host: 7,7 ON → fruit → 7,7 OFF
     if match.role == "host" then
@@ -524,7 +597,7 @@ local function runGreenMode()
         local off77 = ensureOptionOff(TAB_FRUIT, OPT_FRUIT)
         LOG("Green", "host: 7,7 OFF result = " .. tostring(off77))
     else
-        LOG("Green", "guest: 7,7 не трогаю (активирует host)")
+        LOG("Green", "guest: 7,7 не трогаю")
     end
 
     -- Ping-pong
