@@ -1,8 +1,8 @@
 --!nocheck
 -- ============================================================
--- GREEN MODE — АВТОНОМНЫЙ ТЕСТ
--- Система кнопок хаба — как в boat-скрипте (без waitForOptions)
--- Noclip-движение на CFrame-lerp со скоростью 250 studs/s
+-- GREEN MODE — АВТОНОМНЫЙ ТЕСТ (v2)
+-- • Noclip CFrame-lerp движение 250 studs/s
+-- • Фикс хаба: кэш таба, fireClick без Activated, логирование
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -24,7 +24,7 @@ local POST_TRADE_NPC_NAME = "Dojo Trainer"
 local GREEN_HOST_POS   = Vector3.new(5841.1, 1208.6, 887.2)
 local GREEN_GUEST_POS  = Vector3.new(5848.3, 1208.6, 881.5)
 
-local MOVE_SPEED = 250   -- studs/sec (как SPEED_X в boat-скрипте)
+local MOVE_SPEED = 250   -- studs/sec
 
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
@@ -66,7 +66,7 @@ do
 end
 
 -- ============================================================
--- ХАБ (как в boat-скрипте)
+-- ХАБ
 -- ============================================================
 local function getRoot()
     for _, child in ipairs(CoreGui:GetChildren()) do
@@ -87,10 +87,11 @@ local function waitForInterface()
     return getRoot() and safeFind(getRoot(), "Window", "Components", "TabsScroll")
 end
 
-local function fireSequence(btn)
+-- fireClick: только click-сигналы, БЕЗ Activated (иначе двойной toggle)
+local function fireClick(btn)
     if not btn then return end
     if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return end
-    for _, sig in ipairs({"MouseEnter","MouseButton1Down","MouseButton1Click","MouseButton1Up","Activated","MouseLeave"}) do
+    for _, sig in ipairs({"MouseEnter", "MouseButton1Down", "MouseButton1Click", "MouseButton1Up", "MouseLeave"}) do
         local event = btn[sig]
         if event then
             for _, conn in ipairs(getconnections(event) or {}) do
@@ -111,109 +112,146 @@ local function findIndicatorFrame(parent)
     end
 end
 
-local function getOptionState(tabIndex, optIndex)
-    local root = getRoot() if not root then return nil end
-    local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll")
-    if not tabsScroll then return nil end
+-- ── Кэш текущего таба ────────────────────────────────────────
+local currentTab = nil
 
-    local tabButton, tabCount = nil, 0
-    local function findTab(p)
-        if tabButton then return end
+local function findTabButton(tabIndex)
+    local root = getRoot() if not root then return nil end
+    local ts = safeFind(root, "Window", "Components", "TabsScroll")
+    if not ts then return nil end
+    local btn, cnt = nil, 0
+    local function rec(p)
+        if btn then return end
         for _, c in ipairs(p:GetChildren()) do
             if c:IsA("TextButton") or c:IsA("ImageButton") then
-                tabCount += 1
-                if tabCount == tabIndex then tabButton = c; return end
+                cnt += 1
+                if cnt == tabIndex then btn = c; return end
             end
-            findTab(c)
+            rec(c)
         end
     end
-    findTab(tabsScroll)
-    if not tabButton then return nil end
-    fireSequence(tabButton) task.wait(0.3)
+    rec(ts)
+    return btn
+end
 
-    local container = safeFind(root, "Window", "Components", "Containers", "Container")
-    if not container then return nil end
+local function switchToTab(tabIndex)
+    if currentTab == tabIndex then return true end
+    local tb = findTabButton(tabIndex)
+    if not tb then
+        WARN("Hub", "таб " .. tostring(tabIndex) .. " не найден")
+        return false
+    end
+    fireClick(tb)
+    task.wait(0.5)
+    currentTab = tabIndex
+    return true
+end
 
-    local optionBtn, optCount = nil, 0
-    for _, c in ipairs(container:GetChildren()) do
+local function findOptionButton(optIndex)
+    local root = getRoot() if not root then return nil end
+    local cont = safeFind(root, "Window", "Components", "Containers", "Container")
+    if not cont then return nil end
+    local btn, cnt = nil, 0
+    for _, c in ipairs(cont:GetChildren()) do
         if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
-            optCount += 1
-            if optCount == optIndex then optionBtn = c; break end
+            cnt += 1
+            if cnt == optIndex then btn = c; break end
         end
     end
-    if not optionBtn then return nil end
+    return btn
+end
 
-    local ind = findIndicatorFrame(optionBtn)
-    if not ind then return nil end
+local function describeOption(btn)
+    if not btn then return "nil" end
+    local label = ""
+    local tl = btn:FindFirstChildWhichIsA("TextLabel", true)
+    if tl then label = " text=\"" .. tl.Text .. "\"" end
+    return btn.Name .. label
+end
+
+local function getOptionState(tabIndex, optIndex)
+    if not switchToTab(tabIndex) then return nil end
+    local btn = findOptionButton(optIndex)
+    if not btn then
+        WARN("Hub", string.format("%d,%d: опция не найдена", tabIndex, optIndex))
+        return nil
+    end
+    local ind = findIndicatorFrame(btn)
+    if not ind then
+        WARN("Hub", string.format("%d,%d: индикатор не найден у %s",
+            tabIndex, optIndex, describeOption(btn)))
+        return nil
+    end
     local col = tostring(ind.BackgroundColor3)
-    if col == COLOR_ON then return "on" end
+    if col == COLOR_ON  then return "on"  end
     if col == COLOR_OFF then return "off" end
+    WARN("Hub", string.format("%d,%d: неизвестный цвет %s", tabIndex, optIndex, col))
     return nil
 end
 
 local function setOptionState(tabIndex, optIndex, desiredState)
     if desiredState ~= "on" and desiredState ~= "off" then return false end
-    local root = getRoot() if not root then return false end
+    if not switchToTab(tabIndex) then return false end
 
-    local tabsScroll = safeFind(root, "Window", "Components", "TabsScroll")
-    if not tabsScroll then return false end
+    local btn = findOptionButton(optIndex)
+    if not btn then return false end
 
-    local tabButton, tabCount = nil, 0
-    local function findTab(p)
-        if tabButton then return end
-        for _, c in ipairs(p:GetChildren()) do
-            if c:IsA("TextButton") or c:IsA("ImageButton") then
-                tabCount += 1
-                if tabCount == tabIndex then tabButton = c; return end
-            end
-            findTab(c)
-        end
-    end
-    findTab(tabsScroll)
-    if not tabButton then return false end
-    fireSequence(tabButton) task.wait(0.3)
+    local ind = findIndicatorFrame(btn)
+    if not ind then return false end
 
-    local container = safeFind(root, "Window", "Components", "Containers", "Container")
-    if not container then return false end
-
-    local optionBtn, optCount = nil, 0
-    for _, c in ipairs(container:GetChildren()) do
-        if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
-            optCount += 1
-            if optCount == optIndex then optionBtn = c; break end
-        end
-    end
-    if not optionBtn then return false end
-
-    local indicator = findIndicatorFrame(optionBtn)
-    if not indicator then return false end
-
-    local isOn = (tostring(indicator.BackgroundColor3) == COLOR_ON)
+    local isOn   = (tostring(ind.BackgroundColor3) == COLOR_ON)
     local wantOn = (desiredState == "on")
     if isOn == wantOn then return true end
 
-    fireSequence(optionBtn) task.wait(0.1)
+    fireClick(btn)
+    task.wait(0.35)
+
+    local ind2 = findIndicatorFrame(btn)
+    local nowOn = ind2 and (tostring(ind2.BackgroundColor3) == COLOR_ON)
+    if nowOn == wantOn then return true end
+
+    task.wait(0.2)
+    fireClick(btn)
+    task.wait(0.35)
     return true
 end
 
 local function ensureOptionOn(tabIndex, optIndex, tries)
     tries = tries or 8
-    for _ = 1, tries do
-        if getOptionState(tabIndex, optIndex) == "on" then return true end
+    for i = 1, tries do
+        local st = getOptionState(tabIndex, optIndex)
+        if st == "on" then
+            LOG("Hub", string.format("%d,%d = ON (try %d)", tabIndex, optIndex, i))
+            return true
+        end
+        local btn = findOptionButton(optIndex)
+        LOG("Hub", string.format("%d,%d state=%s opt=%s → кликаю ON",
+            tabIndex, optIndex, tostring(st), describeOption(btn)))
         setOptionState(tabIndex, optIndex, "on")
-        task.wait(0.4)
+        task.wait(0.5)
     end
-    return getOptionState(tabIndex, optIndex) == "on"
+    local final = getOptionState(tabIndex, optIndex)
+    WARN("Hub", string.format("%d,%d FAILED final=%s", tabIndex, optIndex, tostring(final)))
+    return final == "on"
 end
 
 local function ensureOptionOff(tabIndex, optIndex, tries)
     tries = tries or 8
-    for _ = 1, tries do
-        if getOptionState(tabIndex, optIndex) == "off" then return true end
+    for i = 1, tries do
+        local st = getOptionState(tabIndex, optIndex)
+        if st == "off" then
+            LOG("Hub", string.format("%d,%d = OFF (try %d)", tabIndex, optIndex, i))
+            return true
+        end
+        local btn = findOptionButton(optIndex)
+        LOG("Hub", string.format("%d,%d state=%s opt=%s → кликаю OFF",
+            tabIndex, optIndex, tostring(st), describeOption(btn)))
         setOptionState(tabIndex, optIndex, "off")
-        task.wait(0.4)
+        task.wait(0.5)
     end
-    return getOptionState(tabIndex, optIndex) == "off"
+    local final = getOptionState(tabIndex, optIndex)
+    WARN("Hub", string.format("%d,%d FAILED final=%s", tabIndex, optIndex, tostring(final)))
+    return final == "off"
 end
 
 local function waitForHubReady()
@@ -257,12 +295,14 @@ local function findNthOption(cont, idx)
 end
 
 local function teleportToJobId(jobId)
+    currentTab = nil  -- сбрасываем кэш таба перед телепортом
     local root = getRoot() if not root then return false end
     local ts = safeFind(root, "Window","Components","TabsScroll")
     if not ts then return false end
     local tb = findNthTabButton(ts, TELEPORT_TAB)
     if not tb then return false end
-    fireSequence(tb); task.wait(0.5)
+    fireClick(tb); task.wait(0.5)
+    currentTab = TELEPORT_TAB
     local cont = safeFind(root, "Window","Components","Containers","Container")
     if not cont then return false end
     local optText = findNthOption(cont, TELEPORT_OPT_TEXT)
@@ -281,7 +321,7 @@ local function teleportToJobId(jobId)
     tx:ReleaseFocus(true); task.wait(0.3)
     local optAct = findNthOption(cont, TELEPORT_OPT_ACTIVATE)
     if not optAct then return false end
-    fireSequence(optAct)
+    fireClick(optAct)
     return true
 end
 
@@ -291,9 +331,7 @@ end
 local function enableNoclip(char)
     if not char then return end
     for _, p in ipairs(char:GetDescendants()) do
-        if p:IsA("BasePart") then
-            p.CanCollide = false
-        end
+        if p:IsA("BasePart") then p.CanCollide = false end
     end
     char.DescendantAdded:Connect(function(d)
         if d:IsA("BasePart") then d.CanCollide = false end
@@ -314,7 +352,6 @@ local function enableNoclip(char)
     end
 end
 
--- Респавн — noclip заново
 player.CharacterAdded:Connect(function(char)
     task.wait(0.3)
     enableNoclip(char)
@@ -557,6 +594,7 @@ local function runGreenMode()
 
     -- 5) Host: 7,7 ON → ждём fruit → 7,7 OFF
     if match.role == "host" then
+        currentTab = nil  -- сброс кэша после возможного телепорта
         LOG("Green", "host: 7,7 ON")
         local ok77 = ensureOptionOn(TAB_FRUIT, OPT_FRUIT)
         LOG("Green", "host: 7,7 ON result = " .. tostring(ok77))
@@ -565,6 +603,7 @@ local function runGreenMode()
         local tool = waitFruitTool()
         LOG("Green", "host: fruit появился = " .. tostring(tool and tool.Name))
 
+        currentTab = nil  -- гарантия что не скипнем таб
         LOG("Green", "host: 7,7 OFF")
         local off77 = ensureOptionOff(TAB_FRUIT, OPT_FRUIT)
         LOG("Green", "host: 7,7 OFF result = " .. tostring(off77))
