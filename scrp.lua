@@ -13,6 +13,9 @@ local STUCK_MOVE_THRESHOLD  = 5
 local SERVER_URL            = "http://192.168.31.179:8000"
 local BELT_ORDER            = {"White","Yellow","Orange","Green","Blue","Purple","Red","Black"}
 
+-- Имя целевого пояса, о получении которого уведомляем сервер
+local ORANGE_BELT_NAME = "Orange"
+
 local SCROLL_STEP_PIXELS  = 10
 local SCROLL_WAIT_TIME    = 0.15
 local SCROLL_INITIAL_WAIT = 1.0
@@ -20,14 +23,8 @@ local SCROLL_FINAL_WAIT   = 1.0
 
 local FIXED_POS          = Vector3.new(9825.3, -1962.3, 9822.5)
 local TRADE_WAYPOINT     = Vector3.new(-12549.7, 337.5, -7501.1)
-local POST_TRADE_WAYPOINT = Vector3.new(5866.9, 1208.6, 872.0)
+local POST_TRADE_WAYPOINT = Vector3.new(5866.9, 1258.6, 872.0)
 local POST_TRADE_NPC_NAME = "Dojo Trainer"
-
-local POST_POS_TOL_XZ = 25
-local POST_POS_TOL_Y  = 60
-
-local RE_TRADE_MAX_ATTEMPTS = 15
-local TRADE_PHASE_TIMEOUT   = 240
 
 -- ============================================================
 -- ЛОГГЕР
@@ -91,10 +88,11 @@ local State = {
     nobeltDone      = false,
     tradeDone       = false,
     inTrade         = false,
+    orangeNotified  = false,  -- флаг: уведомили ли сервер о первом Orange
 }
 
 -- ============================================================
--- КОЛЛИЗИИ (оптимизировано)
+-- КОЛЛИЗИИ
 -- ============================================================
 local collisionsDisabledGlobal = false
 local savedCollisionsGlobal = {}
@@ -106,7 +104,7 @@ local function disableCollisionsNow()
         for _, obj in ipairs(Workspace:GetDescendants()) do
             if obj:IsA("BasePart") then
                 if myChar and obj:IsDescendantOf(myChar) then
-                    -- не трогаем части персонажа
+                    -- skip
                 else
                     if obj.CanCollide then
                         saved[obj] = true
@@ -364,17 +362,6 @@ local function goToPosition(targetPos)
     return true
 end
 
-local function isNearPosition(targetPos, tolXZ, tolY)
-    tolXZ = tolXZ or 25
-    tolY  = tolY  or 60
-    local c = player.Character
-    local hrp = c and c:FindFirstChild("HumanoidRootPart")
-    if not hrp then return false end
-    local d = hrp.Position - targetPos
-    local dxz = math.sqrt(d.X * d.X + d.Z * d.Z)
-    return dxz <= tolXZ and math.abs(d.Y) <= tolY
-end
-
 -- ============================================================
 -- ЗАГРУЗКА ХАБА
 -- ============================================================
@@ -386,7 +373,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- СКАНЕР ПОЯСА ЧЕРЕЗ ACCESSORIES (ItemId + GC cache)
+-- СКАНЕР ПОЯСА
 -- ============================================================
 local ItemId = nil
 do
@@ -761,6 +748,61 @@ local function ensureOptionOn(tabIndex, optIndex, maxTries)
 end
 
 -- ============================================================
+-- ОЖИДАНИЕ ГОТОВНОСТИ ХАБА
+-- ============================================================
+local function waitForHubReady(timeout)
+    local t0 = tick()
+    local firstSeen = false
+    local lastLogAt = tick()
+    while State.running do
+        if getRoot() then
+            if not firstSeen then
+                firstSeen = true
+                LOG("Hub", "root появился, жду опции...")
+            end
+            if waitForOptions(1, 2) then
+                LOG("Hub", "готов (t=" .. string.format("%.1f", tick() - t0) .. "s)")
+                return true
+            end
+        end
+        if timeout and (tick() - t0) >= timeout then
+            WARN("Hub", "не готов за " .. timeout .. "с")
+            return false
+        end
+        if tick() - lastLogAt >= 30 then
+            lastLogAt = tick()
+            LOG("Hub", string.format("жду... %.0fс (root=%s)",
+                tick() - t0, tostring(getRoot() ~= nil)))
+        end
+        task.wait(0.5)
+    end
+    return false
+end
+
+-- ============================================================
+-- УВЕДОМЛЕНИЕ О ПОЛУЧЕНИИ ORANGE (для запуска ADB на сервере)
+-- ============================================================
+local function notifyOrangeAchieved()
+    if State.orangeNotified then return true end
+
+    local url = SERVER_URL
+        .. "/orange_achieved?nickname=" .. HttpService:UrlEncode(player.Name)
+        .. "&job_id=" .. HttpService:UrlEncode(game.JobId)
+
+    LOG("Orange", "→ запрос на сервер: " .. url)
+
+    local ok, resp = pcall(function() return game:HttpGet(url) end)
+    if ok then
+        LOG("Orange", "✓ ответ сервера: " .. tostring(resp))
+        State.orangeNotified = true
+        return true
+    else
+        WARN("Orange", "✗ ошибка запроса: " .. tostring(resp) .. " (повтор на следующей итерации)")
+        return false
+    end
+end
+
+-- ============================================================
 -- STUCK WATCHDOG
 -- ============================================================
 task.spawn(function()
@@ -825,29 +867,47 @@ local function getMastery()
     return tonumber(string.match(lbl.Text or "", "%d+"))
 end
 
+local function isNoBeltActive()
+    return State.currentBelt == "None" or State.currentBelt == "Unknown"
+end
+
 local function runNoBeltMode()
+    if not isNoBeltActive() then
+        LOG("NoBelt", "belt=" .. State.currentBelt .. " — не наш режим, выход")
+        return
+    end
+
     LOG("NoBelt", "=== START ===")
+
+    LOG("NoBelt", "жду готовности хаба...")
+    if not waitForHubReady() then
+        WARN("NoBelt", "выход по State.running=false")
+        return
+    end
+
+    if not isNoBeltActive() then
+        LOG("NoBelt", "belt сменился на " .. State.currentBelt .. " — выход")
+        return
+    end
 
     LOG("NoBelt", "2,4 OFF на старте")
     ensureOptionOff(TAB_FARM, OPT_FARM)
     task.wait(0.5)
 
     local guard = 0
-    while not hasDragonTalon() and State.running
-          and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
+    while not hasDragonTalon() and State.running and isNoBeltActive() do
         ensureOptionOn(TAB_MAIN, OPT_MAIN)
         task.wait(2.5); guard += 1
         if guard % 15 == 0 then LOG("NoBelt", "guard=" .. guard) end
     end
-    if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
+    if not isNoBeltActive() then return end
     LOG("NoBelt", "dragon talon OK")
 
-    while not isOnIsland() and State.running
-          and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
+    while not isOnIsland() and State.running and isNoBeltActive() do
         ensureOptionOn(TAB_MAIN, OPT_MAIN)
         task.wait(2.5)
     end
-    if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
+    if not isNoBeltActive() then return end
     LOG("NoBelt", "остров найден (sound)")
 
     LOG("NoBelt", "6,1 OFF")
@@ -857,7 +917,9 @@ local function runNoBeltMode()
 
     LOG("NoBelt", "2,4 OFF (перед goToPosition)")
     if not ensureOptionOff(TAB_FARM, OPT_FARM) then
-        WARN("NoBelt", "2,4 не выключилось — возможны конфликты при перемещении")
+        WARN("NoBelt", "2,4 не выключилось — повторная попытка после ожидания хаба")
+        waitForHubReady(60)
+        ensureOptionOff(TAB_FARM, OPT_FARM)
     end
 
     task.wait(1)
@@ -885,7 +947,7 @@ local function runNoBeltMode()
 
     local lastMastery = getMastery() or 0
     local lastChangeAt = tick()
-    while State.running and (State.currentBelt == "None" or State.currentBelt == "Unknown") do
+    while State.running and isNoBeltActive() do
         task.wait(5)
         local m = getMastery() or 0
         if m > lastMastery then
@@ -899,7 +961,7 @@ local function runNoBeltMode()
             return
         end
     end
-    if State.currentBelt ~= "None" and State.currentBelt ~= "Unknown" then return end
+    if not isNoBeltActive() then return end
 
     setOption(TAB_FARM, OPT_FARM, false); task.wait(0.5)
     setOption(TAB_MAIN, OPT_MAIN, true)
@@ -910,6 +972,12 @@ end
 -- HOLD 6,1
 -- ============================================================
 local function runHoldSixOne()
+    LOG("Hold", "жду готовности хаба...")
+    if not waitForHubReady() then
+        WARN("Hold", "выход по State.running=false")
+        return
+    end
+
     local modeAtStart = State.currentBelt
     pcall(function() setOption(TAB_MAIN, OPT_MAIN, true) end)
     local lastToggleAt, lastStatusCheck = tick(), tick()
@@ -945,6 +1013,13 @@ end
 -- ============================================================
 local function runTradeMode()
     LOG("Trade", "=== START ===")
+
+    LOG("Trade", "жду готовности хаба...")
+    if not waitForHubReady() then
+        WARN("Trade", "выход по State.running=false")
+        return
+    end
+
     State.beltScanPaused = true
     State.inTrade = true
 
@@ -1447,7 +1522,7 @@ local function runTradeMode()
     end
 
     -- ============================================================
-    -- ФАЗА 1: ОДНА ПОПЫТКА ТРЕЙДА
+    -- ФАЗА 1: ТРЕЙД
     -- ============================================================
     local function doTradeOnce(config)
         collisionsDisabledGlobal = true
@@ -1458,8 +1533,7 @@ local function runTradeMode()
         goToPosition(TRADE_WAYPOINT)
         task.wait(0.3)
 
-        local deadline = tick() + TRADE_PHASE_TIMEOUT
-        while State.running and tick() < deadline do
+        while State.running do
             local tbl, seat = findTradeTable(config.partner_name or "")
             if not tbl then
                 LOG("Trade", "нет стола, ждём 5с")
@@ -1485,7 +1559,7 @@ local function runTradeMode()
 
             local otherSeat = getOtherSeat(tbl, seat)
 
-            while State.running and tick() < deadline do
+            while State.running do
                 if not isSeated(seat) then
                     if not jumpAndReSeat(seat, sitTarget) then
                         task.wait(0.5)
@@ -1541,33 +1615,40 @@ local function runTradeMode()
             end
             break
         end
-        LOG("Trade", "трейд-фаза не завершилась успехом")
         return false
     end
 
     -- ============================================================
-    -- ФАЗА 2: ОДНА ПОПЫТКА ПОСТ-ТРЕЙДА
+    -- ФАЗА 2: ПОСТ-ТРЕЙД
     -- ============================================================
     local function postTradeOnce()
         LOG("PostTrade", "=== START ===")
 
-        collisionsDisabledGlobal = false
-        restoreCollisionsNow()
+        LOG("PostTrade", "коллизии OFF")
+        collisionsDisabledGlobal = true
+        disableCollisionsNow()
         task.wait(0.5)
 
-        local nearTries = 0
-        while State.running and nearTries < 8 do
-            nearTries += 1
-            if isNearPosition(POST_TRADE_WAYPOINT, POST_POS_TOL_XZ, POST_POS_TOL_Y) then break end
-            LOG("PostTrade", "не у NPC, goTo (попытка " .. nearTries .. ")")
-            goToPosition(POST_TRADE_WAYPOINT)
-            task.wait(1.0)
+        LOG("PostTrade", "goTo POST_TRADE_WAYPOINT")
+        goToPosition(POST_TRADE_WAYPOINT)
+        task.wait(0.3)
+
+        LOG("PostTrade", "коллизии ON")
+        collisionsDisabledGlobal = false
+        restoreCollisionsNow()
+        task.wait(1.0)
+
+        do
+            local c = player.Character
+            local hrp = c and c:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local d = hrp.Position - POST_TRADE_WAYPOINT
+                LOG("PostTrade", string.format(
+                    "позиция (%.1f,%.1f,%.1f) Δ=(%.1f,%.1f,%.1f)",
+                    hrp.Position.X, hrp.Position.Y, hrp.Position.Z,
+                    d.X, d.Y, d.Z))
+            end
         end
-        if not isNearPosition(POST_TRADE_WAYPOINT, POST_POS_TOL_XZ, POST_POS_TOL_Y) then
-            WARN("PostTrade", "не смогли подойти к NPC")
-            return "error"
-        end
-        LOG("PostTrade", "у NPC")
 
         if not RF_InteractDragonQuest then
             WARN("PostTrade", "нет RF/InteractDragonQuest")
@@ -1624,9 +1705,6 @@ local function runTradeMode()
         end
     end
 
-    -- ============================================================
-    -- ПОДГОТОВКА
-    -- ============================================================
     selectTeam()
 
     collisionsDisabledGlobal = true
@@ -1678,25 +1756,15 @@ local function runTradeMode()
 
     processLoadFruit(config.load_fruit_items or {})
 
-    -- ============================================================
-    -- ВНЕШНИЙ ЦИКЛ РЕ-ТРЕЙДА (continue вместо goto)
-    -- ============================================================
     local claimed = false
-    local attempt = 0
 
     while not claimed and State.running do
-        attempt += 1
-        if attempt > RE_TRADE_MAX_ATTEMPTS then
-            WARN("Trade", "превышено число попыток ре-трейда (" .. RE_TRADE_MAX_ATTEMPTS .. ")")
-            break
-        end
-        LOG("Trade", "======== попытка #" .. attempt .. " ========")
+        LOG("Trade", "======== новая итерация трейд + пост-трейд ========")
 
         local tradeOk = doTradeOnce(config)
         if not tradeOk then
-            LOG("Trade", "трейд не завершён — повтор через 3с")
-            task.wait(3)
-            continue
+            LOG("Trade", "трейд прервался (State.running=false) — выход")
+            break
         end
 
         local result = postTradeOnce()
@@ -1712,9 +1780,6 @@ local function runTradeMode()
         end
     end
 
-    -- ============================================================
-    -- ФИНАЛИЗАЦИЯ
-    -- ============================================================
     LOG("Trade", "коллизии ON")
     collisionsDisabledGlobal = false
     restoreCollisionsNow()
@@ -1727,7 +1792,7 @@ local function runTradeMode()
         State.tradeDone = true
         LOG("Trade", "=== DONE ===")
     else
-        WARN("Trade", "ре-трейд не удался за " .. RE_TRADE_MAX_ATTEMPTS .. " попыток — tradeDone не ставим")
+        WARN("Trade", "выход без claimed (State.running=false)")
     end
 end
 
@@ -1735,6 +1800,9 @@ end
 -- ГЛАВНЫЙ ДИСПЕТЧЕР
 -- ============================================================
 LOG("Main", "=== START === Me: " .. player.Name)
+
+LOG("Main", "жду готовности хаба (бесконечно, до State.running=false)...")
+waitForHubReady()
 
 local waitStart = tick()
 while State.currentBelt == "Unknown" and tick() - waitStart < 90 do task.wait(1) end
@@ -1746,14 +1814,30 @@ while State.running do
     LOG("Main", "---- цикл #" .. loop .. " belt=" .. State.currentBelt .. " ----")
 
     local belt = State.currentBelt
+
+    -- ========================================================
+    -- УВЕДОМЛЕНИЕ СЕРВЕРА О ПЕРВОМ ПОЛУЧЕНИИ ORANGE
+    -- ========================================================
+    -- Отправляется один раз за сессию скрипта. Сервер (Flask)
+    -- идемпотентен — на своей стороне хранит список уже уведомлённых,
+    -- поэтому при перезапуске скрипта adb повторно не запустится.
+    if belt == ORANGE_BELT_NAME and not State.orangeNotified then
+        notifyOrangeAchieved()
+        -- НЕ прерываем логику — продолжаем холдить 6,1
+    end
+
     if belt == "Yellow" and not State.tradeDone then
         if getOptionState(TAB_MAIN, OPT_MAIN) == true then
             setOption(TAB_MAIN, OPT_MAIN, false)
             task.wait(0.5)
         end
         runTradeMode()
-    elseif not State.nobeltDone then
-        runNoBeltMode()
+    elseif belt == "None" or belt == "Unknown" then
+        if not State.nobeltDone then
+            runNoBeltMode()
+        else
+            runHoldSixOne()
+        end
     else
         runHoldSixOne()
     end
