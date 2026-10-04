@@ -1,8 +1,6 @@
 --!nocheck
 -- ============================================================
--- GREEN MODE — v11
--- Host активирует 8,7 ТОЛЬКО после того как ОБА на месте
--- (ждём партнёра в радиусе 30 стадов)
+-- GREEN MODE — v12 (без таймаутов, всё ждём бесконечно)
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -17,7 +15,7 @@ local player = Players.LocalPlayer
 -- ============================================================
 -- КОНФИГ
 -- ============================================================
-local SERVER_URL          = "http://192.168.31.179:8000"
+local SERVER_URL          = "http://192.168.1.100:8000"
 local POST_TRADE_NPC_NAME = "Dojo Trainer"
 
 local GREEN_HOST_POS   = Vector3.new(5842.3, 1208.6, 886.3)
@@ -26,19 +24,15 @@ local GREEN_GUEST_POS  = Vector3.new(5847.1, 1208.6, 882.4)
 local MOVE_SPEED          = 250
 local POS_TOLERANCE       = 8
 
--- ★ Ждём партнёра в этом радиусе перед активацией 8,7
 local PARTNER_NEAR_RADIUS = 30
-local PARTNER_WAIT_TIMEOUT = 180
 
-local WAIT_FRUIT_TIMEOUT  = 120
-local CLAIM_MAX_TRIES     = 20
 local CLAIM_RETRY_DELAY   = 2
 
-local DELAY_AFTER_ARRIVE  = 10
-local DELAY_AFTER_DROP    = 10
-local DELAY_BEFORE_CLAIM  = 10
-local DELAY_AFTER_CLAIM   = 30
-local DELAY_BEFORE_DROP2  = 5
+local DELAY_AFTER_ARRIVE  = 2
+local DELAY_AFTER_DROP    = 2
+local DELAY_BEFORE_CLAIM  = 5
+local DELAY_AFTER_CLAIM   = 5
+local DELAY_BEFORE_DROP2  = 2
 
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
@@ -190,29 +184,27 @@ local function setOptionState(tabIndex, optIndex, desiredState)
     fireSequence(optionBtn) task.wait(0.1)
     return true
 end
-local function ensureOptionOn(tabIndex, optIndex, tries)
-    tries = tries or 8
-    for _ = 1, tries do
+
+-- ★ БЕЗ ЛИМИТА ПОПЫТОК — долбим пока не получим нужное состояние
+local function ensureOptionOn(tabIndex, optIndex)
+    while State.running do
         if getOptionState(tabIndex, optIndex) == "on" then return true end
         setOptionState(tabIndex, optIndex, "on")
         task.wait(0.4)
     end
-    return getOptionState(tabIndex, optIndex) == "on"
+    return false
 end
-local function ensureOptionOff(tabIndex, optIndex, tries)
-    tries = tries or 8
-    for _ = 1, tries do
+local function ensureOptionOff(tabIndex, optIndex)
+    while State.running do
         if getOptionState(tabIndex, optIndex) == "off" then return true end
         setOptionState(tabIndex, optIndex, "off")
         task.wait(0.4)
     end
-    return getOptionState(tabIndex, optIndex) == "off"
+    return false
 end
 local function waitForHubReady()
-    local t0 = tick()
     while State.running and not waitForInterface() do
         task.wait(0.5)
-        if tick() - t0 > 300 then return false end
     end
     LOG("Hub", "готов")
     return true
@@ -381,14 +373,13 @@ local function goToAndFace(targetPos, lookAtPoint, speed)
 end
 
 -- ============================================================
--- ★ ЖДЁМ ПАРТНЁРА РЯДОМ
+-- ★ ЖДЁМ ПАРТНЁРА РЯДОМ (без таймаута — бесконечно)
 -- ============================================================
-local function waitPartnerNearby(partnerName, radius, timeout)
-    radius  = radius or PARTNER_NEAR_RADIUS
-    timeout = timeout or PARTNER_WAIT_TIMEOUT
-    local t0 = tick()
+local function waitPartnerNearby(partnerName, radius)
+    radius = radius or PARTNER_NEAR_RADIUS
     local lastLog = 0
-    while State.running and (tick() - t0) < timeout do
+    local t0 = tick()
+    while State.running do
         local myHrp = getHRP()
         local partner = Players:FindFirstChild(partnerName)
         local partnerHrp = partner
@@ -414,7 +405,6 @@ local function waitPartnerNearby(partnerName, radius, timeout)
         end
         task.wait(0.5)
     end
-    WARN("Wait", "партнёр не подошёл за " .. timeout .. "с")
     return false, nil
 end
 
@@ -476,11 +466,12 @@ local function dumpInventory(tag)
     end
     LOG(tag, "-----------------")
 end
-local function waitFruitTool(timeout)
-    timeout = timeout or WAIT_FRUIT_TIMEOUT
-    local t0 = tick()
+
+-- ★ БЕЗ ТАЙМАУТА — ждём фрукт бесконечно
+local function waitFruitTool()
     local lastLog = 0
-    while State.running and (tick() - t0) < timeout do
+    local t0 = tick()
+    while State.running do
         local t = findFruitTool()
         if t then return t end
         if tick() - t0 - lastLog >= 5 then
@@ -491,6 +482,7 @@ local function waitFruitTool(timeout)
     end
     return nil
 end
+
 local function eatFruitDrop()
     local char = player.Character
     if not char then return false, "нет Character" end
@@ -546,11 +538,13 @@ local function tryClaimQuest(myPos, tag)
     return true, resp
 end
 
-local function claimLoop(myPos, tag, maxTries)
+-- ★ БЕЗ ЛИМИТА ПОПЫТОК — долбим claim пока не вернёт true
+local function claimLoop(myPos, tag)
     tag = tag or "Claim"
-    maxTries = maxTries or CLAIM_MAX_TRIES
-    for i = 1, maxTries do
-        LOG(tag, string.format("=== попытка %d/%d ===", i, maxTries))
+    local i = 0
+    while State.running do
+        i += 1
+        LOG(tag, "=== попытка " .. i .. " ===")
         local ok, resp = tryClaimQuest(myPos, tag)
         if ok and resp == true then
             LOG(tag, "УСПЕХ на попытке " .. i)
@@ -562,7 +556,6 @@ local function claimLoop(myPos, tag, maxTries)
         end
         task.wait(CLAIM_RETRY_DELAY)
     end
-    WARN(tag, "исчерпаны попытки (" .. maxTries .. ")")
     return false
 end
 
@@ -598,19 +591,18 @@ local function runGreenMode()
        and match.job_id ~= game.JobId then
         LOG("Green", "guest: телепорт на " .. tostring(match.job_id))
         local teleported = false
-        for attempt = 1, 5 do
+        while State.running and not teleported do
             if teleportToJobId(match.job_id) then
                 local w = 0
                 while w < 30 and game.JobId ~= match.job_id do
                     task.wait(1); w += 1
                 end
-                if game.JobId == match.job_id then teleported = true; break end
+                if game.JobId == match.job_id then
+                    teleported = true
+                    break
+                end
             end
-            LOG("Green", "guest: телепорт #" .. attempt .. " не удалась"); task.wait(2)
-        end
-        if not teleported then
-            WARN("Green", "guest: телепорт не удался — выход")
-            requestUnmatch(); State.mode = "none"; return
+            LOG("Green", "guest: телепорт не удался, повтор"); task.wait(2)
         end
         LOG("Green", "guest: перелетели, ждём загрузку")
         task.wait(8)
@@ -645,15 +637,11 @@ local function runGreenMode()
         if not ok then snapToSpot(myPos, partnerPos) end
     end
 
-    -- ★ ЖДЁМ ПАРТНЁРА В РАДИУСЕ (перед активацией 8,7)
+    -- ★ ЖДЁМ ПАРТНЁРА (бесконечно)
     LOG("Green", "★ жду партнёра в радиусе " .. PARTNER_NEAR_RADIUS .. " стадов...")
-    local okP, dP = waitPartnerNearby(match.partner_name,
-        PARTNER_NEAR_RADIUS, PARTNER_WAIT_TIMEOUT)
-    if not okP then
-        WARN("Green", "партнёр не подошёл — продолжаю на свой риск")
-    end
+    waitPartnerNearby(match.partner_name, PARTNER_NEAR_RADIUS)
 
-    LOG("Green", "★ пауза " .. DELAY_AFTER_ARRIVE .. "с после того как оба на месте")
+    LOG("Green", "★ пауза " .. DELAY_AFTER_ARRIVE .. "с — оба на месте")
     task.wait(DELAY_AFTER_ARRIVE)
 
     -- Host: 8,7 ON → fruit → 8,7 OFF
@@ -662,7 +650,7 @@ local function runGreenMode()
         LOG("Green", "host: 8,7 ON (оба на месте)")
         ensureOptionOn(TAB_FRUIT, OPT_FRUIT)
         LOG("Green", "host: жду fruit-tool...")
-        local tool = waitFruitTool(WAIT_FRUIT_TIMEOUT)
+        local tool = waitFruitTool()
         LOG("Green", "host: fruit появился = " .. tostring(tool and tool.Name))
         dumpInventory("host:after-8,7")
         LOG("Green", "host: 8,7 OFF")
@@ -685,28 +673,24 @@ local function runGreenMode()
         task.wait(DELAY_AFTER_DROP)
 
         LOG("Green", "host: жду fruit обратно от guest'а...")
-        local tool = waitFruitTool(WAIT_FRUIT_TIMEOUT)
+        local tool = waitFruitTool()
         LOG("Green", "host: получил обратно = " .. tostring(tool and tool.Name))
         dumpInventory("host:after-receive1")
 
-        if tool then
-            LOG("Green", "★ host: пауза " .. DELAY_BEFORE_CLAIM .. "с перед ClaimQuest")
-            task.wait(DELAY_BEFORE_CLAIM)
-            claimedMe = claimLoop(myPos, "Claim", CLAIM_MAX_TRIES)
+        LOG("Green", "★ host: пауза " .. DELAY_BEFORE_CLAIM .. "с перед ClaimQuest")
+        task.wait(DELAY_BEFORE_CLAIM)
+        claimedMe = claimLoop(myPos, "Claim")
 
-            LOG("Green", "★ host: пауза " .. DELAY_BEFORE_DROP2 .. "с перед drop #2")
-            task.wait(DELAY_BEFORE_DROP2)
+        LOG("Green", "★ host: пауза " .. DELAY_BEFORE_DROP2 .. "с перед drop #2")
+        task.wait(DELAY_BEFORE_DROP2)
 
-            LOG("Green", "host: drop #2 (отдаю guest'у для его ClaimQuest)")
-            local ok2, err2 = eatFruitDrop()
-            LOG("Green", "host: drop #2 = " .. tostring(ok2) .. " / " .. tostring(err2))
-            dumpInventory("host:after-drop2")
+        LOG("Green", "host: drop #2 (отдаю guest'у для его ClaimQuest)")
+        local ok2, err2 = eatFruitDrop()
+        LOG("Green", "host: drop #2 = " .. tostring(ok2) .. " / " .. tostring(err2))
+        dumpInventory("host:after-drop2")
 
-            LOG("Green", "★ host: жду " .. DELAY_AFTER_CLAIM .. "с пока guest сделает ClaimQuest")
-            task.wait(DELAY_AFTER_CLAIM)
-        else
-            WARN("Green", "host: фрукт не вернулся за " .. WAIT_FRUIT_TIMEOUT .. "с")
-        end
+        LOG("Green", "★ host: жду " .. DELAY_AFTER_CLAIM .. "с пока guest сделает ClaimQuest")
+        task.wait(DELAY_AFTER_CLAIM)
 
         LOG("Green", "★ host: ВСЁ СДЕЛАНО. Включаю (" .. TAB_TOGGLE .. "," .. OPT_TOGGLE .. ")")
         local okOn = ensureOptionOn(TAB_TOGGLE, OPT_TOGGLE)
@@ -716,38 +700,30 @@ local function runGreenMode()
         LOG("Green", "=== GUEST PHASE ===")
 
         LOG("Green", "guest: жду fruit #1 от host'а...")
-        local tool1 = waitFruitTool(WAIT_FRUIT_TIMEOUT)
+        local tool1 = waitFruitTool()
         LOG("Green", "guest: получил #1 = " .. tostring(tool1 and tool1.Name))
         dumpInventory("guest:after-receive1")
 
-        if tool1 then
-            LOG("Green", "★ guest: пауза " .. DELAY_AFTER_DROP .. "с")
-            task.wait(DELAY_AFTER_DROP)
+        LOG("Green", "★ guest: пауза " .. DELAY_AFTER_DROP .. "с")
+        task.wait(DELAY_AFTER_DROP)
 
-            LOG("Green", "guest: drop #1 (возвращаю host'у)")
-            local ok1, err1 = eatFruitDrop()
-            LOG("Green", "guest: drop #1 = " .. tostring(ok1) .. " / " .. tostring(err1))
-            dumpInventory("guest:after-drop1")
+        LOG("Green", "guest: drop #1 (возвращаю host'у)")
+        local ok1, err1 = eatFruitDrop()
+        LOG("Green", "guest: drop #1 = " .. tostring(ok1) .. " / " .. tostring(err1))
+        dumpInventory("guest:after-drop1")
 
-            LOG("Green", "★ guest: пауза " .. DELAY_AFTER_DROP .. "с после drop #1")
-            task.wait(DELAY_AFTER_DROP)
+        LOG("Green", "★ guest: пауза " .. DELAY_AFTER_DROP .. "с после drop #1")
+        task.wait(DELAY_AFTER_DROP)
 
-            LOG("Green", "guest: жду fruit #2 от host'а...")
-            local tool2 = waitFruitTool(WAIT_FRUIT_TIMEOUT)
-            LOG("Green", "guest: получил #2 = " .. tostring(tool2 and tool2.Name))
-            dumpInventory("guest:after-receive2")
+        LOG("Green", "guest: жду fruit #2 от host'а...")
+        local tool2 = waitFruitTool()
+        LOG("Green", "guest: получил #2 = " .. tostring(tool2 and tool2.Name))
+        dumpInventory("guest:after-receive2")
 
-            if tool2 then
-                LOG("Green", "★ guest: пауза " .. DELAY_BEFORE_CLAIM .. "с перед ClaimQuest")
-                task.wait(DELAY_BEFORE_CLAIM)
-                local guestClaimed = claimLoop(myPos, "ClaimGuest", CLAIM_MAX_TRIES)
-                LOG("Green", "guest: ClaimQuest = " .. tostring(guestClaimed))
-            else
-                WARN("Green", "guest: drop #2 не пришёл за " .. WAIT_FRUIT_TIMEOUT .. "с")
-            end
-        else
-            WARN("Green", "guest: drop #1 не пришёл за " .. WAIT_FRUIT_TIMEOUT .. "с")
-        end
+        LOG("Green", "★ guest: пауза " .. DELAY_BEFORE_CLAIM .. "с перед ClaimQuest")
+        task.wait(DELAY_BEFORE_CLAIM)
+        local guestClaimed = claimLoop(myPos, "ClaimGuest")
+        LOG("Green", "guest: ClaimQuest = " .. tostring(guestClaimed))
 
         LOG("Green", "★ guest: ВСЁ СДЕЛАНО. Включаю (" .. TAB_TOGGLE .. "," .. OPT_TOGGLE .. ")")
         local okOn = ensureOptionOn(TAB_TOGGLE, OPT_TOGGLE)
