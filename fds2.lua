@@ -1,8 +1,6 @@
 --!nocheck
 -- ============================================================
--- GREEN MODE — АВТОНОМНЫЙ ТЕСТ (v4)
--- Всё делаем СТОЯ на координатах: drop-приём-claim без ходьбы к NPC
--- + проверка позиции перед каждым шагом + retry-цикл ClaimQuest
+-- GREEN MODE — v6 (откат к v4 + задержки по 10 сек)
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -24,10 +22,15 @@ local GREEN_HOST_POS   = Vector3.new(5841.1, 1208.6, 887.2)
 local GREEN_GUEST_POS  = Vector3.new(5848.3, 1208.6, 881.5)
 
 local MOVE_SPEED          = 250
-local POS_TOLERANCE       = 8      -- допуск "мы на месте" в стадах
-local WAIT_FRUIT_TIMEOUT  = 60
-local CLAIM_MAX_TRIES     = 20     -- сколько раз пробовать ClaimQuest
-local CLAIM_RETRY_DELAY   = 2      -- сек между попытками
+local POS_TOLERANCE       = 8
+local WAIT_FRUIT_TIMEOUT  = 90     -- увеличил на всякий
+local CLAIM_MAX_TRIES     = 20
+local CLAIM_RETRY_DELAY   = 2
+
+-- ★ НОВЫЕ ЗАДЕРЖКИ
+local DELAY_AFTER_ARRIVE  = 10     -- после прилёта на точку
+local DELAY_AFTER_DROP    = 10     -- после drop (для host и guest)
+local DELAY_BEFORE_CLAIM  = 10     -- перед claim
 
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
@@ -66,7 +69,7 @@ do
 end
 
 -- ============================================================
--- ХАБ (без изменений)
+-- ХАБ
 -- ============================================================
 local function getRoot()
     for _, child in ipairs(CoreGui:GetChildren()) do
@@ -295,14 +298,12 @@ player.CharacterAdded:Connect(function(char)
 end)
 
 -- ============================================================
--- ПОЗИЦИЯ + ДВИЖЕНИЕ
+-- ПОЗИЦИЯ / ДВИЖЕНИЕ
 -- ============================================================
 local function getHRP()
     local char = player.Character
     return char and char:FindFirstChild("HumanoidRootPart")
 end
-
--- Проверка "мы стоим на нужной точке"
 local function isOnSpot(targetPos, tol)
     tol = tol or POS_TOLERANCE
     local hrp = getHRP()
@@ -310,8 +311,6 @@ local function isOnSpot(targetPos, tol)
     local d = (hrp.Position - targetPos).Magnitude
     return d <= tol, d
 end
-
--- Принудительно возвращаем себя на точку (без движения, мгновенно)
 local function snapToSpot(targetPos, lookAtPos)
     local char = player.Character
     if not char then return false end
@@ -322,9 +321,7 @@ local function snapToSpot(targetPos, lookAtPos)
     if lookAtPos then
         lookDir = Vector3.new(lookAtPos.X - targetPos.X, 0, lookAtPos.Z - targetPos.Z)
     end
-    if not lookDir or lookDir.Magnitude < 1e-4 then
-        lookDir = Vector3.new(0, 0, 1)
-    end
+    if not lookDir or lookDir.Magnitude < 1e-4 then lookDir = Vector3.new(0,0,1) end
     hrp.CFrame = CFrame.lookAt(targetPos, targetPos + lookDir.Unit)
     return true
 end
@@ -346,7 +343,7 @@ local function goToAndFace(targetPos, lookAtPoint, speed)
     local lookSrc = lookAtPoint or targetPos
     local lookDir = Vector3.new(lookSrc.X - targetPos.X, 0, lookSrc.Z - targetPos.Z)
     if lookDir.Magnitude < 1e-4 then lookDir = Vector3.new(delta.X, 0, delta.Z) end
-    if lookDir.Magnitude < 1e-4 then lookDir = Vector3.new(0, 0, 1) end
+    if lookDir.Magnitude < 1e-4 then lookDir = Vector3.new(0,0,1) end
     lookDir = lookDir.Unit
 
     if dist < 0.1 then
@@ -368,7 +365,6 @@ local function goToAndFace(targetPos, lookAtPoint, speed)
 
     hrp.CFrame = CFrame.lookAt(targetPos, targetPos + lookDir)
     task.wait(0.05)
-
     local ok, d = isOnSpot(targetPos)
     LOG("Green", string.format("встал на (%.1f,%.1f,%.1f) dist=%.2f onSpot=%s",
         hrp.Position.X, hrp.Position.Y, hrp.Position.Z, d, tostring(ok)))
@@ -420,18 +416,14 @@ local function dumpInventory(tag)
     if char then
         local any = false
         for _, ch in ipairs(char:GetChildren()) do
-            if ch:IsA("Tool") then
-                LOG(tag, "  [EQUIPPED] " .. ch.Name); any = true
-            end
+            if ch:IsA("Tool") then LOG(tag, "  [EQUIPPED] " .. ch.Name); any = true end
         end
         if not any then LOG(tag, "  [EQUIPPED] (пусто)") end
     end
     if bp then
         local any = false
         for _, ch in ipairs(bp:GetChildren()) do
-            if ch:IsA("Tool") then
-                LOG(tag, "  [BACKPACK] " .. ch.Name); any = true
-            end
+            if ch:IsA("Tool") then LOG(tag, "  [BACKPACK] " .. ch.Name); any = true end
         end
         if not any then LOG(tag, "  [BACKPACK] (пусто)") end
     end
@@ -467,9 +459,7 @@ local function eatFruitDrop()
         hum:EquipTool(tool)
         task.wait(0.5)
     end
-    if tool.Parent ~= char then
-        return false, "не экипировалось: " .. tool.Name
-    end
+    if tool.Parent ~= char then return false, "не экипировалось: " .. tool.Name end
     LOG("Eat", "tool экипирован")
     local eatRemote = tool:FindFirstChild("EatRemote")
     if not eatRemote or not eatRemote:IsA("RemoteFunction") then
@@ -485,19 +475,16 @@ local function eatFruitDrop()
 end
 
 -- ============================================================
--- CLAIM QUEST — БЕЗ ПЕРЕМЕЩЕНИЯ, RETRY-ЦИКЛ
+-- CLAIM QUEST
 -- ============================================================
 local function tryClaimQuest(myPos)
     if not RF_InteractDragonQuest then return false, "no RF" end
-    -- Проверка позиции — если нас сдвинуло, возвращаемся
     local ok, d = isOnSpot(myPos)
     if not ok then
-        WARN("Claim", string.format("сдвинуло с точки (dist=%.2f), возвращаюсь", d))
-        snapToSpot(myPos, nil)
-        task.wait(0.1)
+        WARN("Claim", string.format("сдвинуло (dist=%.2f) — snap", d))
+        snapToSpot(myPos, nil); task.wait(0.1)
     end
-
-    LOG("Claim", "отправляю ClaimQuest (позиция ok)...")
+    LOG("Claim", "отправляю ClaimQuest...")
     local sOk, resp = pcall(function()
         return RF_InteractDragonQuest:InvokeServer({
             NPC = POST_TRADE_NPC_NAME,
@@ -509,7 +496,6 @@ local function tryClaimQuest(myPos)
     return true, resp
 end
 
--- Пытаемся claim'нуть до успеха, не двигаясь с точки
 local function claimLoop(myPos, maxTries)
     maxTries = maxTries or CLAIM_MAX_TRIES
     for i = 1, maxTries do
@@ -519,7 +505,6 @@ local function claimLoop(myPos, maxTries)
             LOG("Claim", "УСПЕХ на попытке " .. i)
             return true
         end
-        -- если нас сдвинуло — вернёмся на точку
         local onSpot = isOnSpot(myPos)
         if not onSpot then snapToSpot(myPos, nil) end
         task.wait(CLAIM_RETRY_DELAY)
@@ -535,16 +520,13 @@ local function runGreenMode()
     State.mode = "green"
     LOG("Green", "=== START ===")
 
-    -- 1) Матч
     local match = nil
     while State.running and not match do
         local data, err = requestMatch()
         if not data then
-            WARN("Green", "match error: " .. tostring(err))
-            task.wait(3)
+            WARN("Green", "match error: " .. tostring(err)); task.wait(3)
         elseif data.waiting then
-            LOG("Green", "waiting for partner...")
-            task.wait(3)
+            LOG("Green", "waiting for partner..."); task.wait(3)
         else
             match = data
         end
@@ -555,12 +537,9 @@ local function runGreenMode()
         .. " partner=" .. tostring(match.partner_name))
     LOG("Green", "match data: " .. HttpService:JSONEncode(match))
 
-    -- 2) Хаб
-    if not waitForHubReady() then
-        State.mode = "none"; return
-    end
+    if not waitForHubReady() then State.mode = "none"; return end
 
-    -- 3) Guest телепорт
+    -- Guest телепорт
     if match.role == "guest"
        and match.job_id and match.job_id ~= ""
        and match.job_id ~= game.JobId then
@@ -574,21 +553,18 @@ local function runGreenMode()
                 end
                 if game.JobId == match.job_id then teleported = true; break end
             end
-            LOG("Green", "guest: телепорт попытка #" .. attempt .. " не удалась, повтор")
-            task.wait(2)
+            LOG("Green", "guest: телепорт #" .. attempt .. " не удалась"); task.wait(2)
         end
         if not teleported then
             WARN("Green", "guest: телепорт не удался — выход")
-            requestUnmatch()
-            State.mode = "none"
-            return
+            requestUnmatch(); State.mode = "none"; return
         end
         LOG("Green", "guest: перелетели, ждём загрузку")
         task.wait(8)
         requestMatch()
     end
 
-    -- 4) Встаём на координаты и БОЛЬШЕ НИКУДА НЕ ИДЁМ
+    -- Позиции
     local myPos, partnerPos
     if match.role == "host" then
         myPos, partnerPos = GREEN_HOST_POS, GREEN_GUEST_POS
@@ -596,53 +572,49 @@ local function runGreenMode()
         myPos, partnerPos = GREEN_GUEST_POS, GREEN_HOST_POS
     end
 
-    LOG("Green", "goTo " .. string.format("(%.1f,%.1f,%.1f)",
-        myPos.X, myPos.Y, myPos.Z))
     goToAndFace(myPos, partnerPos, MOVE_SPEED)
     task.wait(0.3)
-
-    -- Проверка позиции сразу после прилёта
     do
         local ok, d = isOnSpot(myPos)
         LOG("Green", string.format("после прилёта: dist=%.2f onSpot=%s", d, tostring(ok)))
         if not ok then snapToSpot(myPos, partnerPos) end
     end
 
-    -- 5) HOST: 8,7 ON → wait fruit → 8,7 OFF (СТОЯ НА МЕСТЕ)
+    -- ★ ЗАДЕРЖКА после прилёта
+    LOG("Green", "★ пауза " .. DELAY_AFTER_ARRIVE .. "с после прилёта")
+    task.wait(DELAY_AFTER_ARRIVE)
+
+    -- Host: 8,7 ON → wait fruit → 8,7 OFF
     if match.role == "host" then
         dumpInventory("host:before-8,7")
         LOG("Green", "host: 8,7 ON")
         ensureOptionOn(TAB_FRUIT, OPT_FRUIT)
-
         LOG("Green", "host: жду fruit-tool...")
         local tool = waitFruitTool(WAIT_FRUIT_TIMEOUT)
         LOG("Green", "host: fruit появился = " .. tostring(tool and tool.Name))
         dumpInventory("host:after-8,7")
-
         LOG("Green", "host: 8,7 OFF")
         ensureOptionOff(TAB_FRUIT, OPT_FRUIT)
     else
-        LOG("Green", "guest: 8,7 не трогаю (активирует host)")
+        LOG("Green", "guest: 8,7 не трогаю")
     end
 
-    -- 6) Ping-pong на месте
+    -- Ping-pong
     local claimedMe = false
 
     if match.role == "host" then
-        LOG("Green", "=== HOST PHASE (всё стоя на месте) ===")
-
-        -- Убедимся что стоим на месте
+        LOG("Green", "=== HOST PHASE ===")
         local ok, d = isOnSpot(myPos)
-        if not ok then
-            WARN("Green", string.format("host сдвинуло (dist=%.2f) → snap", d))
-            snapToSpot(myPos, partnerPos); task.wait(0.2)
-        end
+        if not ok then snapToSpot(myPos, partnerPos); task.wait(0.2) end
 
         LOG("Green", "host: drop фрукта")
         local okDrop, err = eatFruitDrop()
         LOG("Green", "host: drop = " .. tostring(okDrop) .. " / " .. tostring(err))
         dumpInventory("host:after-drop")
-        task.wait(2)
+
+        -- ★ ЗАДЕРЖКА после drop
+        LOG("Green", "★ host: пауза " .. DELAY_AFTER_DROP .. "с после drop")
+        task.wait(DELAY_AFTER_DROP)
 
         LOG("Green", "host: жду фрукт обратно от guest...")
         local tool = waitFruitTool(WAIT_FRUIT_TIMEOUT)
@@ -650,20 +622,18 @@ local function runGreenMode()
         dumpInventory("host:after-receive")
 
         if tool then
-            -- Прямо тут, на координатах, крутим ClaimQuest до успеха
+            -- ★ ЗАДЕРЖКА перед claim
+            LOG("Green", "★ host: пауза " .. DELAY_BEFORE_CLAIM .. "с перед ClaimQuest")
+            task.wait(DELAY_BEFORE_CLAIM)
             claimedMe = claimLoop(myPos, CLAIM_MAX_TRIES)
         else
             WARN("Green", "host: фрукт не вернулся за " .. WAIT_FRUIT_TIMEOUT .. "с")
         end
 
     else
-        LOG("Green", "=== GUEST PHASE (всё стоя на месте) ===")
-
+        LOG("Green", "=== GUEST PHASE ===")
         local ok, d = isOnSpot(myPos)
-        if not ok then
-            WARN("Green", string.format("guest сдвинуло (dist=%.2f) → snap", d))
-            snapToSpot(myPos, partnerPos); task.wait(0.2)
-        end
+        if not ok then snapToSpot(myPos, partnerPos); task.wait(0.2) end
 
         LOG("Green", "guest: жду фрукт от host...")
         local tool = waitFruitTool(WAIT_FRUIT_TIMEOUT)
@@ -671,17 +641,23 @@ local function runGreenMode()
         dumpInventory("guest:after-receive")
 
         if tool then
-            task.wait(1)
-            -- Проверяем что всё ещё на месте перед drop
+            -- ★ ЗАДЕРЖКА перед drop
+            LOG("Green", "★ guest: пауза " .. DELAY_AFTER_DROP .. "с перед drop")
+            task.wait(DELAY_AFTER_DROP)
+
             local ok2, d2 = isOnSpot(myPos)
             if not ok2 then
-                WARN("Green", string.format("guest сдвинуло перед drop (dist=%.2f) → snap", d2))
+                WARN("Green", string.format("guest сдвинуло (dist=%.2f) → snap", d2))
                 snapToSpot(myPos, partnerPos); task.wait(0.2)
             end
-            LOG("Green", "guest: возвращаю фрукт host")
+            LOG("Green", "guest: возвращаю фрукт host (drop)")
             local okDrop, err = eatFruitDrop()
             LOG("Green", "guest: drop = " .. tostring(okDrop) .. " / " .. tostring(err))
             dumpInventory("guest:after-drop")
+
+            -- ★ ЗАДЕРЖКА после drop — чтобы host успел подобрать
+            LOG("Green", "★ guest: пауза " .. DELAY_AFTER_DROP .. "с после drop (даю host'у подобрать)")
+            task.wait(DELAY_AFTER_DROP)
         else
             WARN("Green", "guest: фрукт не пришёл за " .. WAIT_FRUIT_TIMEOUT .. "с")
         end
