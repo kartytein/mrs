@@ -30,8 +30,8 @@ local player = Players.LocalPlayer
 local SERVER_URL          = "http://192.168.31.179:8000"
 local POST_TRADE_NPC_NAME = "Dojo Trainer"
 
-local GREEN_HOST_POS   = Vector3.new(5841.1, 1208.6, 887.2)
-local GREEN_GUEST_POS  = Vector3.new(5848.3, 1208.6, 881.5)
+local GREEN_HOST_POS   = Vector3.new(5842.3, 1208.6, 886.3)
+local GREEN_GUEST_POS  = Vector3.new(5847.1, 1208.6, 882.4)
 
 local MOVE_SPEED          = 250
 local POS_TOLERANCE       = 8
