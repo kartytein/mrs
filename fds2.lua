@@ -1,6 +1,18 @@
 --!nocheck
 -- ============================================================
--- GREEN MODE — v6 (откат к v4 + задержки по 10 сек)
+-- GREEN MODE — v8 (правильный ping-pong)
+-- ============================================================
+-- ПРАВИЛЬНАЯ ЛОГИКА:
+--   HOST:  8,7 ON → fruit → 8,7 OFF
+--          drop #1 → guest подбирает
+--          ждёт fruit обратно
+--          ClaimQuest (успех → пояс)
+--          drop #2 → guest подбирает ← ЭТОГО НЕ ХВАТАЛО
+--          ждёт 30с
+--   GUEST: ждёт fruit от host'а
+--          drop #1 → host подбирает
+--          ждёт fruit снова от host'а
+--          ClaimQuest (успех → пояс)
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -23,14 +35,15 @@ local GREEN_GUEST_POS  = Vector3.new(5848.3, 1208.6, 881.5)
 
 local MOVE_SPEED          = 250
 local POS_TOLERANCE       = 8
-local WAIT_FRUIT_TIMEOUT  = 90     -- увеличил на всякий
+local WAIT_FRUIT_TIMEOUT  = 120
 local CLAIM_MAX_TRIES     = 20
 local CLAIM_RETRY_DELAY   = 2
 
--- ★ НОВЫЕ ЗАДЕРЖКИ
-local DELAY_AFTER_ARRIVE  = 10     -- после прилёта на точку
-local DELAY_AFTER_DROP    = 10     -- после drop (для host и guest)
-local DELAY_BEFORE_CLAIM  = 10     -- перед claim
+local DELAY_AFTER_ARRIVE  = 10
+local DELAY_AFTER_DROP    = 10    -- пауза чтобы фрукт успел упасть/подобраться
+local DELAY_BEFORE_CLAIM  = 10
+local DELAY_AFTER_CLAIM   = 30    -- host ждёт guest'а после drop #2
+local DELAY_BEFORE_DROP2  = 5     -- host: пауза после claim перед drop #2
 
 local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
@@ -477,39 +490,45 @@ end
 -- ============================================================
 -- CLAIM QUEST
 -- ============================================================
-local function tryClaimQuest(myPos)
+local function tryClaimQuest(myPos, tag)
+    tag = tag or "Claim"
     if not RF_InteractDragonQuest then return false, "no RF" end
-    local ok, d = isOnSpot(myPos)
-    if not ok then
-        WARN("Claim", string.format("сдвинуло (dist=%.2f) — snap", d))
-        snapToSpot(myPos, nil); task.wait(0.1)
+    if myPos then
+        local ok, d = isOnSpot(myPos)
+        if not ok then
+            WARN(tag, string.format("сдвинуло (dist=%.2f) — snap", d))
+            snapToSpot(myPos, nil); task.wait(0.1)
+        end
     end
-    LOG("Claim", "отправляю ClaimQuest...")
+    LOG(tag, "отправляю ClaimQuest...")
     local sOk, resp = pcall(function()
         return RF_InteractDragonQuest:InvokeServer({
             NPC = POST_TRADE_NPC_NAME,
             Command = "ClaimQuest"
         })
     end)
-    LOG("Claim", "ответ: ok=" .. tostring(sOk) .. " resp=" .. tostring(resp))
+    LOG(tag, "ответ: ok=" .. tostring(sOk) .. " resp=" .. tostring(resp))
     if not sOk then return false, resp end
     return true, resp
 end
 
-local function claimLoop(myPos, maxTries)
+local function claimLoop(myPos, tag, maxTries)
+    tag = tag or "Claim"
     maxTries = maxTries or CLAIM_MAX_TRIES
     for i = 1, maxTries do
-        LOG("Claim", string.format("=== попытка %d/%d ===", i, maxTries))
-        local ok, resp = tryClaimQuest(myPos)
+        LOG(tag, string.format("=== попытка %d/%d ===", i, maxTries))
+        local ok, resp = tryClaimQuest(myPos, tag)
         if ok and resp == true then
-            LOG("Claim", "УСПЕХ на попытке " .. i)
+            LOG(tag, "УСПЕХ на попытке " .. i)
             return true
         end
-        local onSpot = isOnSpot(myPos)
-        if not onSpot then snapToSpot(myPos, nil) end
+        if myPos then
+            local onSpot = isOnSpot(myPos)
+            if not onSpot then snapToSpot(myPos, nil) end
+        end
         task.wait(CLAIM_RETRY_DELAY)
     end
-    WARN("Claim", "исчерпаны попытки (" .. maxTries .. ")")
+    WARN(tag, "исчерпаны попытки (" .. maxTries .. ")")
     return false
 end
 
@@ -539,7 +558,6 @@ local function runGreenMode()
 
     if not waitForHubReady() then State.mode = "none"; return end
 
-    -- Guest телепорт
     if match.role == "guest"
        and match.job_id and match.job_id ~= ""
        and match.job_id ~= game.JobId then
@@ -564,7 +582,6 @@ local function runGreenMode()
         requestMatch()
     end
 
-    -- Позиции
     local myPos, partnerPos
     if match.role == "host" then
         myPos, partnerPos = GREEN_HOST_POS, GREEN_GUEST_POS
@@ -580,11 +597,10 @@ local function runGreenMode()
         if not ok then snapToSpot(myPos, partnerPos) end
     end
 
-    -- ★ ЗАДЕРЖКА после прилёта
     LOG("Green", "★ пауза " .. DELAY_AFTER_ARRIVE .. "с после прилёта")
     task.wait(DELAY_AFTER_ARRIVE)
 
-    -- Host: 8,7 ON → wait fruit → 8,7 OFF
+    -- Host: 8,7 ON → fruit → 8,7 OFF
     if match.role == "host" then
         dumpInventory("host:before-8,7")
         LOG("Green", "host: 8,7 ON")
@@ -599,67 +615,93 @@ local function runGreenMode()
         LOG("Green", "guest: 8,7 не трогаю")
     end
 
-    -- Ping-pong
     local claimedMe = false
 
     if match.role == "host" then
+        -- =====================================================
+        -- HOST: drop #1 → приём → claim → drop #2 → ждёт guest'а
+        -- =====================================================
         LOG("Green", "=== HOST PHASE ===")
-        local ok, d = isOnSpot(myPos)
-        if not ok then snapToSpot(myPos, partnerPos); task.wait(0.2) end
 
-        LOG("Green", "host: drop фрукта")
-        local okDrop, err = eatFruitDrop()
-        LOG("Green", "host: drop = " .. tostring(okDrop) .. " / " .. tostring(err))
-        dumpInventory("host:after-drop")
+        -- drop #1: host отдаёт фрукт guest'у
+        LOG("Green", "host: drop #1 (отдаю guest'у)")
+        local ok1, err1 = eatFruitDrop()
+        LOG("Green", "host: drop #1 = " .. tostring(ok1) .. " / " .. tostring(err1))
+        dumpInventory("host:after-drop1")
 
-        -- ★ ЗАДЕРЖКА после drop
-        LOG("Green", "★ host: пауза " .. DELAY_AFTER_DROP .. "с после drop")
+        LOG("Green", "★ host: пауза " .. DELAY_AFTER_DROP .. "с после drop #1")
         task.wait(DELAY_AFTER_DROP)
 
-        LOG("Green", "host: жду фрукт обратно от guest...")
+        -- ждём фрукт обратно от guest'а
+        LOG("Green", "host: жду fruit обратно от guest'а...")
         local tool = waitFruitTool(WAIT_FRUIT_TIMEOUT)
-        LOG("Green", "host: получил = " .. tostring(tool and tool.Name))
-        dumpInventory("host:after-receive")
+        LOG("Green", "host: получил обратно = " .. tostring(tool and tool.Name))
+        dumpInventory("host:after-receive1")
 
         if tool then
-            -- ★ ЗАДЕРЖКА перед claim
+            -- ClaimQuest host'а
             LOG("Green", "★ host: пауза " .. DELAY_BEFORE_CLAIM .. "с перед ClaimQuest")
             task.wait(DELAY_BEFORE_CLAIM)
-            claimedMe = claimLoop(myPos, CLAIM_MAX_TRIES)
+            claimedMe = claimLoop(myPos, "Claim", CLAIM_MAX_TRIES)
+
+            -- ★★★ ГЛАВНОЕ: drop #2 — host снова отдаёт фрукт guest'у
+            LOG("Green", "★ host: пауза " .. DELAY_BEFORE_DROP2 .. "с перед drop #2")
+            task.wait(DELAY_BEFORE_DROP2)
+
+            LOG("Green", "host: drop #2 (отдаю guest'у для его ClaimQuest)")
+            local ok2, err2 = eatFruitDrop()
+            LOG("Green", "host: drop #2 = " .. tostring(ok2) .. " / " .. tostring(err2))
+            dumpInventory("host:after-drop2")
+
+            -- Ждём пока guest сделает ClaimQuest
+            LOG("Green", "★ host: жду " .. DELAY_AFTER_CLAIM .. "с пока guest сделает ClaimQuest")
+            task.wait(DELAY_AFTER_CLAIM)
         else
             WARN("Green", "host: фрукт не вернулся за " .. WAIT_FRUIT_TIMEOUT .. "с")
         end
 
     else
+        -- =====================================================
+        -- GUEST: приём → drop #1 → приём → claim
+        -- =====================================================
         LOG("Green", "=== GUEST PHASE ===")
-        local ok, d = isOnSpot(myPos)
-        if not ok then snapToSpot(myPos, partnerPos); task.wait(0.2) end
 
-        LOG("Green", "guest: жду фрукт от host...")
-        local tool = waitFruitTool(WAIT_FRUIT_TIMEOUT)
-        LOG("Green", "guest: получил = " .. tostring(tool and tool.Name))
-        dumpInventory("guest:after-receive")
+        -- ждём фрукт от host'а (drop #1)
+        LOG("Green", "guest: жду fruit от host'а (drop #1)...")
+        local tool1 = waitFruitTool(WAIT_FRUIT_TIMEOUT)
+        LOG("Green", "guest: получил #1 = " .. tostring(tool1 and tool1.Name))
+        dumpInventory("guest:after-receive1")
 
-        if tool then
-            -- ★ ЗАДЕРЖКА перед drop
-            LOG("Green", "★ guest: пауза " .. DELAY_AFTER_DROP .. "с перед drop")
+        if tool1 then
+            LOG("Green", "★ guest: пауза " .. DELAY_AFTER_DROP .. "с")
             task.wait(DELAY_AFTER_DROP)
 
-            local ok2, d2 = isOnSpot(myPos)
-            if not ok2 then
-                WARN("Green", string.format("guest сдвинуло (dist=%.2f) → snap", d2))
-                snapToSpot(myPos, partnerPos); task.wait(0.2)
+            -- drop #1: guest возвращает host'у
+            LOG("Green", "guest: drop #1 (возвращаю host'у)")
+            local ok1, err1 = eatFruitDrop()
+            LOG("Green", "guest: drop #1 = " .. tostring(ok1) .. " / " .. tostring(err1))
+            dumpInventory("guest:after-drop1")
+
+            LOG("Green", "★ guest: пауза " .. DELAY_AFTER_DROP .. "с после drop #1")
+            task.wait(DELAY_AFTER_DROP)
+
+            -- ждём фрукт снова от host'а (drop #2)
+            LOG("Green", "guest: жду fruit от host'а (drop #2)...")
+            local tool2 = waitFruitTool(WAIT_FRUIT_TIMEOUT)
+            LOG("Green", "guest: получил #2 = " .. tostring(tool2 and tool2.Name))
+            dumpInventory("guest:after-receive2")
+
+            if tool2 then
+                -- ClaimQuest guest'а
+                LOG("Green", "★ guest: пауза " .. DELAY_BEFORE_CLAIM .. "с перед ClaimQuest")
+                task.wait(DELAY_BEFORE_CLAIM)
+                local guestClaimed = claimLoop(myPos, "ClaimGuest", CLAIM_MAX_TRIES)
+                LOG("Green", "guest: ClaimQuest = " .. tostring(guestClaimed))
+            else
+                WARN("Green", "guest: drop #2 не пришёл за " .. WAIT_FRUIT_TIMEOUT .. "с")
             end
-            LOG("Green", "guest: возвращаю фрукт host (drop)")
-            local okDrop, err = eatFruitDrop()
-            LOG("Green", "guest: drop = " .. tostring(okDrop) .. " / " .. tostring(err))
-            dumpInventory("guest:after-drop")
-
-            -- ★ ЗАДЕРЖКА после drop — чтобы host успел подобрать
-            LOG("Green", "★ guest: пауза " .. DELAY_AFTER_DROP .. "с после drop (даю host'у подобрать)")
-            task.wait(DELAY_AFTER_DROP)
         else
-            WARN("Green", "guest: фрукт не пришёл за " .. WAIT_FRUIT_TIMEOUT .. "с")
+            WARN("Green", "guest: drop #1 не пришёл за " .. WAIT_FRUIT_TIMEOUT .. "с")
         end
     end
 
