@@ -159,6 +159,52 @@ local function fireSequence(btn)
     return fired
 end
 
+-- ============================================================
+-- ПРОВЕРКА КОНТИНЕНТА (ВСТАВЛЕНО)
+-- ============================================================
+if not player.Character then
+    player.CharacterAdded:Wait()
+end
+LOG("Check", "Персонаж загружен, проверка континента...")
+
+while true do
+    local loadingGui = playerGui:FindFirstChild("LoadingGui")
+    local loadingText = loadingGui 
+        and loadingGui:FindFirstChild("Root") 
+        and loadingGui.Root:FindFirstChild("CanvasGroup")
+        and loadingGui.Root.CanvasGroup:FindFirstChild("Footer")
+        and loadingGui.Root.CanvasGroup.Footer:FindFirstChild("LoadingText")
+
+    if loadingText and loadingText:IsA("TextLabel") then
+        local text = string.lower(loadingText.Text)
+        
+        if text:find("third") then
+            LOG("Check", "Обнаружен 'third'. Всё ок, идем дальше.")
+            break
+        elseif text:find("second") then
+            LOG("Check", "Обнаружен 'second'. Ищу кнопку Sea3...")
+            local serverBrowser = playerGui:FindFirstChild("ServerBrowser")
+            local sea3Btn = serverBrowser 
+                and serverBrowser:FindFirstChild("Frame")
+                and serverBrowser.Frame:FindFirstChild("TeleportButtons")
+                and serverBrowser.Frame.TeleportButtons:FindFirstChild("Sea3")
+            
+            if sea3Btn then
+                LOG("Check", "Кликаю Sea3")
+                fireSequence(sea3Btn)
+                task.wait(3)
+            else
+                WARN("Check", "Кнопка Sea3 не найдена по указанному пути")
+            end
+        end
+    end
+    task.wait(1)
+end
+LOG("Check", "Проверка континента пройдена.")
+-- ============================================================
+-- КОНЕЦ ВСТАВКИ
+-- ============================================================
+
 local function findObjectByPath(root, ...)
     local current = root
     for _, segment in ipairs({...}) do
