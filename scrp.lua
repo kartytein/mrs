@@ -1,6 +1,6 @@
 --!nocheck
 -- ============================================================
--- GREEN MODE + FULL DISPATCHER — merged
+-- MERGED SCRIPT — Green + Full Dispatcher
 -- ============================================================
 
 -- ============================================================
@@ -63,7 +63,7 @@ local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 -- ============================================================
--- ВЫБОР КОМАНДЫ СРАЗУ НА СТАРТЕ
+-- ВЫБОР КОМАНДЫ НА СТАРТЕ
 -- ============================================================
 do
     local remotes = ReplicatedStorage and ReplicatedStorage:FindFirstChild("Remotes")
@@ -97,88 +97,10 @@ local State = {
     greenDone       = false,
     inTrade         = false,
     mode            = "none",
-    orangeNotified  = false,   -- ★ ORANGE: in-memory флаг
 }
 
 -- ============================================================
--- ★ ORANGE: ПЕРСИСТЕНТНЫЙ ФЛАГ (переживает рестарт скрипта)
--- ============================================================
-local ORANGE_FLAG_FILE = "orange_achieved_" .. player.Name .. ".flag"
-
-local function _getgenvSafe()
-    if type(getgenv) == "function" then
-        local ok, g = pcall(getgenv)
-        if ok and type(g) == "table" then return g end
-    end
-    return nil
-end
-
-local function _fileExists(path)
-    if type(isfile) == "function" then
-        local ok, res = pcall(isfile, path)
-        if ok then return res == true end
-    end
-    return false
-end
-
-local function _writeFile(path, content)
-    if type(writefile) == "function" then
-        return pcall(writefile, path, content)
-    end
-    return false
-end
-
-local function isOrangeNotifiedPersistent()
-    if State.orangeNotified then return true end
-
-    local g = _getgenvSafe()
-    if g and g.__orangeNotified == true then
-        State.orangeNotified = true
-        LOG("Orange", "флаг в getgenv — пропускаю")
-        return true
-    end
-
-    if _fileExists(ORANGE_FLAG_FILE) then
-        State.orangeNotified = true
-        LOG("Orange", "флаг в файле '" .. ORANGE_FLAG_FILE .. "' — пропускаю")
-        return true
-    end
-
-    return false
-end
-
-local function markOrangeNotifiedPersistent()
-    State.orangeNotified = true
-    local g = _getgenvSafe()
-    if g then g.__orangeNotified = true end
-    _writeFile(ORANGE_FLAG_FILE, tostring(tick()))
-end
-
--- Вызывается ТОЛЬКО после успешного claim в trade-режиме (Yellow → Orange)
-local function notifyOrangeAchieved()
-    if isOrangeNotifiedPersistent() then
-        return true
-    end
-
-    local url = SERVER_URL
-        .. "/orange_achieved?nickname=" .. HttpService:UrlEncode(player.Name)
-        .. "&job_id=" .. HttpService:UrlEncode(game.JobId)
-
-    LOG("Orange", "→ запрос на сервер: " .. url)
-
-    local ok, resp = pcall(function() return game:HttpGet(url) end)
-    if ok then
-        LOG("Orange", "✓ ответ сервера: " .. tostring(resp))
-        markOrangeNotifiedPersistent()
-        return true
-    else
-        WARN("Orange", "✗ ошибка запроса: " .. tostring(resp) .. " (повтор при следующем claim)")
-        return false
-    end
-end
-
--- ============================================================
--- КОЛЛИЗИИ (глобально по Workspace)
+-- КОЛЛИЗИИ (глобально)
 -- ============================================================
 local collisionsDisabledGlobal = false
 local savedCollisionsGlobal = {}
@@ -353,7 +275,7 @@ local function callRemote(args, label)
 end
 
 -- ============================================================
--- ПЕРЕМЕЩЕНИЕ (для торговли)
+-- ПЕРЕМЕЩЕНИЕ
 -- ============================================================
 local STEP_XZ          = 4
 local TELEPORT_DIST_XZ = 12
@@ -828,7 +750,7 @@ local function ensureOptionOn(tabIndex, optIndex, maxTries)
     return ensureOptionState(tabIndex, optIndex, true, maxTries)
 end
 
--- бесконечные версии (для green)
+-- бесконечные (для green)
 local function ensureOptionOffInfinite(tabIndex, optIndex)
     while State.running do
         if getOptionState(tabIndex, optIndex) == false then return true end
@@ -1831,12 +1753,6 @@ local function runTradeMode()
     if claimed then
         State.tradeDone = true
         LOG("Trade", "=== DONE ===")
-
-        -- ★ ORANGE: Yellow-трейд завершён успешно → персонаж получил Orange belt
-        -- Отправляем уведомление серверу. Persistent-флаг не даст
-        -- отправить повторно при рестарте скрипта.
-        LOG("Trade", "yellow → orange подтверждён, уведомляю сервер")
-        notifyOrangeAchieved()
     else
         WARN("Trade", "выход без claimed")
     end
@@ -1846,7 +1762,6 @@ end
 -- =======================  GREEN MODE  =======================
 -- ============================================================
 
--- 6,1 в этом режиме выключен и НЕ включается никаким watchdog'ом
 local function greenNoclip(char)
     if not char then return end
     for _, p in ipairs(char:GetDescendants()) do
@@ -1922,7 +1837,7 @@ local function goToAndFace(targetPos, lookAtPoint, speed)
     LOG("Green", string.format("идём за %.2fs к (%.1f,%.1f,%.1f)",
         duration, targetPos.X, targetPos.Y, targetPos.Z))
 
-    while elapsed < duration do
+    while elapsed < duration and State.running do
         elapsed += RunService.Heartbeat:Wait()
         local a   = math.min(elapsed / duration, 1)
         local pos = startPos:Lerp(targetPos, a)
@@ -2115,6 +2030,12 @@ local function runGreenMode()
     State.mode = "green"
     LOG("Green", "=== START ===")
 
+    -- страховка: 6,1 должен быть OFF (диспетчер уже выключил)
+    if getOptionState(TAB_MAIN, OPT_MAIN) == true then
+        LOG("Green", "★ 6,1 внезапно ON — глушу (infinite)")
+        ensureOptionOffInfinite(TAB_MAIN, OPT_MAIN)
+    end
+
     -- матч
     local match = nil
     while State.running and not match do
@@ -2159,11 +2080,11 @@ local function runGreenMode()
         greenRequestMatch()
     end
 
-    -- 6,1 ВСЕГДА OFF (без включения!)
+    -- 6,1 проверка (без включения)
     LOG("Green", "★ проверяю (" .. TAB_TOGGLE .. "," .. OPT_TOGGLE .. ") — должно быть OFF")
     local st = getOptionState(TAB_TOGGLE, OPT_TOGGLE)
     LOG("Green", "  текущее: " .. tostring(st))
-    if st ~= false then
+    if st == true then
         LOG("Green", "  выключаю (" .. TAB_TOGGLE .. "," .. OPT_TOGGLE .. ")")
         local okOff = ensureOptionOffInfinite(TAB_TOGGLE, OPT_TOGGLE)
         LOG("Green", "  ensureOptionOff = " .. tostring(okOff))
@@ -2239,7 +2160,7 @@ local function runGreenMode()
         LOG("Green", "★ host: жду " .. DELAY_AFTER_CLAIM .. "с пока guest сделает ClaimQuest")
         task.wait(DELAY_AFTER_CLAIM)
 
-        -- НЕ включаем 6,1 — оставляем OFF
+        -- ★ 6,1 НЕ включаем — оставляем OFF
         LOG("Green", "★ host: ВСЁ СДЕЛАНО (6,1 остаётся OFF)")
     else
         LOG("Green", "=== GUEST PHASE ===")
@@ -2270,6 +2191,7 @@ local function runGreenMode()
         local guestClaimed = greenClaimLoop(myPos, "ClaimGuest")
         LOG("Green", "guest: ClaimQuest = " .. tostring(guestClaimed))
 
+        -- ★ 6,1 НЕ включаем — оставляем OFF
         LOG("Green", "★ guest: ВСЁ СДЕЛАНО (6,1 остаётся OFF)")
     end
 
@@ -2305,11 +2227,17 @@ while State.running do
         end
         runTradeMode()
     elseif belt == "Green" then
-        -- GREEN: 6,1 принудительно OFF, никакого hold 6,1 не запускаем
+        -- ★ 6,1 гасим СРАЗУ при детекте green
+        LOG("Main", "★ GREEN DETECTED — выключаю 6,1 немедленно")
         if getOptionState(TAB_MAIN, OPT_MAIN) == true then
             setOption(TAB_MAIN, OPT_MAIN, false)
             task.wait(0.5)
         end
+        if getOptionState(TAB_MAIN, OPT_MAIN) == true then
+            ensureOptionOffInfinite(TAB_MAIN, OPT_MAIN)
+        end
+        LOG("Main", "★ 6,1 OFF, стартую green")
+
         if not State.greenDone then
             runGreenMode()
         else
