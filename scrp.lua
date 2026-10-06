@@ -1,6 +1,6 @@
 --!nocheck
 -- ============================================================
--- MERGED SCRIPT — Green + Full Dispatcher
+-- MERGED SCRIPT — Green + Full Dispatcher (v2, с sync)
 -- ============================================================
 
 -- ============================================================
@@ -750,7 +750,6 @@ local function ensureOptionOn(tabIndex, optIndex, maxTries)
     return ensureOptionState(tabIndex, optIndex, true, maxTries)
 end
 
--- бесконечные (для green)
 local function ensureOptionOffInfinite(tabIndex, optIndex)
     while State.running do
         if getOptionState(tabIndex, optIndex) == false then return true end
@@ -1903,6 +1902,28 @@ local function greenRequestUnmatch()
     pcall(function() return game:HttpGet(url) end)
 end
 
+-- GREEN HTTP: результат ClaimQuest + проверка пары
+local function greenReportResult(success)
+    local url = SERVER_URL
+        .. "/green_result?nickname=" .. HttpService:UrlEncode(player.Name)
+        .. "&success=" .. (success and "true" or "false")
+    pcall(function() return game:HttpGet(url) end)
+end
+
+local function greenFetchCheck()
+    local url = SERVER_URL .. "/green_check?nickname=" .. HttpService:UrlEncode(player.Name)
+    local ok, resp = pcall(function() return game:HttpGet(url) end)
+    if not ok then return nil end
+    local ok2, data = pcall(function() return HttpService:JSONDecode(resp) end)
+    if not ok2 or type(data) ~= "table" then return nil end
+    return data
+end
+
+local function greenReset()
+    local url = SERVER_URL .. "/green_reset?nickname=" .. HttpService:UrlEncode(player.Name)
+    pcall(function() return game:HttpGet(url) end)
+end
+
 local function greenFindFruitTool()
     local char = player.Character
     local backpack = player:FindFirstChild("Backpack")
@@ -2006,6 +2027,7 @@ local function greenTryClaimQuest(myPos, tag)
     return true, resp
 end
 
+-- ★ Бесконечный цикл: snap-to-pos + claim до resp==true
 local function greenClaimLoop(myPos, tag)
     tag = tag or "Claim"
     local i = 0
@@ -2030,9 +2052,9 @@ local function runGreenMode()
     State.mode = "green"
     LOG("Green", "=== START ===")
 
-    -- страховка: 6,1 должен быть OFF (диспетчер уже выключил)
+    -- страховка 6,1 OFF
     if getOptionState(TAB_MAIN, OPT_MAIN) == true then
-        LOG("Green", "★ 6,1 внезапно ON — глушу (infinite)")
+        LOG("Green", "★ 6,1 ON — глушу (infinite)")
         ensureOptionOffInfinite(TAB_MAIN, OPT_MAIN)
     end
 
@@ -2068,10 +2090,7 @@ local function runGreenMode()
                 while w < 30 and game.JobId ~= match.job_id do
                     task.wait(1); w += 1
                 end
-                if game.JobId == match.job_id then
-                    teleported = true
-                    break
-                end
+                if game.JobId == match.job_id then teleported = true; break end
             end
             LOG("Green", "guest: телепорт не удался, повтор"); task.wait(2)
         end
@@ -2080,122 +2099,135 @@ local function runGreenMode()
         greenRequestMatch()
     end
 
-    -- 6,1 проверка (без включения)
-    LOG("Green", "★ проверяю (" .. TAB_TOGGLE .. "," .. OPT_TOGGLE .. ") — должно быть OFF")
-    local st = getOptionState(TAB_TOGGLE, OPT_TOGGLE)
-    LOG("Green", "  текущее: " .. tostring(st))
-    if st == true then
-        LOG("Green", "  выключаю (" .. TAB_TOGGLE .. "," .. OPT_TOGGLE .. ")")
-        local okOff = ensureOptionOffInfinite(TAB_TOGGLE, OPT_TOGGLE)
-        LOG("Green", "  ensureOptionOff = " .. tostring(okOff))
-    else
-        LOG("Green", "  уже OFF — ок")
+    -- повторная страховка 6,1 OFF
+    if getOptionState(TAB_MAIN, OPT_MAIN) == true then
+        ensureOptionOffInfinite(TAB_MAIN, OPT_MAIN)
     end
 
+    -- чистим старые результаты на сервере
+    greenReset()
+
+    local isHost = (match.role == "host")
     local myPos, partnerPos
-    if match.role == "host" then
+    if isHost then
         myPos, partnerPos = GREEN_HOST_POS, GREEN_GUEST_POS
     else
         myPos, partnerPos = GREEN_GUEST_POS, GREEN_HOST_POS
     end
 
-    goToAndFace(myPos, partnerPos, GREEN_MOVE_SPEED)
-    task.wait(0.3)
-    do
-        local ok, d = greenIsOnSpot(myPos)
-        LOG("Green", string.format("после прилёта: dist=%.2f onSpot=%s", d, tostring(ok)))
-        if not ok then greenSnapToSpot(myPos, partnerPos) end
+    local iteration = 0
+    local bothDone = false
+
+    while State.running and not bothDone do
+        iteration += 1
+        LOG("Green", "★★★ ITERATION #" .. iteration .. " ★★★")
+
+        -- 1. занять позицию + фейс партнёра
+        goToAndFace(myPos, partnerPos, GREEN_MOVE_SPEED)
+        task.wait(0.3)
+        do
+            local ok, d = greenIsOnSpot(myPos)
+            LOG("Green", string.format("после прилёта: dist=%.2f onSpot=%s", d, tostring(ok)))
+            if not ok then greenSnapToSpot(myPos, partnerPos) end
+        end
+
+        -- 2. ждём партнёра рядом
+        LOG("Green", "★ жду партнёра в радиусе " .. PARTNER_NEAR_RADIUS)
+        greenWaitPartnerNearby(match.partner_name, PARTNER_NEAR_RADIUS)
+        task.wait(DELAY_AFTER_ARRIVE)
+
+        -- 3. синхронизация статуса с сервером
+        local srv = greenFetchCheck()
+        local myDone      = srv and srv.me == true
+        local partnerDone = srv and srv.partner_result == true
+        LOG("Green", string.format(
+            "server: me=%s partner=%s",
+            tostring(srv and srv.me), tostring(srv and srv.partner_result)))
+
+        if isHost then
+            -- ── HOST ──
+            if not greenFindFruitTool() then
+                LOG("Green", "host: нет fruit — 8,7 ON")
+                greenDumpInventory("host:before-8,7")
+                ensureOptionOnInfinite(TAB_FRUIT, OPT_FRUIT)
+                LOG("Green", "host: жду fruit-tool...")
+                greenWaitFruitTool()
+                greenDumpInventory("host:after-8,7")
+                LOG("Green", "host: 8,7 OFF")
+                ensureOptionOffInfinite(TAB_FRUIT, OPT_FRUIT)
+            else
+                LOG("Green", "host: fruit уже есть — 8,7 не трогаю")
+            end
+
+            -- drop #1 → guest
+            LOG("Green", "host: drop #1 (отдаю guest'у)")
+            local ok1, err1 = greenEatFruitDrop()
+            LOG("Green", "host: drop #1 = " .. tostring(ok1) .. " / " .. tostring(err1))
+            task.wait(DELAY_AFTER_DROP)
+
+            if not myDone then
+                LOG("Green", "host: жду fruit обратно от guest'а...")
+                greenWaitFruitTool()
+                task.wait(DELAY_BEFORE_CLAIM)
+                LOG("Green", "host: claim loop (snap-to-pos, until true)")
+                local claimOk = greenClaimLoop(myPos, "Claim")
+                LOG("Green", "host: claim = " .. tostring(claimOk))
+                greenReportResult(claimOk)
+            else
+                LOG("Green", "host: уже сдал ранее — claim скипаю")
+            end
+
+            task.wait(DELAY_BEFORE_DROP2)
+            LOG("Green", "host: drop #2 (для guest claim)")
+            local ok2, err2 = greenEatFruitDrop()
+            LOG("Green", "host: drop #2 = " .. tostring(ok2) .. " / " .. tostring(err2))
+            task.wait(DELAY_AFTER_CLAIM)
+
+            LOG("Green", "★ host: ВСЁ СДЕЛАНО (6,1 остаётся OFF)")
+
+        else
+            -- ── GUEST ──
+            LOG("Green", "guest: жду fruit #1 от host'а...")
+            greenWaitFruitTool()
+            task.wait(DELAY_AFTER_DROP)
+
+            LOG("Green", "guest: drop #1 (возвращаю host'у)")
+            local ok1, err1 = greenEatFruitDrop()
+            LOG("Green", "guest: drop #1 = " .. tostring(ok1) .. " / " .. tostring(err1))
+            task.wait(DELAY_AFTER_DROP)
+
+            LOG("Green", "guest: жду fruit #2 от host'а...")
+            greenWaitFruitTool()
+            task.wait(DELAY_BEFORE_CLAIM)
+
+            if not myDone then
+                LOG("Green", "guest: claim loop (snap-to-pos, until true)")
+                local claimOk = greenClaimLoop(myPos, "ClaimGuest")
+                LOG("Green", "guest: claim = " .. tostring(claimOk))
+                greenReportResult(claimOk)
+            else
+                LOG("Green", "guest: уже сдал ранее — claim скипаю")
+            end
+
+            LOG("Green", "★ guest: ВСЁ СДЕЛАНО (6,1 остаётся OFF)")
+        end
+
+        -- 4. проверяем оба статуса
+        task.wait(2)
+        local final = greenFetchCheck()
+        if final and final.both == true then
+            bothDone = true
+            LOG("Green", "★★★ ОБА TRUE — выходим из green ★★★")
+        else
+            LOG("Green", string.format(
+                "★ не оба true (me=%s partner=%s) — повтор итерации",
+                tostring(final and final.me),
+                tostring(final and final.partner_result)))
+            task.wait(3)
+        end
     end
 
-    LOG("Green", "★ жду партнёра в радиусе " .. PARTNER_NEAR_RADIUS .. " стадов...")
-    greenWaitPartnerNearby(match.partner_name, PARTNER_NEAR_RADIUS)
-
-    LOG("Green", "★ пауза " .. DELAY_AFTER_ARRIVE .. "с — оба на месте")
-    task.wait(DELAY_AFTER_ARRIVE)
-
-    if match.role == "host" then
-        greenDumpInventory("host:before-8,7")
-        LOG("Green", "host: 8,7 ON (оба на месте)")
-        ensureOptionOnInfinite(TAB_FRUIT, OPT_FRUIT)
-        LOG("Green", "host: жду fruit-tool...")
-        local tool = greenWaitFruitTool()
-        LOG("Green", "host: fruit появился = " .. tostring(tool and tool.Name))
-        greenDumpInventory("host:after-8,7")
-        LOG("Green", "host: 8,7 OFF")
-        ensureOptionOffInfinite(TAB_FRUIT, OPT_FRUIT)
-    else
-        LOG("Green", "guest: 8,7 не трогаю")
-    end
-
-    local claimedMe = false
-
-    if match.role == "host" then
-        LOG("Green", "=== HOST PHASE ===")
-
-        LOG("Green", "host: drop #1 (отдаю guest'у)")
-        local ok1, err1 = greenEatFruitDrop()
-        LOG("Green", "host: drop #1 = " .. tostring(ok1) .. " / " .. tostring(err1))
-        greenDumpInventory("host:after-drop1")
-
-        LOG("Green", "★ host: пауза " .. DELAY_AFTER_DROP .. "с после drop #1")
-        task.wait(DELAY_AFTER_DROP)
-
-        LOG("Green", "host: жду fruit обратно от guest'а...")
-        local tool = greenWaitFruitTool()
-        LOG("Green", "host: получил обратно = " .. tostring(tool and tool.Name))
-        greenDumpInventory("host:after-receive1")
-
-        LOG("Green", "★ host: пауза " .. DELAY_BEFORE_CLAIM .. "с перед ClaimQuest")
-        task.wait(DELAY_BEFORE_CLAIM)
-        claimedMe = greenClaimLoop(myPos, "Claim")
-
-        LOG("Green", "★ host: пауза " .. DELAY_BEFORE_DROP2 .. "с перед drop #2")
-        task.wait(DELAY_BEFORE_DROP2)
-
-        LOG("Green", "host: drop #2 (отдаю guest'у для его ClaimQuest)")
-        local ok2, err2 = greenEatFruitDrop()
-        LOG("Green", "host: drop #2 = " .. tostring(ok2) .. " / " .. tostring(err2))
-        greenDumpInventory("host:after-drop2")
-
-        LOG("Green", "★ host: жду " .. DELAY_AFTER_CLAIM .. "с пока guest сделает ClaimQuest")
-        task.wait(DELAY_AFTER_CLAIM)
-
-        -- ★ 6,1 НЕ включаем — оставляем OFF
-        LOG("Green", "★ host: ВСЁ СДЕЛАНО (6,1 остаётся OFF)")
-    else
-        LOG("Green", "=== GUEST PHASE ===")
-
-        LOG("Green", "guest: жду fruit #1 от host'а...")
-        local tool1 = greenWaitFruitTool()
-        LOG("Green", "guest: получил #1 = " .. tostring(tool1 and tool1.Name))
-        greenDumpInventory("guest:after-receive1")
-
-        LOG("Green", "★ guest: пауза " .. DELAY_AFTER_DROP .. "с")
-        task.wait(DELAY_AFTER_DROP)
-
-        LOG("Green", "guest: drop #1 (возвращаю host'у)")
-        local ok1, err1 = greenEatFruitDrop()
-        LOG("Green", "guest: drop #1 = " .. tostring(ok1) .. " / " .. tostring(err1))
-        greenDumpInventory("guest:after-drop1")
-
-        LOG("Green", "★ guest: пауза " .. DELAY_AFTER_DROP .. "с после drop #1")
-        task.wait(DELAY_AFTER_DROP)
-
-        LOG("Green", "guest: жду fruit #2 от host'а...")
-        local tool2 = greenWaitFruitTool()
-        LOG("Green", "guest: получил #2 = " .. tostring(tool2 and tool2.Name))
-        greenDumpInventory("guest:after-receive2")
-
-        LOG("Green", "★ guest: пауза " .. DELAY_BEFORE_CLAIM .. "с перед ClaimQuest")
-        task.wait(DELAY_BEFORE_CLAIM)
-        local guestClaimed = greenClaimLoop(myPos, "ClaimGuest")
-        LOG("Green", "guest: ClaimQuest = " .. tostring(guestClaimed))
-
-        -- ★ 6,1 НЕ включаем — оставляем OFF
-        LOG("Green", "★ guest: ВСЁ СДЕЛАНО (6,1 остаётся OFF)")
-    end
-
-    LOG("Green", "=== DONE claimed=" .. tostring(claimedMe) .. " ===")
+    LOG("Green", "=== DONE ===")
     greenRequestUnmatch()
     State.greenDone = true
     State.mode = "none"
@@ -2227,7 +2259,6 @@ while State.running do
         end
         runTradeMode()
     elseif belt == "Green" then
-        -- ★ 6,1 гасим СРАЗУ при детекте green
         LOG("Main", "★ GREEN DETECTED — выключаю 6,1 немедленно")
         if getOptionState(TAB_MAIN, OPT_MAIN) == true then
             setOption(TAB_MAIN, OPT_MAIN, false)
