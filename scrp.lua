@@ -50,7 +50,7 @@ local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 -- ============================================================
--- ВЫБОР КОМАНДЫ СРАЗУ НА СТАРТЕ
+-- ВЫБОР КОМАНДЫ + ПРОВЕРКА КОНТИНЕНТА (СТРОГО В НАЧАЛЕ)
 -- ============================================================
 do
     local remotes = ReplicatedStorage and ReplicatedStorage:FindFirstChild("Remotes")
@@ -68,6 +68,71 @@ do
         WARN("Team", "нет Remotes на старте")
     end
 end
+
+-- локальная копия fireSequence (не зависим от того, что объявлено ниже)
+local function _checkFire(btn)
+    if not btn then return false end
+    if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return false end
+    local fired = false
+    for _, sigName in ipairs({"MouseEnter","MouseButton1Down","MouseButton1Click","MouseButton1Up","Activated","MouseLeave"}) do
+        local sig = btn[sigName]
+        if sig then
+            local ok, conns = pcall(function() return getconnections(sig) end)
+            if ok and conns then
+                for _, conn in ipairs(conns) do
+                    if conn.Enabled and type(conn.Function) == "function" then
+                        pcall(conn.Function); fired = true
+                    end
+                end
+            end
+        end
+    end
+    return fired
+end
+
+if not player.Character then
+    player.CharacterAdded:Wait()
+end
+LOG("Check", "Персонаж загружен, проверка континента...")
+
+while true do
+    local loadingGui = playerGui:FindFirstChild("LoadingGui")
+    local loadingText = loadingGui
+        and loadingGui:FindFirstChild("Root")
+        and loadingGui.Root:FindFirstChild("CanvasGroup")
+        and loadingGui.Root.CanvasGroup:FindFirstChild("Footer")
+        and loadingGui.Root.CanvasGroup.Footer:FindFirstChild("LoadingText")
+
+    if loadingText and loadingText:IsA("TextLabel") then
+        local text = string.lower(loadingText.Text)
+
+        if text:find("third") then
+            LOG("Check", "Обнаружен 'third'. Всё ок, идем дальше.")
+            break
+        elseif text:find("second") then
+            LOG("Check", "Обнаружен 'second'. Ищу кнопку Sea3...")
+
+            local serverBrowser = playerGui:FindFirstChild("ServerBrowser")
+            local sea3Btn = serverBrowser
+                and serverBrowser:FindFirstChild("Frame")
+                and serverBrowser.Frame:FindFirstChild("TeleportButtons")
+                and serverBrowser.Frame.TeleportButtons:FindFirstChild("Sea3")
+
+            if sea3Btn then
+                LOG("Check", "Кликаю Sea3")
+                _checkFire(sea3Btn)
+                task.wait(3)
+            else
+                WARN("Check", "Кнопка Sea3 не найдена по указанному пути")
+            end
+        end
+    end
+    task.wait(1)
+end
+LOG("Check", "Проверка континента пройдена.")
+-- ============================================================
+-- КОНЕЦ ПРОВЕРКИ. Ниже — весь остальной фул-скрипт без изменений
+-- ============================================================
 
 local RF_InteractDragonQuest = nil
 do
@@ -88,85 +153,8 @@ local State = {
     nobeltDone      = false,
     tradeDone       = false,
     inTrade         = false,
-    orangeNotified  = false,  -- in-memory флаг
+    orangeNotified  = false,  -- флаг: уведомили ли сервер о первом Orange
 }
-
--- ============================================================
--- ПЕРСИСТЕНТНЫЙ ФЛАГ ORANGE (переживает рестарт скрипта)
--- ============================================================
-local ORANGE_FLAG_FILE = "orange_achieved_" .. player.Name .. ".flag"
-
-local function _getgenvSafe()
-    if type(getgenv) == "function" then
-        local ok, g = pcall(getgenv)
-        if ok and type(g) == "table" then return g end
-    end
-    return nil
-end
-
-local function _fileExists(path)
-    if type(isfile) == "function" then
-        local ok, res = pcall(isfile, path)
-        if ok then return res == true end
-    end
-    return false
-end
-
-local function _writeFile(path, content)
-    if type(writefile) == "function" then
-        return pcall(writefile, path, content)
-    end
-    return false
-end
-
-local function isOrangeNotifiedPersistent()
-    if State.orangeNotified then return true end
-
-    local g = _getgenvSafe()
-    if g and g.__orangeNotified == true then
-        State.orangeNotified = true
-        LOG("Orange", "флаг в getgenv — пропускаю")
-        return true
-    end
-
-    if _fileExists(ORANGE_FLAG_FILE) then
-        State.orangeNotified = true
-        LOG("Orange", "флаг в файле '" .. ORANGE_FLAG_FILE .. "' — пропускаю")
-        return true
-    end
-
-    return false
-end
-
-local function markOrangeNotifiedPersistent()
-    State.orangeNotified = true
-    local g = _getgenvSafe()
-    if g then g.__orangeNotified = true end
-    _writeFile(ORANGE_FLAG_FILE, tostring(tick()))
-end
-
--- Вызывается ТОЛЬКО после успешного claim в trade-режиме (Yellow → Orange)
-local function notifyOrangeAchieved()
-    if isOrangeNotifiedPersistent() then
-        return true
-    end
-
-    local url = SERVER_URL
-        .. "/orange_achieved?nickname=" .. HttpService:UrlEncode(player.Name)
-        .. "&job_id=" .. HttpService:UrlEncode(game.JobId)
-
-    LOG("Orange", "→ запрос на сервер: " .. url)
-
-    local ok, resp = pcall(function() return game:HttpGet(url) end)
-    if ok then
-        LOG("Orange", "✓ ответ сервера: " .. tostring(resp))
-        markOrangeNotifiedPersistent()
-        return true
-    else
-        WARN("Orange", "✗ ошибка запроса: " .. tostring(resp) .. " (повтор при следующем claim)")
-        return false
-    end
-end
 
 -- ============================================================
 -- КОЛЛИЗИИ
@@ -236,52 +224,93 @@ local function fireSequence(btn)
     return fired
 end
 
--- ============================================================
--- ПРОВЕРКА КОНТИНЕНТА (точная копия рабочей короткой версии)
--- ============================================================
-if not player.Character then
-    player.CharacterAdded:Wait()
+local function findObjectByPath(root, ...)
+    local current = root
+    for _, segment in ipairs({...}) do
+        if not current then return nil end
+        current = current:FindFirstChild(segment)
+    end
+    return current
 end
-LOG("Check", "Персонаж загружен, проверка континента...")
 
-while true do
-    local loadingGui = playerGui:FindFirstChild("LoadingGui")
-    local loadingText = loadingGui
-        and loadingGui:FindFirstChild("Root")
-        and loadingGui.Root:FindFirstChild("CanvasGroup")
-        and loadingGui.Root.CanvasGroup:FindFirstChild("Footer")
-        and loadingGui.Root.CanvasGroup.Footer:FindFirstChild("LoadingText")
-
-    if loadingText and loadingText:IsA("TextLabel") then
-        local text = string.lower(loadingText.Text)
-
-        if text:find("third") then
-            LOG("Check", "Обнаружен 'third'. Всё ок, идем дальше.")
-            break
-        elseif text:find("second") then
-            LOG("Check", "Обнаружен 'second'. Ищу кнопку Sea3...")
-
-            local serverBrowser = playerGui:FindFirstChild("ServerBrowser")
-            local sea3Btn = serverBrowser
-                and serverBrowser:FindFirstChild("Frame")
-                and serverBrowser.Frame:FindFirstChild("TeleportButtons")
-                and serverBrowser.Frame.TeleportButtons:FindFirstChild("Sea3")
-
-            if sea3Btn then
-                LOG("Check", "Кликаю Sea3")
-                fireSequence(sea3Btn)
-                task.wait(3)
-            else
-                WARN("Check", "Кнопка Sea3 не найдена по указанному пути")
+local function findHudButtonByName(buttonName)
+    local hudRoot = playerGui:FindFirstChild("HUDRoot")
+    if not hudRoot then return nil end
+    local frame = hudRoot:FindFirstChild("Frame")
+    if not frame then return nil end
+    local hud = frame:FindFirstChild("HUD")
+    if not hud then return nil end
+    local function search(node)
+        for _, child in ipairs(node:GetChildren()) do
+            if (child:IsA("TextButton") or child:IsA("ImageButton")) and child.Name == buttonName then
+                return child
             end
+            local found = search(child)
+            if found then return found end
+        end
+        return nil
+    end
+    return search(hud)
+end
+
+local function waitForHudButton(buttonName, timeout)
+    local waited = 0
+    while waited < timeout do
+        local btn = findHudButtonByName(buttonName)
+        if btn then return btn end
+        task.wait(0.5); waited += 0.5
+    end
+    return nil
+end
+
+local function waitForObjectByPath(pathTable, timeout)
+    local waited = 0
+    while waited < timeout do
+        local obj = findObjectByPath(playerGui, table.unpack(pathTable))
+        if obj then return obj end
+        task.wait(0.5); waited += 0.5
+    end
+    return nil
+end
+
+local function findInventoryButtonByName(buttonName)
+    local inv = playerGui:FindFirstChild("Inventory")
+    if not inv then return nil end
+    for _, obj in ipairs(inv:GetDescendants()) do
+        if (obj:IsA("TextButton") or obj:IsA("ImageButton")) and obj.Name == buttonName then
+            return obj
         end
     end
-    task.wait(1)
+    return nil
 end
-LOG("Check", "Проверка континента пройдена.")
--- ============================================================
--- КОНЕЦ ВСТАВКИ
--- ============================================================
+
+local function findCategory(catName)
+    local c = findObjectByPath(playerGui, "Inventory","Inventory","Main","NavigationRail", catName)
+    if c then return c end
+    return findInventoryButtonByName(catName)
+end
+
+local function ensureCategoryOpen(catName)
+    local category = findCategory(catName)
+    if category then
+        fireSequence(category); task.wait(SCROLL_INITIAL_WAIT)
+        return category
+    end
+    local menuButton = waitForHudButton("Menu", 10)
+    if not menuButton then WARN("Cat", "нет Menu"); return nil end
+    fireSequence(menuButton); task.wait(1.5)
+
+    local itemsButton = waitForHudButton("Items", 10)
+    if not itemsButton then WARN("Cat", "нет Items"); return nil end
+    fireSequence(itemsButton); task.wait(1.5)
+
+    category = waitForObjectByPath({"Inventory","Inventory","Main","NavigationRail", catName}, 5)
+    if not category then category = findInventoryButtonByName(catName) end
+    if not category then WARN("Cat", "нет " .. catName); return nil end
+    fireSequence(category); task.wait(SCROLL_INITIAL_WAIT)
+    return category
+end
+
 -- ============================================================
 -- CALL REMOTE
 -- ============================================================
@@ -813,6 +842,29 @@ local function waitForHubReady(timeout)
         task.wait(0.5)
     end
     return false
+end
+
+-- ============================================================
+-- УВЕДОМЛЕНИЕ О ПОЛУЧЕНИИ ORANGE (для запуска ADB на сервере)
+-- ============================================================
+local function notifyOrangeAchieved()
+    if State.orangeNotified then return true end
+
+    local url = SERVER_URL
+        .. "/orange_achieved?nickname=" .. HttpService:UrlEncode(player.Name)
+        .. "&job_id=" .. HttpService:UrlEncode(game.JobId)
+
+    LOG("Orange", "→ запрос на сервер: " .. url)
+
+    local ok, resp = pcall(function() return game:HttpGet(url) end)
+    if ok then
+        LOG("Orange", "✓ ответ сервера: " .. tostring(resp))
+        State.orangeNotified = true
+        return true
+    else
+        WARN("Orange", "✗ ошибка запроса: " .. tostring(resp) .. " (повтор на следующей итерации)")
+        return false
+    end
 end
 
 -- ============================================================
@@ -1804,11 +1856,6 @@ local function runTradeMode()
     if claimed then
         State.tradeDone = true
         LOG("Trade", "=== DONE ===")
-
-        -- ★ ORANGE: Yellow-трейд завершён успешно → персонаж получил Orange.
-        -- Отправляем один раз за жизнь сервера (getgenv + файл + ORANGE_NOTIFIED).
-        LOG("Trade", "yellow → orange подтверждён, уведомляю сервер")
-        notifyOrangeAchieved()
     else
         WARN("Trade", "выход без claimed (State.running=false)")
     end
@@ -1832,6 +1879,17 @@ while State.running do
     LOG("Main", "---- цикл #" .. loop .. " belt=" .. State.currentBelt .. " ----")
 
     local belt = State.currentBelt
+
+    -- ========================================================
+    -- УВЕДОМЛЕНИЕ СЕРВЕРА О ПЕРВОМ ПОЛУЧЕНИИ ORANGE
+    -- ========================================================
+    -- Отправляется один раз за сессию скрипта. Сервер (Flask)
+    -- идемпотентен — на своей стороне хранит список уже уведомлённых,
+    -- поэтому при перезапуске скрипта adb повторно не запустится.
+    if belt == ORANGE_BELT_NAME and not State.orangeNotified then
+        notifyOrangeAchieved()
+        -- НЕ прерываем логику — продолжаем холдить 6,1
+    end
 
     if belt == "Yellow" and not State.tradeDone then
         if getOptionState(TAB_MAIN, OPT_MAIN) == true then
