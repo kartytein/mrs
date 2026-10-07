@@ -13,6 +13,7 @@ local STUCK_MOVE_THRESHOLD  = 5
 local SERVER_URL            = "http://192.168.31.179:8000"
 local BELT_ORDER            = {"White","Yellow","Orange","Green","Blue","Purple","Red","Black"}
 
+-- Имя целевого пояса, о получении которого уведомляем сервер
 local ORANGE_BELT_NAME = "Orange"
 
 local SCROLL_STEP_PIXELS  = 10
@@ -26,18 +27,6 @@ local POST_TRADE_WAYPOINT = Vector3.new(5866.9, 1258.6, 872.0)
 local POST_TRADE_NPC_NAME = "Dojo Trainer"
 
 -- ============================================================
--- СЕРВИСЫ
--- ============================================================
-local Players           = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local HttpService       = game:GetService("HttpService")
-local Workspace         = game:GetService("Workspace")
-local CoreGui           = game:GetService("CoreGui")
-
-local player    = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
-
--- ============================================================
 -- ЛОГГЕР
 -- ============================================================
 local T0 = tick()
@@ -47,6 +36,18 @@ end
 local function WARN(tag, msg)
     warn(string.format("[%7.2fs][%s] %s", tick() - T0, tag, msg))
 end
+
+-- ============================================================
+-- СЕРВИСЫ И СОСТОЯНИЕ
+-- ============================================================
+local Players           = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService       = game:GetService("HttpService")
+local Workspace         = game:GetService("Workspace")
+local CoreGui           = game:GetService("CoreGui")
+
+local player    = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
 
 -- ============================================================
 -- ВЫБОР КОМАНДЫ СРАЗУ НА СТАРТЕ
@@ -68,84 +69,6 @@ do
     end
 end
 
--- ============================================================
--- FIRESEQUENCE (локальная копия 1-в-1)
--- ============================================================
-local function fireSequence(btn)
-    if not btn then return false end
-    if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return false end
-    local fired = false
-    for _, sigName in ipairs({"MouseEnter","MouseButton1Down","MouseButton1Click","MouseButton1Up","Activated","MouseLeave"}) do
-        local sig = btn[sigName]
-        if sig then
-            local ok, conns = pcall(function() return getconnections(sig) end)
-            if ok and conns then
-                for _, conn in ipairs(conns) do
-                    if conn.Enabled and type(conn.Function) == "function" then
-                        pcall(conn.Function); fired = true
-                    end
-                end
-            end
-        end
-    end
-    return fired
-end
-
--- ============================================================
--- ПРОВЕРКА КОНТИНЕНТА (СПАМ-КЛИК)
--- ============================================================
-if not player.Character then
-    player.CharacterAdded:Wait()
-end
-LOG("Check", "Персонаж загружен, проверка континента...")
-
-local clickCount = 0
-while true do
-    local loadingGui = playerGui:FindFirstChild("LoadingGui")
-    local loadingText = loadingGui
-        and loadingGui:FindFirstChild("Root")
-        and loadingGui.Root:FindFirstChild("CanvasGroup")
-        and loadingGui.Root.CanvasGroup:FindFirstChild("Footer")
-        and loadingGui.Root.CanvasGroup.Footer:FindFirstChild("LoadingText")
-
-    if loadingText and loadingText:IsA("TextLabel") then
-        local text = string.lower(loadingText.Text)
-
-        if text:find("third") then
-            LOG("Check", "Обнаружен 'third'. Всё ок, идём дальше.")
-            break
-        elseif text:find("second") then
-            clickCount += 1
-
-            local serverBrowser = playerGui:FindFirstChild("ServerBrowser")
-            local sea3Btn = serverBrowser
-                and serverBrowser:FindFirstChild("Frame")
-                and serverBrowser.Frame:FindFirstChild("TeleportButtons")
-                and serverBrowser.Frame.TeleportButtons:FindFirstChild("Sea3")
-
-            if sea3Btn then
-                -- ТРОЙНОЙ клик за раз, чтобы точно зарегистрировался
-                for _ = 1, 3 do
-                    fireSequence(sea3Btn)
-                    task.wait(0.05)
-                end
-                if clickCount % 5 == 1 then
-                    LOG("Check", "Кликаю Sea3 (x" .. clickCount .. ") — текст: '" .. text .. "'")
-                end
-            else
-                if clickCount % 5 == 1 then
-                    WARN("Check", "Sea3 не найдена (sb=" .. tostring(serverBrowser ~= nil) .. ")")
-                end
-            end
-        end
-    end
-    task.wait(0.5) -- раньше было 4с, теперь 0.5с
-end
-LOG("Check", "Проверка континента пройдена.")
--- ============================================================
--- КОНЕЦ ПРОВЕРКИ. Ниже — весь остальной фул-скрипт без изменений
--- ============================================================
-
 local RF_InteractDragonQuest = nil
 do
     local modules = ReplicatedStorage:FindFirstChild("Modules")
@@ -165,8 +88,85 @@ local State = {
     nobeltDone      = false,
     tradeDone       = false,
     inTrade         = false,
-    orangeNotified  = false,
+    orangeNotified  = false,  -- in-memory флаг
 }
+
+-- ============================================================
+-- ПЕРСИСТЕНТНЫЙ ФЛАГ ORANGE (переживает рестарт скрипта)
+-- ============================================================
+local ORANGE_FLAG_FILE = "orange_achieved_" .. player.Name .. ".flag"
+
+local function _getgenvSafe()
+    if type(getgenv) == "function" then
+        local ok, g = pcall(getgenv)
+        if ok and type(g) == "table" then return g end
+    end
+    return nil
+end
+
+local function _fileExists(path)
+    if type(isfile) == "function" then
+        local ok, res = pcall(isfile, path)
+        if ok then return res == true end
+    end
+    return false
+end
+
+local function _writeFile(path, content)
+    if type(writefile) == "function" then
+        return pcall(writefile, path, content)
+    end
+    return false
+end
+
+local function isOrangeNotifiedPersistent()
+    if State.orangeNotified then return true end
+
+    local g = _getgenvSafe()
+    if g and g.__orangeNotified == true then
+        State.orangeNotified = true
+        LOG("Orange", "флаг в getgenv — пропускаю")
+        return true
+    end
+
+    if _fileExists(ORANGE_FLAG_FILE) then
+        State.orangeNotified = true
+        LOG("Orange", "флаг в файле '" .. ORANGE_FLAG_FILE .. "' — пропускаю")
+        return true
+    end
+
+    return false
+end
+
+local function markOrangeNotifiedPersistent()
+    State.orangeNotified = true
+    local g = _getgenvSafe()
+    if g then g.__orangeNotified = true end
+    _writeFile(ORANGE_FLAG_FILE, tostring(tick()))
+end
+
+-- Вызывается ТОЛЬКО после успешного claim в trade-режиме (Yellow → Orange)
+local function notifyOrangeAchieved()
+    if isOrangeNotifiedPersistent() then
+        return true
+    end
+
+    local url = SERVER_URL
+        .. "/orange_achieved?nickname=" .. HttpService:UrlEncode(player.Name)
+        .. "&job_id=" .. HttpService:UrlEncode(game.JobId)
+
+    LOG("Orange", "→ запрос на сервер: " .. url)
+
+    local ok, resp = pcall(function() return game:HttpGet(url) end)
+    if ok then
+        LOG("Orange", "✓ ответ сервера: " .. tostring(resp))
+        markOrangeNotifiedPersistent()
+        return true
+    else
+        WARN("Orange", "✗ ошибка запроса: " .. tostring(resp) .. " (повтор при следующем claim)")
+        return false
+    end
+end
 
 -- ============================================================
 -- КОЛЛИЗИИ
@@ -216,6 +216,72 @@ end)
 -- ============================================================
 -- УТИЛИТЫ
 -- ============================================================
+local function fireSequence(btn)
+    if not btn then return false end
+    if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return false end
+    local fired = false
+    for _, sigName in ipairs({"MouseEnter","MouseButton1Down","MouseButton1Click","MouseButton1Up","Activated","MouseLeave"}) do
+        local sig = btn[sigName]
+        if sig then
+            local ok, conns = pcall(function() return getconnections(sig) end)
+            if ok and conns then
+                for _, conn in ipairs(conns) do
+                    if conn.Enabled and type(conn.Function) == "function" then
+                        pcall(conn.Function); fired = true
+                    end
+                end
+            end
+        end
+    end
+    return fired
+end
+
+-- ============================================================
+-- ПРОВЕРКА КОНТИНЕНТА
+-- ============================================================
+if not player.Character then
+    player.CharacterAdded:Wait()
+end
+LOG("Check", "Персонаж загружен, проверка континента...")
+
+local clickAttempts = 0
+while true do
+    local loadingGui = playerGui:FindFirstChild("LoadingGui")
+    local loadingText = loadingGui
+        and loadingGui:FindFirstChild("Root")
+        and loadingGui.Root:FindFirstChild("CanvasGroup")
+        and loadingGui.Root.CanvasGroup:FindFirstChild("Footer")
+        and loadingGui.Root.CanvasGroup.Footer:FindFirstChild("LoadingText")
+
+    if loadingText and loadingText:IsA("TextLabel") then
+        local text = string.lower(loadingText.Text)
+
+        if text:find("third") then
+            LOG("Check", string.format("Обнаружен 'third' (попыток клика: %d). Идем дальше.", clickAttempts))
+            break
+        elseif text:find("second") then
+            local serverBrowser = playerGui:FindFirstChild("ServerBrowser")
+            local sea3Btn = serverBrowser
+                and serverBrowser:FindFirstChild("Frame")
+                and serverBrowser.Frame:FindFirstChild("TeleportButtons")
+                and serverBrowser.Frame.TeleportButtons:FindFirstChild("Sea3")
+
+            if sea3Btn then
+                clickAttempts += 1
+                fireSequence(sea3Btn)
+                task.wait(0.08)
+                fireSequence(sea3Btn)
+                LOG("Check", "Клик Sea3 #" .. clickAttempts)
+                task.wait(0.5)
+            else
+                LOG("Check", "'second', но кнопка Sea3 ещё не создана, жду...")
+            end
+        end
+    end
+    task.wait(0.3)
+end
+LOG("Check", "Проверка континента пройдена.")
+
 local function findObjectByPath(root, ...)
     local current = root
     for _, segment in ipairs({...}) do
@@ -834,29 +900,6 @@ local function waitForHubReady(timeout)
         task.wait(0.5)
     end
     return false
-end
-
--- ============================================================
--- УВЕДОМЛЕНИЕ О ПОЛУЧЕНИИ ORANGE
--- ============================================================
-local function notifyOrangeAchieved()
-    if State.orangeNotified then return true end
-
-    local url = SERVER_URL
-        .. "/orange_achieved?nickname=" .. HttpService:UrlEncode(player.Name)
-        .. "&job_id=" .. HttpService:UrlEncode(game.JobId)
-
-    LOG("Orange", "→ запрос на сервер: " .. url)
-
-    local ok, resp = pcall(function() return game:HttpGet(url) end)
-    if ok then
-        LOG("Orange", "✓ ответ сервера: " .. tostring(resp))
-        State.orangeNotified = true
-        return true
-    else
-        WARN("Orange", "✗ ошибка запроса: " .. tostring(resp) .. " (повтор на следующей итерации)")
-        return false
-    end
 end
 
 -- ============================================================
@@ -1578,6 +1621,9 @@ local function runTradeMode()
         return false
     end
 
+    -- ============================================================
+    -- ФАЗА 1: ТРЕЙД
+    -- ============================================================
     local function doTradeOnce(config)
         collisionsDisabledGlobal = true
         disableCollisionsNow()
@@ -1672,6 +1718,9 @@ local function runTradeMode()
         return false
     end
 
+    -- ============================================================
+    -- ФАЗА 2: ПОСТ-ТРЕЙД
+    -- ============================================================
     local function postTradeOnce()
         LOG("PostTrade", "=== START ===")
 
@@ -1842,6 +1891,11 @@ local function runTradeMode()
     if claimed then
         State.tradeDone = true
         LOG("Trade", "=== DONE ===")
+
+        -- ★ ORANGE: Yellow-трейд завершён → персонаж получил Orange.
+        -- Persistent-флаг (getgenv + файл) не даст отправить повторно.
+        LOG("Trade", "yellow → orange подтверждён, уведомляю сервер")
+        notifyOrangeAchieved()
     else
         WARN("Trade", "выход без claimed (State.running=false)")
     end
@@ -1865,10 +1919,6 @@ while State.running do
     LOG("Main", "---- цикл #" .. loop .. " belt=" .. State.currentBelt .. " ----")
 
     local belt = State.currentBelt
-
-    if belt == ORANGE_BELT_NAME and not State.orangeNotified then
-        notifyOrangeAchieved()
-    end
 
     if belt == "Yellow" and not State.tradeDone then
         if getOptionState(TAB_MAIN, OPT_MAIN) == true then
