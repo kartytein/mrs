@@ -100,7 +100,7 @@ local function fireSequence(btn)
 end
 
 -- ============================================================
--- ПРОВЕРКА КОНТИНЕНТА
+-- ПРОВЕРКА КОНТИНЕНТА (клик ровно 1 раз)
 -- ============================================================
 local function findLoadingText()
     local direct = playerGui:FindFirstChild("LoadingGui")
@@ -123,17 +123,30 @@ local function findLoadingText()
 end
 
 LOG("Check", "Ожидание LoadingText...")
+
+local sea3Clicked = false
+local lastText = ""
+
 while true do
     local loadingText = findLoadingText()
 
     if loadingText then
         local text = string.lower(tostring(loadingText.Text))
 
+        if text ~= lastText then
+            LOG("Check", "LoadingText: '" .. text .. "'")
+            lastText = text
+            if not string.find(text, "second", 1, true) then
+                sea3Clicked = false
+            end
+        end
+
         if string.find(text, "third", 1, true) then
-            LOG("Check", "Обнаружен 'third' ('" .. text .. "'). Всё ок, идём дальше.")
+            LOG("Check", "Обнаружен 'third'. Всё ок, идём дальше.")
             break
-        elseif string.find(text, "second", 1, true) then
-            LOG("Check", "Обнаружен 'second' ('" .. text .. "'). Ищу кнопку Sea3...")
+        elseif string.find(text, "second", 1, true) and not sea3Clicked then
+            sea3Clicked = true
+            LOG("Check", "Обнаружен 'second'. Ищу кнопку Sea3 (клик 1 раз)...")
 
             local serverBrowser = playerGui:FindFirstChild("ServerBrowser")
                 or CoreGui:FindFirstChild("ServerBrowser")
@@ -146,9 +159,10 @@ while true do
             if sea3Btn then
                 LOG("Check", "Кликаю Sea3")
                 fireSequence(sea3Btn)
-                task.wait(3)
             else
-                WARN("Check", "Sea3 не найдена (sb=" .. tostring(serverBrowser ~= nil) .. ")")
+                WARN("Check", "Sea3 не найдена, сбрасываю флаг для повтора через 2с")
+                task.wait(2)
+                sea3Clicked = false
             end
         end
     end
