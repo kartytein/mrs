@@ -13,7 +13,6 @@ local STUCK_MOVE_THRESHOLD  = 5
 local SERVER_URL            = "http://192.168.31.179:8000"
 local BELT_ORDER            = {"White","Yellow","Orange","Green","Blue","Purple","Red","Black"}
 
--- Имя целевого пояса, о получении которого уведомляем сервер
 local ORANGE_BELT_NAME = "Orange"
 
 local SCROLL_STEP_PIXELS  = 10
@@ -88,85 +87,8 @@ local State = {
     nobeltDone      = false,
     tradeDone       = false,
     inTrade         = false,
-    orangeNotified  = false,  -- in-memory флаг
+    orangeNotified  = false,
 }
-
--- ============================================================
--- ПЕРСИСТЕНТНЫЙ ФЛАГ ORANGE (переживает рестарт скрипта)
--- ============================================================
-local ORANGE_FLAG_FILE = "orange_achieved_" .. player.Name .. ".flag"
-
-local function _getgenvSafe()
-    if type(getgenv) == "function" then
-        local ok, g = pcall(getgenv)
-        if ok and type(g) == "table" then return g end
-    end
-    return nil
-end
-
-local function _fileExists(path)
-    if type(isfile) == "function" then
-        local ok, res = pcall(isfile, path)
-        if ok then return res == true end
-    end
-    return false
-end
-
-local function _writeFile(path, content)
-    if type(writefile) == "function" then
-        return pcall(writefile, path, content)
-    end
-    return false
-end
-
-local function isOrangeNotifiedPersistent()
-    if State.orangeNotified then return true end
-
-    local g = _getgenvSafe()
-    if g and g.__orangeNotified == true then
-        State.orangeNotified = true
-        LOG("Orange", "флаг в getgenv — пропускаю")
-        return true
-    end
-
-    if _fileExists(ORANGE_FLAG_FILE) then
-        State.orangeNotified = true
-        LOG("Orange", "флаг в файле '" .. ORANGE_FLAG_FILE .. "' — пропускаю")
-        return true
-    end
-
-    return false
-end
-
-local function markOrangeNotifiedPersistent()
-    State.orangeNotified = true
-    local g = _getgenvSafe()
-    if g then g.__orangeNotified = true end
-    _writeFile(ORANGE_FLAG_FILE, tostring(tick()))
-end
-
--- Вызывается ТОЛЬКО после успешного claim в trade-режиме (Yellow → Orange)
-local function notifyOrangeAchieved()
-    if isOrangeNotifiedPersistent() then
-        return true
-    end
-
-    local url = SERVER_URL
-        .. "/orange_achieved?nickname=" .. HttpService:UrlEncode(player.Name)
-        .. "&job_id=" .. HttpService:UrlEncode(game.JobId)
-
-    LOG("Orange", "→ запрос на сервер: " .. url)
-
-    local ok, resp = pcall(function() return game:HttpGet(url) end)
-    if ok then
-        LOG("Orange", "✓ ответ сервера: " .. tostring(resp))
-        markOrangeNotifiedPersistent()
-        return true
-    else
-        WARN("Orange", "✗ ошибка запроса: " .. tostring(resp) .. " (повтор при следующем claim)")
-        return false
-    end
-end
 
 -- ============================================================
 -- КОЛЛИЗИИ
@@ -900,6 +822,29 @@ local function waitForHubReady(timeout)
         task.wait(0.5)
     end
     return false
+end
+
+-- ============================================================
+-- УВЕДОМЛЕНИЕ О ПОЛУЧЕНИИ ORANGE
+-- ============================================================
+local function notifyOrangeAchieved()
+    if State.orangeNotified then return true end
+
+    local url = SERVER_URL
+        .. "/orange_achieved?nickname=" .. HttpService:UrlEncode(player.Name)
+        .. "&job_id=" .. HttpService:UrlEncode(game.JobId)
+
+    LOG("Orange", "→ запрос на сервер: " .. url)
+
+    local ok, resp = pcall(function() return game:HttpGet(url) end)
+    if ok then
+        LOG("Orange", "✓ ответ сервера: " .. tostring(resp))
+        State.orangeNotified = true
+        return true
+    else
+        WARN("Orange", "✗ ошибка запроса: " .. tostring(resp) .. " (повтор при следующем claim)")
+        return false
+    end
 end
 
 -- ============================================================
@@ -1893,7 +1838,8 @@ local function runTradeMode()
         LOG("Trade", "=== DONE ===")
 
         -- ★ ORANGE: Yellow-трейд завершён → персонаж получил Orange.
-        -- Persistent-флаг (getgenv + файл) не даст отправить повторно.
+        -- Отправляем один раз. При рестарте скрипта belt уже Orange →
+        -- trade-режим не запустится → повторного запроса не будет.
         LOG("Trade", "yellow → orange подтверждён, уведомляю сервер")
         notifyOrangeAchieved()
     else
