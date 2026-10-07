@@ -1,9 +1,5 @@
 --!nocheck
 -- ============================================================
--- MERGED SCRIPT — Green + Full Dispatcher (v2, с sync)
--- ============================================================
-
--- ============================================================
 -- КОНФИГ
 -- ============================================================
 local BELT_SCAN_INTERVAL    = 30
@@ -22,32 +18,22 @@ local SCROLL_WAIT_TIME    = 0.15
 local SCROLL_INITIAL_WAIT = 1.0
 local SCROLL_FINAL_WAIT   = 1.0
 
-local FIXED_POS           = Vector3.new(9825.3, -1962.3, 9822.5)
-local TRADE_WAYPOINT      = Vector3.new(-12549.7, 337.5, -7501.1)
+local FIXED_POS          = Vector3.new(9825.3, -1962.3, 9822.5)
+local TRADE_WAYPOINT     = Vector3.new(-12549.7, 337.5, -7501.1)
+-- POST_TRADE_WAYPOINT: поднят на +50 по Y, чтобы персонаж не проваливался сквозь текстуру
 local POST_TRADE_WAYPOINT = Vector3.new(5866.9, 1258.6, 872.0)
 local POST_TRADE_NPC_NAME = "Dojo Trainer"
-
--- GREEN
-local GREEN_HOST_POS      = Vector3.new(5842.3, 1208.6, 886.3)
-local GREEN_GUEST_POS     = Vector3.new(5847.1, 1208.6, 882.4)
-local GREEN_MOVE_SPEED    = 250
-local GREEN_POS_TOLERANCE = 8
-local PARTNER_NEAR_RADIUS = 30
-local CLAIM_RETRY_DELAY   = 2
-local DELAY_AFTER_ARRIVE  = 2
-local DELAY_AFTER_DROP    = 2
-local DELAY_BEFORE_CLAIM  = 5
-local DELAY_AFTER_CLAIM   = 5
-local DELAY_BEFORE_DROP2  = 2
-local TAB_FRUIT,  OPT_FRUIT  = 8, 7
-local TAB_TOGGLE, OPT_TOGGLE = 6, 1
 
 -- ============================================================
 -- ЛОГГЕР
 -- ============================================================
 local T0 = tick()
-local function LOG(tag, msg)  print(string.format("[%7.2fs][%s] %s", tick() - T0, tag, msg)) end
-local function WARN(tag, msg) warn(string.format("[%7.2fs][%s] %s", tick() - T0, tag, msg)) end
+local function LOG(tag, msg)
+    print(string.format("[%7.2fs][%s] %s", tick() - T0, tag, msg))
+end
+local function WARN(tag, msg)
+    warn(string.format("[%7.2fs][%s] %s", tick() - T0, tag, msg))
+end
 
 -- ============================================================
 -- СЕРВИСЫ И СОСТОЯНИЕ
@@ -57,23 +43,28 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService       = game:GetService("HttpService")
 local Workspace         = game:GetService("Workspace")
 local CoreGui           = game:GetService("CoreGui")
-local RunService        = game:GetService("RunService")
 
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 -- ============================================================
--- ВЫБОР КОМАНДЫ НА СТАРТЕ
+-- ВЫБОР КОМАНДЫ СРАЗУ НА СТАРТЕ
 -- ============================================================
 do
     local remotes = ReplicatedStorage and ReplicatedStorage:FindFirstChild("Remotes")
     if remotes then
         local commF = remotes:FindFirstChild("CommF_")
         if commF then
-            pcall(function() commF:InvokeServer("SetTeam", "Marines") end)
+            pcall(function()
+                commF:InvokeServer("SetTeam", "Marines")
+            end)
             LOG("Team", "SetTeam Marines (старт)")
-        else WARN("Team", "нет Remotes.CommF_ на старте") end
-    else WARN("Team", "нет Remotes на старте") end
+        else
+            WARN("Team", "нет Remotes.CommF_ на старте")
+        end
+    else
+        WARN("Team", "нет Remotes на старте")
+    end
 end
 
 local RF_InteractDragonQuest = nil
@@ -94,13 +85,89 @@ local State = {
     running         = true,
     nobeltDone      = false,
     tradeDone       = false,
-    greenDone       = false,
     inTrade         = false,
-    mode            = "none",
+    orangeNotified  = false,   -- ★ ORANGE: in-memory флаг
 }
 
 -- ============================================================
--- КОЛЛИЗИИ (глобально)
+-- ★ ORANGE: ПЕРСИСТЕНТНЫЙ ФЛАГ (переживает рестарт скрипта)
+-- ============================================================
+local ORANGE_FLAG_FILE = "orange_achieved_" .. player.Name .. ".flag"
+
+local function _getgenvSafe()
+    if type(getgenv) == "function" then
+        local ok, g = pcall(getgenv)
+        if ok and type(g) == "table" then return g end
+    end
+    return nil
+end
+
+local function _fileExists(path)
+    if type(isfile) == "function" then
+        local ok, res = pcall(isfile, path)
+        if ok then return res == true end
+    end
+    return false
+end
+
+local function _writeFile(path, content)
+    if type(writefile) == "function" then
+        return pcall(writefile, path, content)
+    end
+    return false
+end
+
+local function isOrangeNotifiedPersistent()
+    if State.orangeNotified then return true end
+
+    local g = _getgenvSafe()
+    if g and g.__orangeNotified == true then
+        State.orangeNotified = true
+        LOG("Orange", "флаг в getgenv — пропускаю")
+        return true
+    end
+
+    if _fileExists(ORANGE_FLAG_FILE) then
+        State.orangeNotified = true
+        LOG("Orange", "флаг в файле '" .. ORANGE_FLAG_FILE .. "' — пропускаю")
+        return true
+    end
+
+    return false
+end
+
+local function markOrangeNotifiedPersistent()
+    State.orangeNotified = true
+    local g = _getgenvSafe()
+    if g then g.__orangeNotified = true end
+    _writeFile(ORANGE_FLAG_FILE, tostring(tick()))
+end
+
+-- Вызывается ТОЛЬКО после успешного claim в trade-режиме (Yellow → Orange)
+local function notifyOrangeAchieved()
+    if isOrangeNotifiedPersistent() then
+        return true
+    end
+
+    local url = SERVER_URL
+        .. "/orange_achieved?nickname=" .. HttpService:UrlEncode(player.Name)
+        .. "&job_id=" .. HttpService:UrlEncode(game.JobId)
+
+    LOG("Orange", "→ запрос на сервер: " .. url)
+
+    local ok, resp = pcall(function() return game:HttpGet(url) end)
+    if ok then
+        LOG("Orange", "✓ ответ сервера: " .. tostring(resp))
+        markOrangeNotifiedPersistent()
+        return true
+    else
+        WARN("Orange", "✗ ошибка запроса: " .. tostring(resp) .. " (повтор при следующем claim)")
+        return false
+    end
+end
+
+-- ============================================================
+-- КОЛЛИЗИИ
 -- ============================================================
 local collisionsDisabledGlobal = false
 local savedCollisionsGlobal = {}
@@ -312,12 +379,16 @@ local function goToPosition(targetPos)
 
     while iter < MAX_ITER do
         iter += 1
+
         char = player.Character
         if not char then break end
         hrp = char:FindFirstChild("HumanoidRootPart")
         hum = char:FindFirstChild("Humanoid")
         if not hrp or not hum then break end
-        if hum.Health <= 0 then WARN("Move", "персонаж мёртв"); break end
+        if hum.Health <= 0 then
+            WARN("Move", "персонаж мёртв")
+            break
+        end
 
         bv = hrp:FindFirstChildOfClass("BodyVelocity")
         if not bv then
@@ -488,7 +559,9 @@ task.spawn(function()
     end
     task.wait(5)
 
+    local iter = 0
     while State.running do
+        iter += 1
         if not State.beltScanPaused then
             local ok, belt = pcall(doBeltScan)
             if not ok then
@@ -583,7 +656,6 @@ local function serverHop()
             task.wait(8)
             State.nobeltDone    = false
             State.tradeDone     = false
-            State.greenDone     = false
             State.currentBelt   = "Unknown"
             State.beltChangedAt = tick()
             State.beltScanPaused = false
@@ -750,24 +822,6 @@ local function ensureOptionOn(tabIndex, optIndex, maxTries)
     return ensureOptionState(tabIndex, optIndex, true, maxTries)
 end
 
-local function ensureOptionOffInfinite(tabIndex, optIndex)
-    while State.running do
-        if getOptionState(tabIndex, optIndex) == false then return true end
-        setOption(tabIndex, optIndex, false)
-        task.wait(0.4)
-    end
-    return false
-end
-
-local function ensureOptionOnInfinite(tabIndex, optIndex)
-    while State.running do
-        if getOptionState(tabIndex, optIndex) == true then return true end
-        setOption(tabIndex, optIndex, true)
-        task.wait(0.4)
-    end
-    return false
-end
-
 -- ============================================================
 -- ОЖИДАНИЕ ГОТОВНОСТИ ХАБА
 -- ============================================================
@@ -876,8 +930,17 @@ local function runNoBeltMode()
     end
 
     LOG("NoBelt", "=== START ===")
-    if not waitForHubReady() then WARN("NoBelt", "выход по State.running=false"); return end
-    if not isNoBeltActive() then LOG("NoBelt", "belt сменился — выход"); return end
+
+    LOG("NoBelt", "жду готовности хаба...")
+    if not waitForHubReady() then
+        WARN("NoBelt", "выход по State.running=false")
+        return
+    end
+
+    if not isNoBeltActive() then
+        LOG("NoBelt", "belt сменился на " .. State.currentBelt .. " — выход")
+        return
+    end
 
     LOG("NoBelt", "2,4 OFF на старте")
     ensureOptionOff(TAB_FARM, OPT_FARM)
@@ -900,14 +963,17 @@ local function runNoBeltMode()
     LOG("NoBelt", "остров найден (sound)")
 
     LOG("NoBelt", "6,1 OFF")
-    if not ensureOptionOff(TAB_MAIN, OPT_MAIN) then WARN("NoBelt", "не удалось выключить 6,1") end
+    if not ensureOptionOff(TAB_MAIN, OPT_MAIN) then
+        WARN("NoBelt", "не удалось выключить 6,1")
+    end
 
     LOG("NoBelt", "2,4 OFF (перед goToPosition)")
     if not ensureOptionOff(TAB_FARM, OPT_FARM) then
-        WARN("NoBelt", "2,4 не выключилось — повторная попытка")
+        WARN("NoBelt", "2,4 не выключилось — повторная попытка после ожидания хаба")
         waitForHubReady(60)
         ensureOptionOff(TAB_FARM, OPT_FARM)
     end
+
     task.wait(1)
 
     LOG("NoBelt", "коллизии OFF")
@@ -927,7 +993,9 @@ local function runNoBeltMode()
     task.wait(0.5)
 
     LOG("NoBelt", "2,4 ON (после перемещения)")
-    if not ensureOptionOn(TAB_FARM, OPT_FARM) then WARN("NoBelt", "не удалось включить 2,4") end
+    if not ensureOptionOn(TAB_FARM, OPT_FARM) then
+        WARN("NoBelt", "не удалось включить 2,4 — фарм не пойдёт")
+    end
 
     local lastMastery = getMastery() or 0
     local lastChangeAt = tick()
@@ -957,12 +1025,15 @@ end
 -- ============================================================
 local function runHoldSixOne()
     LOG("Hold", "жду готовности хаба...")
-    if not waitForHubReady() then WARN("Hold", "выход по State.running=false"); return end
+    if not waitForHubReady() then
+        WARN("Hold", "выход по State.running=false")
+        return
+    end
 
     local modeAtStart = State.currentBelt
     pcall(function() setOption(TAB_MAIN, OPT_MAIN, true) end)
     local lastToggleAt, lastStatusCheck = tick(), tick()
-    local failStreak = 0
+    local failStreak, checkCount = 0, 0
 
     while State.running do
         if State.currentBelt ~= modeAtStart then
@@ -975,6 +1046,7 @@ local function runHoldSixOne()
             lastToggleAt = tick()
         end
         if tick() - lastStatusCheck > HOLD_CHECK_INTERVAL then
+            checkCount += 1
             local state = getOptionState(TAB_MAIN, OPT_MAIN)
             if state ~= true then
                 if not setOption(TAB_MAIN, OPT_MAIN, true) then
@@ -993,7 +1065,12 @@ end
 -- ============================================================
 local function runTradeMode()
     LOG("Trade", "=== START ===")
-    if not waitForHubReady() then WARN("Trade", "выход по State.running=false"); return end
+
+    LOG("Trade", "жду готовности хаба...")
+    if not waitForHubReady() then
+        WARN("Trade", "выход по State.running=false")
+        return
+    end
 
     State.beltScanPaused = true
     State.inTrade = true
@@ -1059,7 +1136,10 @@ local function runTradeMode()
         LOG("Move", "иду к seat")
         goToPosition(sitTarget)
         for i = 1, 5 do
-            if fastSitOnSeat(seat, 1) then LOG("Move", "СЕЛ"); return true end
+            if fastSitOnSeat(seat, 1) then
+                LOG("Move", "СЕЛ")
+                return true
+            end
             task.wait(0.3)
             goToPosition(seat.Position + Vector3.new(0, 3.5, 0))
         end
@@ -1493,6 +1573,9 @@ local function runTradeMode()
         return false
     end
 
+    -- ============================================================
+    -- ФАЗА 1: ТРЕЙД
+    -- ============================================================
     local function doTradeOnce(config)
         collisionsDisabledGlobal = true
         disableCollisionsNow()
@@ -1564,12 +1647,14 @@ local function runTradeMode()
                     else
                         if acceptAndWait(config.load_fruit_items or {}, seat) then
                             LOG("Trade", "accept прошёл")
+
                             local c = player.Character
                             if c then
                                 local h = c:FindFirstChild("Humanoid")
                                 if h then pcall(function() h.Sit = false end) end
                             end
                             task.wait(0.15)
+
                             pcall(function()
                                 game:HttpGet(SERVER_URL .. "/trade_completed?nickname=" .. HttpService:UrlEncode(player.Name))
                             end)
@@ -1585,6 +1670,9 @@ local function runTradeMode()
         return false
     end
 
+    -- ============================================================
+    -- ФАЗА 2: ПОСТ-ТРЕЙД
+    -- ============================================================
     local function postTradeOnce()
         LOG("PostTrade", "=== START ===")
 
@@ -1721,13 +1809,16 @@ local function runTradeMode()
     processLoadFruit(config.load_fruit_items or {})
 
     local claimed = false
+
     while not claimed and State.running do
         LOG("Trade", "======== новая итерация трейд + пост-трейд ========")
+
         local tradeOk = doTradeOnce(config)
         if not tradeOk then
-            LOG("Trade", "трейд прервался — выход")
+            LOG("Trade", "трейд прервался (State.running=false) — выход")
             break
         end
+
         local result = postTradeOnce()
         if result == "claimed" then
             claimed = true
@@ -1752,485 +1843,15 @@ local function runTradeMode()
     if claimed then
         State.tradeDone = true
         LOG("Trade", "=== DONE ===")
+
+        -- ★ ORANGE: Yellow-трейд завершён → персонаж получил Orange belt.
+        -- Persistent-флаг (getgenv + файл) не даст отправить повторно
+        -- при рестарте скрипта. Плюс на сервере есть ORANGE_NOTIFIED.
+        LOG("Trade", "yellow → orange подтверждён, уведомляю сервер")
+        notifyOrangeAchieved()
     else
-        WARN("Trade", "выход без claimed")
+        WARN("Trade", "выход без claimed (State.running=false)")
     end
-end
-
--- ============================================================
--- =======================  GREEN MODE  =======================
--- ============================================================
-
-local function greenNoclip(char)
-    if not char then return end
-    for _, p in ipairs(char:GetDescendants()) do
-        if p:IsA("BasePart") then p.CanCollide = false end
-    end
-    char.DescendantAdded:Connect(function(d)
-        if d:IsA("BasePart") then d.CanCollide = false end
-    end)
-    for _, p in ipairs(char:GetDescendants()) do
-        if p:IsA("BasePart") then
-            p:GetPropertyChangedSignal("CanCollide"):Connect(function()
-                if p.CanCollide then p.CanCollide = false end
-            end)
-        end
-    end
-end
-
-local function greenGetHRP()
-    local char = player.Character
-    return char and char:FindFirstChild("HumanoidRootPart")
-end
-
-local function greenIsOnSpot(targetPos, tol)
-    tol = tol or GREEN_POS_TOLERANCE
-    local hrp = greenGetHRP()
-    if not hrp then return false, math.huge end
-    local d = (hrp.Position - targetPos).Magnitude
-    return d <= tol, d
-end
-
-local function greenSnapToSpot(targetPos, lookAtPos)
-    local char = player.Character
-    if not char then return false end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return false end
-    greenNoclip(char)
-    local lookDir
-    if lookAtPos then
-        lookDir = Vector3.new(lookAtPos.X - targetPos.X, 0, lookAtPos.Z - targetPos.Z)
-    end
-    if not lookDir or lookDir.Magnitude < 1e-4 then lookDir = Vector3.new(0,0,1) end
-    hrp.CFrame = CFrame.lookAt(targetPos, targetPos + lookDir.Unit)
-    return true
-end
-
-local function goToAndFace(targetPos, lookAtPoint, speed)
-    speed = speed or GREEN_MOVE_SPEED
-    local char = player.Character
-    if not char then return false end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hum or not hrp then return false end
-
-    greenNoclip(char)
-
-    local startPos = hrp.Position
-    local delta    = targetPos - startPos
-    local dist     = delta.Magnitude
-
-    local lookSrc = lookAtPoint or targetPos
-    local lookDir = Vector3.new(lookSrc.X - targetPos.X, 0, lookSrc.Z - targetPos.Z)
-    if lookDir.Magnitude < 1e-4 then lookDir = Vector3.new(delta.X, 0, delta.Z) end
-    if lookDir.Magnitude < 1e-4 then lookDir = Vector3.new(0, 0, 1) end
-    lookDir = lookDir.Unit
-
-    if dist < 0.1 then
-        hrp.CFrame = CFrame.lookAt(targetPos, targetPos + lookDir)
-        return true
-    end
-
-    local duration = dist / speed
-    local elapsed  = 0
-    LOG("Green", string.format("идём за %.2fs к (%.1f,%.1f,%.1f)",
-        duration, targetPos.X, targetPos.Y, targetPos.Z))
-
-    while elapsed < duration and State.running do
-        elapsed += RunService.Heartbeat:Wait()
-        local a   = math.min(elapsed / duration, 1)
-        local pos = startPos:Lerp(targetPos, a)
-        hrp.CFrame = CFrame.lookAt(pos, pos + lookDir)
-    end
-
-    hrp.CFrame = CFrame.lookAt(targetPos, targetPos + lookDir)
-    task.wait(0.05)
-    local ok, d = greenIsOnSpot(targetPos)
-    LOG("Green", string.format("встал на (%.1f,%.1f,%.1f) dist=%.2f onSpot=%s",
-        hrp.Position.X, hrp.Position.Y, hrp.Position.Z, d, tostring(ok)))
-    return ok
-end
-
-local function greenWaitPartnerNearby(partnerName, radius)
-    radius = radius or PARTNER_NEAR_RADIUS
-    local lastLog = 0
-    local t0 = tick()
-    while State.running do
-        local myHrp = greenGetHRP()
-        local partner = Players:FindFirstChild(partnerName)
-        local partnerHrp = partner
-            and partner.Character
-            and partner.Character:FindFirstChild("HumanoidRootPart")
-        if myHrp and partnerHrp then
-            local d = (myHrp.Position - partnerHrp.Position).Magnitude
-            if d <= radius then
-                LOG("Wait", string.format("★ партнёр %s рядом (dist=%.1f ≤ %d)",
-                    partnerName, d, radius))
-                return true, d
-            end
-            if tick() - t0 - lastLog >= 5 then
-                lastLog = tick() - t0
-                LOG("Wait", string.format("жду партнёра %s... dist=%.1f (нужно ≤ %d)",
-                    partnerName, d, radius))
-            end
-        else
-            if tick() - t0 - lastLog >= 5 then
-                lastLog = tick() - t0
-                LOG("Wait", "жду партнёра... (персонаж не заспавнился)")
-            end
-        end
-        task.wait(0.5)
-    end
-    return false, nil
-end
-
-local function greenRequestMatch()
-    local url = SERVER_URL
-        .. "/match?nickname=" .. HttpService:UrlEncode(player.Name)
-        .. "&job_id="    .. HttpService:UrlEncode(game.JobId)
-    local ok, resp = pcall(function() return game:HttpGet(url) end)
-    if not ok then return nil, "http fail: " .. tostring(resp) end
-    local ok2, data = pcall(function() return HttpService:JSONDecode(resp) end)
-    if not ok2 or type(data) ~= "table" then
-        return nil, "bad json: " .. tostring(resp)
-    end
-    return data
-end
-
-local function greenRequestUnmatch()
-    local url = SERVER_URL .. "/unmatch?nickname=" .. HttpService:UrlEncode(player.Name)
-    pcall(function() return game:HttpGet(url) end)
-end
-
--- GREEN HTTP: результат ClaimQuest + проверка пары
-local function greenReportResult(success)
-    local url = SERVER_URL
-        .. "/green_result?nickname=" .. HttpService:UrlEncode(player.Name)
-        .. "&success=" .. (success and "true" or "false")
-    pcall(function() return game:HttpGet(url) end)
-end
-
-local function greenFetchCheck()
-    local url = SERVER_URL .. "/green_check?nickname=" .. HttpService:UrlEncode(player.Name)
-    local ok, resp = pcall(function() return game:HttpGet(url) end)
-    if not ok then return nil end
-    local ok2, data = pcall(function() return HttpService:JSONDecode(resp) end)
-    if not ok2 or type(data) ~= "table" then return nil end
-    return data
-end
-
-local function greenReset()
-    local url = SERVER_URL .. "/green_reset?nickname=" .. HttpService:UrlEncode(player.Name)
-    pcall(function() return game:HttpGet(url) end)
-end
-
-local function greenFindFruitTool()
-    local char = player.Character
-    local backpack = player:FindFirstChild("Backpack")
-    for _, cont in ipairs({char, backpack}) do
-        if cont then
-            for _, ch in ipairs(cont:GetChildren()) do
-                if ch:IsA("Tool") and string.find(string.lower(ch.Name), "fruit", 1, true) then
-                    return ch
-                end
-            end
-        end
-    end
-    return nil
-end
-
-local function greenDumpInventory(tag)
-    local char = player.Character
-    local bp = player:FindFirstChild("Backpack")
-    LOG(tag, "--- INVENTORY ---")
-    if char then
-        local any = false
-        for _, ch in ipairs(char:GetChildren()) do
-            if ch:IsA("Tool") then LOG(tag, "  [EQUIPPED] " .. ch.Name); any = true end
-        end
-        if not any then LOG(tag, "  [EQUIPPED] (пусто)") end
-    end
-    if bp then
-        local any = false
-        for _, ch in ipairs(bp:GetChildren()) do
-            if ch:IsA("Tool") then LOG(tag, "  [BACKPACK] " .. ch.Name); any = true end
-        end
-        if not any then LOG(tag, "  [BACKPACK] (пусто)") end
-    end
-    LOG(tag, "-----------------")
-end
-
-local function greenWaitFruitTool()
-    local lastLog = 0
-    local t0 = tick()
-    while State.running do
-        local t = greenFindFruitTool()
-        if t then return t end
-        if tick() - t0 - lastLog >= 5 then
-            lastLog = tick() - t0
-            LOG("Wait", string.format("жду fruit-tool... (%.0fs)", lastLog))
-        end
-        task.wait(0.2)
-    end
-    return nil
-end
-
-local function greenEatFruitDrop()
-    local char = player.Character
-    if not char then return false, "нет Character" end
-    local hum = char:FindFirstChild("Humanoid")
-    if not hum then return false, "нет Humanoid" end
-    local tool = greenFindFruitTool()
-    if not tool then
-        greenDumpInventory("eatFruitDrop")
-        return false, "fruit-tool не найден"
-    end
-    LOG("Eat", "найден tool: " .. tool.Name .. " (parent=" .. tool.Parent.Name .. ")")
-    if tool.Parent ~= char then
-        hum:EquipTool(tool)
-        task.wait(0.5)
-    end
-    if tool.Parent ~= char then return false, "не экипировалось: " .. tool.Name end
-    LOG("Eat", "tool экипирован")
-    local eatRemote = tool:FindFirstChild("EatRemote")
-    if not eatRemote or not eatRemote:IsA("RemoteFunction") then
-        return false, "нет EatRemote"
-    end
-    LOG("Eat", "вызываю EatRemote:InvokeServer(\"Drop\")")
-    local ok, result = pcall(function()
-        return eatRemote:InvokeServer("Drop")
-    end)
-    LOG("Eat", "ответ: ok=" .. tostring(ok) .. " result=" .. tostring(result))
-    if not ok then return false, "eat error: " .. tostring(result) end
-    return true, result
-end
-
-local function greenTryClaimQuest(myPos, tag)
-    tag = tag or "Claim"
-    if not RF_InteractDragonQuest then return false, "no RF" end
-    if myPos then
-        local ok, d = greenIsOnSpot(myPos)
-        if not ok then
-            WARN(tag, string.format("сдвинуло (dist=%.2f) — snap", d))
-            greenSnapToSpot(myPos, nil); task.wait(0.1)
-        end
-    end
-    LOG(tag, "отправляю ClaimQuest...")
-    local sOk, resp = pcall(function()
-        return RF_InteractDragonQuest:InvokeServer({
-            NPC = POST_TRADE_NPC_NAME,
-            Command = "ClaimQuest"
-        })
-    end)
-    LOG(tag, "ответ: ok=" .. tostring(sOk) .. " resp=" .. tostring(resp))
-    if not sOk then return false, resp end
-    return true, resp
-end
-
--- ★ Бесконечный цикл: snap-to-pos + claim до resp==true
-local function greenClaimLoop(myPos, tag)
-    tag = tag or "Claim"
-    local i = 0
-    while State.running do
-        i += 1
-        LOG(tag, "=== попытка " .. i .. " ===")
-        local ok, resp = greenTryClaimQuest(myPos, tag)
-        if ok and resp == true then
-            LOG(tag, "УСПЕХ на попытке " .. i)
-            return true
-        end
-        if myPos then
-            local onSpot = greenIsOnSpot(myPos)
-            if not onSpot then greenSnapToSpot(myPos, nil) end
-        end
-        task.wait(CLAIM_RETRY_DELAY)
-    end
-    return false
-end
-
-local function runGreenMode()
-    State.mode = "green"
-    LOG("Green", "=== START ===")
-
-    -- страховка 6,1 OFF
-    if getOptionState(TAB_MAIN, OPT_MAIN) == true then
-        LOG("Green", "★ 6,1 ON — глушу (infinite)")
-        ensureOptionOffInfinite(TAB_MAIN, OPT_MAIN)
-    end
-
-    -- матч
-    local match = nil
-    while State.running and not match do
-        local data, err = greenRequestMatch()
-        if not data then
-            WARN("Green", "match error: " .. tostring(err)); task.wait(3)
-        elseif data.waiting then
-            LOG("Green", "waiting for partner..."); task.wait(3)
-        else
-            match = data
-        end
-    end
-    if not match then State.mode = "none"; return end
-
-    LOG("Green", "role=" .. tostring(match.role)
-        .. " partner=" .. tostring(match.partner_name))
-    LOG("Green", "match data: " .. HttpService:JSONEncode(match))
-
-    if not waitForHubReady() then State.mode = "none"; return end
-
-    -- guest телепорт
-    if match.role == "guest"
-       and match.job_id and match.job_id ~= ""
-       and match.job_id ~= game.JobId then
-        LOG("Green", "guest: телепорт на " .. tostring(match.job_id))
-        local teleported = false
-        while State.running and not teleported do
-            if teleportToJobId(match.job_id) then
-                local w = 0
-                while w < 30 and game.JobId ~= match.job_id do
-                    task.wait(1); w += 1
-                end
-                if game.JobId == match.job_id then teleported = true; break end
-            end
-            LOG("Green", "guest: телепорт не удался, повтор"); task.wait(2)
-        end
-        LOG("Green", "guest: перелетели, ждём загрузку")
-        task.wait(8)
-        greenRequestMatch()
-    end
-
-    -- повторная страховка 6,1 OFF
-    if getOptionState(TAB_MAIN, OPT_MAIN) == true then
-        ensureOptionOffInfinite(TAB_MAIN, OPT_MAIN)
-    end
-
-    -- чистим старые результаты на сервере
-    greenReset()
-
-    local isHost = (match.role == "host")
-    local myPos, partnerPos
-    if isHost then
-        myPos, partnerPos = GREEN_HOST_POS, GREEN_GUEST_POS
-    else
-        myPos, partnerPos = GREEN_GUEST_POS, GREEN_HOST_POS
-    end
-
-    local iteration = 0
-    local bothDone = false
-
-    while State.running and not bothDone do
-        iteration += 1
-        LOG("Green", "★★★ ITERATION #" .. iteration .. " ★★★")
-
-        -- 1. занять позицию + фейс партнёра
-        goToAndFace(myPos, partnerPos, GREEN_MOVE_SPEED)
-        task.wait(0.3)
-        do
-            local ok, d = greenIsOnSpot(myPos)
-            LOG("Green", string.format("после прилёта: dist=%.2f onSpot=%s", d, tostring(ok)))
-            if not ok then greenSnapToSpot(myPos, partnerPos) end
-        end
-
-        -- 2. ждём партнёра рядом
-        LOG("Green", "★ жду партнёра в радиусе " .. PARTNER_NEAR_RADIUS)
-        greenWaitPartnerNearby(match.partner_name, PARTNER_NEAR_RADIUS)
-        task.wait(DELAY_AFTER_ARRIVE)
-
-        -- 3. синхронизация статуса с сервером
-        local srv = greenFetchCheck()
-        local myDone      = srv and srv.me == true
-        local partnerDone = srv and srv.partner_result == true
-        LOG("Green", string.format(
-            "server: me=%s partner=%s",
-            tostring(srv and srv.me), tostring(srv and srv.partner_result)))
-
-        if isHost then
-            -- ── HOST ──
-            if not greenFindFruitTool() then
-                LOG("Green", "host: нет fruit — 8,7 ON")
-                greenDumpInventory("host:before-8,7")
-                ensureOptionOnInfinite(TAB_FRUIT, OPT_FRUIT)
-                LOG("Green", "host: жду fruit-tool...")
-                greenWaitFruitTool()
-                greenDumpInventory("host:after-8,7")
-                LOG("Green", "host: 8,7 OFF")
-                ensureOptionOffInfinite(TAB_FRUIT, OPT_FRUIT)
-            else
-                LOG("Green", "host: fruit уже есть — 8,7 не трогаю")
-            end
-
-            -- drop #1 → guest
-            LOG("Green", "host: drop #1 (отдаю guest'у)")
-            local ok1, err1 = greenEatFruitDrop()
-            LOG("Green", "host: drop #1 = " .. tostring(ok1) .. " / " .. tostring(err1))
-            task.wait(DELAY_AFTER_DROP)
-
-            if not myDone then
-                LOG("Green", "host: жду fruit обратно от guest'а...")
-                greenWaitFruitTool()
-                task.wait(DELAY_BEFORE_CLAIM)
-                LOG("Green", "host: claim loop (snap-to-pos, until true)")
-                local claimOk = greenClaimLoop(myPos, "Claim")
-                LOG("Green", "host: claim = " .. tostring(claimOk))
-                greenReportResult(claimOk)
-            else
-                LOG("Green", "host: уже сдал ранее — claim скипаю")
-            end
-
-            task.wait(DELAY_BEFORE_DROP2)
-            LOG("Green", "host: drop #2 (для guest claim)")
-            local ok2, err2 = greenEatFruitDrop()
-            LOG("Green", "host: drop #2 = " .. tostring(ok2) .. " / " .. tostring(err2))
-            task.wait(DELAY_AFTER_CLAIM)
-
-            LOG("Green", "★ host: ВСЁ СДЕЛАНО (6,1 остаётся OFF)")
-
-        else
-            -- ── GUEST ──
-            LOG("Green", "guest: жду fruit #1 от host'а...")
-            greenWaitFruitTool()
-            task.wait(DELAY_AFTER_DROP)
-
-            LOG("Green", "guest: drop #1 (возвращаю host'у)")
-            local ok1, err1 = greenEatFruitDrop()
-            LOG("Green", "guest: drop #1 = " .. tostring(ok1) .. " / " .. tostring(err1))
-            task.wait(DELAY_AFTER_DROP)
-
-            LOG("Green", "guest: жду fruit #2 от host'а...")
-            greenWaitFruitTool()
-            task.wait(DELAY_BEFORE_CLAIM)
-
-            if not myDone then
-                LOG("Green", "guest: claim loop (snap-to-pos, until true)")
-                local claimOk = greenClaimLoop(myPos, "ClaimGuest")
-                LOG("Green", "guest: claim = " .. tostring(claimOk))
-                greenReportResult(claimOk)
-            else
-                LOG("Green", "guest: уже сдал ранее — claim скипаю")
-            end
-
-            LOG("Green", "★ guest: ВСЁ СДЕЛАНО (6,1 остаётся OFF)")
-        end
-
-        -- 4. проверяем оба статуса
-        task.wait(2)
-        local final = greenFetchCheck()
-        if final and final.both == true then
-            bothDone = true
-            LOG("Green", "★★★ ОБА TRUE — выходим из green ★★★")
-        else
-            LOG("Green", string.format(
-                "★ не оба true (me=%s partner=%s) — повтор итерации",
-                tostring(final and final.me),
-                tostring(final and final.partner_result)))
-            task.wait(3)
-        end
-    end
-
-    LOG("Green", "=== DONE ===")
-    greenRequestUnmatch()
-    State.greenDone = true
-    State.mode = "none"
 end
 
 -- ============================================================
@@ -2238,7 +1859,7 @@ end
 -- ============================================================
 LOG("Main", "=== START === Me: " .. player.Name)
 
-LOG("Main", "жду готовности хаба (бесконечно)...")
+LOG("Main", "жду готовности хаба (бесконечно, до State.running=false)...")
 waitForHubReady()
 
 local waitStart = tick()
@@ -2258,22 +1879,6 @@ while State.running do
             task.wait(0.5)
         end
         runTradeMode()
-    elseif belt == "Green" then
-        LOG("Main", "★ GREEN DETECTED — выключаю 6,1 немедленно")
-        if getOptionState(TAB_MAIN, OPT_MAIN) == true then
-            setOption(TAB_MAIN, OPT_MAIN, false)
-            task.wait(0.5)
-        end
-        if getOptionState(TAB_MAIN, OPT_MAIN) == true then
-            ensureOptionOffInfinite(TAB_MAIN, OPT_MAIN)
-        end
-        LOG("Main", "★ 6,1 OFF, стартую green")
-
-        if not State.greenDone then
-            runGreenMode()
-        else
-            task.wait(5)
-        end
     elseif belt == "None" or belt == "Unknown" then
         if not State.nobeltDone then
             runNoBeltMode()
