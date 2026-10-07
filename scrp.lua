@@ -69,14 +69,6 @@ do
 end
 
 -- ============================================================
--- ОЖИДАНИЕ ПЕРСОНАЖА
--- ============================================================
-if not player.Character then
-    player.CharacterAdded:Wait()
-end
-LOG("Char", "Персонаж загружен")
-
--- ============================================================
 -- FIRESEQUENCE (локальная копия 1-в-1)
 -- ============================================================
 local function fireSequence(btn)
@@ -100,73 +92,54 @@ local function fireSequence(btn)
 end
 
 -- ============================================================
--- ПРОВЕРКА КОНТИНЕНТА (клик ровно 1 раз)
+-- ПРОВЕРКА КОНТИНЕНТА (СПАМ-КЛИК)
 -- ============================================================
-local function findLoadingText()
-    local direct = playerGui:FindFirstChild("LoadingGui")
-        and playerGui.LoadingGui:FindFirstChild("Root")
-        and playerGui.LoadingGui.Root:FindFirstChild("CanvasGroup")
-        and playerGui.LoadingGui.Root.CanvasGroup:FindFirstChild("Footer")
-        and playerGui.LoadingGui.Root.CanvasGroup.Footer:FindFirstChild("LoadingText")
-    if direct then return direct end
-
-    local function searchFor(root)
-        if not root then return nil end
-        for _, obj in ipairs(root:GetDescendants()) do
-            if obj.Name == "LoadingText" and (obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox")) then
-                return obj
-            end
-        end
-        return nil
-    end
-    return searchFor(playerGui) or searchFor(CoreGui)
+if not player.Character then
+    player.CharacterAdded:Wait()
 end
+LOG("Check", "Персонаж загружен, проверка континента...")
 
-LOG("Check", "Ожидание LoadingText...")
-
-local sea3Clicked = false
-local lastText = ""
-
+local clickCount = 0
 while true do
-    local loadingText = findLoadingText()
+    local loadingGui = playerGui:FindFirstChild("LoadingGui")
+    local loadingText = loadingGui
+        and loadingGui:FindFirstChild("Root")
+        and loadingGui.Root:FindFirstChild("CanvasGroup")
+        and loadingGui.Root.CanvasGroup:FindFirstChild("Footer")
+        and loadingGui.Root.CanvasGroup.Footer:FindFirstChild("LoadingText")
 
-    if loadingText then
-        local text = string.lower(tostring(loadingText.Text))
+    if loadingText and loadingText:IsA("TextLabel") then
+        local text = string.lower(loadingText.Text)
 
-        if text ~= lastText then
-            LOG("Check", "LoadingText: '" .. text .. "'")
-            lastText = text
-            if not string.find(text, "second", 1, true) then
-                sea3Clicked = false
-            end
-        end
-
-        if string.find(text, "third", 1, true) then
+        if text:find("third") then
             LOG("Check", "Обнаружен 'third'. Всё ок, идём дальше.")
             break
-        elseif string.find(text, "second", 1, true) and not sea3Clicked then
-            sea3Clicked = true
-            LOG("Check", "Обнаружен 'second'. Ищу кнопку Sea3 (клик 1 раз)...")
+        elseif text:find("second") then
+            clickCount += 1
 
             local serverBrowser = playerGui:FindFirstChild("ServerBrowser")
-                or CoreGui:FindFirstChild("ServerBrowser")
-
             local sea3Btn = serverBrowser
                 and serverBrowser:FindFirstChild("Frame")
                 and serverBrowser.Frame:FindFirstChild("TeleportButtons")
                 and serverBrowser.Frame.TeleportButtons:FindFirstChild("Sea3")
 
             if sea3Btn then
-                LOG("Check", "Кликаю Sea3")
-                fireSequence(sea3Btn)
+                -- ТРОЙНОЙ клик за раз, чтобы точно зарегистрировался
+                for _ = 1, 3 do
+                    fireSequence(sea3Btn)
+                    task.wait(0.05)
+                end
+                if clickCount % 5 == 1 then
+                    LOG("Check", "Кликаю Sea3 (x" .. clickCount .. ") — текст: '" .. text .. "'")
+                end
             else
-                WARN("Check", "Sea3 не найдена, сбрасываю флаг для повтора через 2с")
-                task.wait(2)
-                sea3Clicked = false
+                if clickCount % 5 == 1 then
+                    WARN("Check", "Sea3 не найдена (sb=" .. tostring(serverBrowser ~= nil) .. ")")
+                end
             end
         end
     end
-    task.wait(1)
+    task.wait(0.5) -- раньше было 4с, теперь 0.5с
 end
 LOG("Check", "Проверка континента пройдена.")
 -- ============================================================
