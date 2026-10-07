@@ -13,6 +13,9 @@ local STUCK_MOVE_THRESHOLD  = 5
 local SERVER_URL            = "http://192.168.31.179:8000"
 local BELT_ORDER            = {"White","Yellow","Orange","Green","Blue","Purple","Red","Black"}
 
+-- Имя целевого пояса, о получении которого уведомляем сервер
+local ORANGE_BELT_NAME = "Orange"
+
 local SCROLL_STEP_PIXELS  = 10
 local SCROLL_WAIT_TIME    = 0.15
 local SCROLL_INITIAL_WAIT = 1.0
@@ -20,7 +23,6 @@ local SCROLL_FINAL_WAIT   = 1.0
 
 local FIXED_POS          = Vector3.new(9825.3, -1962.3, 9822.5)
 local TRADE_WAYPOINT     = Vector3.new(-12549.7, 337.5, -7501.1)
--- POST_TRADE_WAYPOINT: поднят на +50 по Y, чтобы персонаж не проваливался сквозь текстуру
 local POST_TRADE_WAYPOINT = Vector3.new(5866.9, 1258.6, 872.0)
 local POST_TRADE_NPC_NAME = "Dojo Trainer"
 
@@ -86,11 +88,11 @@ local State = {
     nobeltDone      = false,
     tradeDone       = false,
     inTrade         = false,
-    orangeNotified  = false,   -- ★ ORANGE: in-memory флаг
+    orangeNotified  = false,  -- in-memory флаг
 }
 
 -- ============================================================
--- ★ ORANGE: ПЕРСИСТЕНТНЫЙ ФЛАГ (переживает рестарт скрипта)
+-- ПЕРСИСТЕНТНЫЙ ФЛАГ ORANGE (переживает рестарт скрипта)
 -- ============================================================
 local ORANGE_FLAG_FILE = "orange_achieved_" .. player.Name .. ".flag"
 
@@ -233,6 +235,49 @@ local function fireSequence(btn)
     end
     return fired
 end
+
+-- ============================================================
+-- ПРОВЕРКА КОНТИНЕНТА
+-- ============================================================
+if not player.Character then
+    player.CharacterAdded:Wait()
+end
+LOG("Check", "Персонаж загружен, проверка континента...")
+
+while true do
+    local loadingGui = playerGui:FindFirstChild("LoadingGui")
+    local loadingText = loadingGui
+        and loadingGui:FindFirstChild("Root")
+        and loadingGui.Root:FindFirstChild("CanvasGroup")
+        and loadingGui.Root.CanvasGroup:FindFirstChild("Footer")
+        and loadingGui.Root.CanvasGroup.Footer:FindFirstChild("LoadingText")
+
+    if loadingText and loadingText:IsA("TextLabel") then
+        local text = string.lower(loadingText.Text)
+
+        if text:find("third") then
+            LOG("Check", "Обнаружен 'third'. Всё ок, идем дальше.")
+            break
+        elseif text:find("second") then
+            LOG("Check", "Обнаружен 'second'. Ищу кнопку Sea3...")
+            local serverBrowser = playerGui:FindFirstChild("ServerBrowser")
+            local sea3Btn = serverBrowser
+                and serverBrowser:FindFirstChild("Frame")
+                and serverBrowser.Frame:FindFirstChild("TeleportButtons")
+                and serverBrowser.Frame.TeleportButtons:FindFirstChild("Sea3")
+
+            if sea3Btn then
+                LOG("Check", "Кликаю Sea3")
+                fireSequence(sea3Btn)
+                task.wait(3)
+            else
+                WARN("Check", "Кнопка Sea3 не найдена по указанному пути")
+            end
+        end
+    end
+    task.wait(1)
+end
+LOG("Check", "Проверка континента пройдена.")
 
 local function findObjectByPath(root, ...)
     local current = root
@@ -1844,9 +1889,8 @@ local function runTradeMode()
         State.tradeDone = true
         LOG("Trade", "=== DONE ===")
 
-        -- ★ ORANGE: Yellow-трейд завершён → персонаж получил Orange belt.
-        -- Persistent-флаг (getgenv + файл) не даст отправить повторно
-        -- при рестарте скрипта. Плюс на сервере есть ORANGE_NOTIFIED.
+        -- ★ ORANGE: Yellow-трейд завершён успешно → персонаж получил Orange.
+        -- Отправляем один раз за жизнь сервера (getgenv + файл + ORANGE_NOTIFIED).
         LOG("Trade", "yellow → orange подтверждён, уведомляю сервер")
         notifyOrangeAchieved()
     else
