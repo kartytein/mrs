@@ -237,7 +237,7 @@ local function fireSequence(btn)
 end
 
 -- ============================================================
--- ПРОВЕРКА КОНТИНЕНТА
+-- ПРОВЕРКА КОНТИНЕНТА (точная копия рабочей короткой версии)
 -- ============================================================
 if not player.Character then
     player.CharacterAdded:Wait()
@@ -260,6 +260,7 @@ while true do
             break
         elseif text:find("second") then
             LOG("Check", "Обнаружен 'second'. Ищу кнопку Sea3...")
+
             local serverBrowser = playerGui:FindFirstChild("ServerBrowser")
             local sea3Btn = serverBrowser
                 and serverBrowser:FindFirstChild("Frame")
@@ -278,94 +279,9 @@ while true do
     task.wait(1)
 end
 LOG("Check", "Проверка континента пройдена.")
-
-local function findObjectByPath(root, ...)
-    local current = root
-    for _, segment in ipairs({...}) do
-        if not current then return nil end
-        current = current:FindFirstChild(segment)
-    end
-    return current
-end
-
-local function findHudButtonByName(buttonName)
-    local hudRoot = playerGui:FindFirstChild("HUDRoot")
-    if not hudRoot then return nil end
-    local frame = hudRoot:FindFirstChild("Frame")
-    if not frame then return nil end
-    local hud = frame:FindFirstChild("HUD")
-    if not hud then return nil end
-    local function search(node)
-        for _, child in ipairs(node:GetChildren()) do
-            if (child:IsA("TextButton") or child:IsA("ImageButton")) and child.Name == buttonName then
-                return child
-            end
-            local found = search(child)
-            if found then return found end
-        end
-        return nil
-    end
-    return search(hud)
-end
-
-local function waitForHudButton(buttonName, timeout)
-    local waited = 0
-    while waited < timeout do
-        local btn = findHudButtonByName(buttonName)
-        if btn then return btn end
-        task.wait(0.5); waited += 0.5
-    end
-    return nil
-end
-
-local function waitForObjectByPath(pathTable, timeout)
-    local waited = 0
-    while waited < timeout do
-        local obj = findObjectByPath(playerGui, table.unpack(pathTable))
-        if obj then return obj end
-        task.wait(0.5); waited += 0.5
-    end
-    return nil
-end
-
-local function findInventoryButtonByName(buttonName)
-    local inv = playerGui:FindFirstChild("Inventory")
-    if not inv then return nil end
-    for _, obj in ipairs(inv:GetDescendants()) do
-        if (obj:IsA("TextButton") or obj:IsA("ImageButton")) and obj.Name == buttonName then
-            return obj
-        end
-    end
-    return nil
-end
-
-local function findCategory(catName)
-    local c = findObjectByPath(playerGui, "Inventory","Inventory","Main","NavigationRail", catName)
-    if c then return c end
-    return findInventoryButtonByName(catName)
-end
-
-local function ensureCategoryOpen(catName)
-    local category = findCategory(catName)
-    if category then
-        fireSequence(category); task.wait(SCROLL_INITIAL_WAIT)
-        return category
-    end
-    local menuButton = waitForHudButton("Menu", 10)
-    if not menuButton then WARN("Cat", "нет Menu"); return nil end
-    fireSequence(menuButton); task.wait(1.5)
-
-    local itemsButton = waitForHudButton("Items", 10)
-    if not itemsButton then WARN("Cat", "нет Items"); return nil end
-    fireSequence(itemsButton); task.wait(1.5)
-
-    category = waitForObjectByPath({"Inventory","Inventory","Main","NavigationRail", catName}, 5)
-    if not category then category = findInventoryButtonByName(catName) end
-    if not category then WARN("Cat", "нет " .. catName); return nil end
-    fireSequence(category); task.wait(SCROLL_INITIAL_WAIT)
-    return category
-end
-
+-- ============================================================
+-- КОНЕЦ ВСТАВКИ
+-- ============================================================
 -- ============================================================
 -- CALL REMOTE
 -- ============================================================
