@@ -18,7 +18,7 @@ local player = Players.LocalPlayer
 -- ============================================================
 -- КОНФИГ
 -- ============================================================
-local SERVER_URL          = "http://192.168.1.100:8000"
+local SERVER_URL          = "http://192.168.31.179:8000"
 local POST_TRADE_NPC_NAME = "Dojo Trainer"
 
 local GREEN_HOST_POS  = Vector3.new(5842.3, 1208.6, 886.3)
