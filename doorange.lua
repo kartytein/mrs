@@ -1,10 +1,11 @@
 --!nocheck
 -- ============================================================
--- GREEN MODE v13 — 3 drops + claim + подтверждение от Flask
--- Хост: 8,7 ON → fruit → 8,7 OFF → drop#1 → ждём fruit от guest
---       → drop#2 (guest остаётся с фруктом) → claim
--- Гест: ждём fruit#1 → drop#1 → ждём fruit#2 → claim
--- После claim — report на сервер, ждём both_ok, потом 6,1 ON.
+-- GREEN MODE v14
+--  - 6,1 OFF сразу после обнаружения green (до /match)
+--  - магнит-хук на Heartbeat
+--  - детект дропа через снапшот (не ложное "уже был fruit")
+--  - claim один раз, tryClaim больше не повторяем
+--  - 6,1 ON только после both_ok от Flask
 -- ============================================================
 
 local Players           = game:GetService("Players")
@@ -28,9 +29,10 @@ local MOVE_SPEED            = 250
 local POS_TOLERANCE         = 8
 local PARTNER_POS_TOLERANCE = 50
 
-local DROP_TIMING          = 2   -- пауза после получения фрукта, перед дропом
-local DROP_RETRY_DELAY     = 2   -- пауза между попытками дропа
-local DROP_CONFIRM_TIMEOUT = 6   -- сколько ждём появление фрукта у партнёра
+local DROP_TIMING          = 2
+local DROP_RETRY_DELAY     = 2
+local DROP_CONFIRM_TIMEOUT = 8
+local DROP_FADE_TIMEOUT    = 3
 
 local CLAIM_RETRY_DELAY    = 3
 local SERVER_POLL_DELAY    = 2
@@ -232,7 +234,7 @@ player.CharacterAdded:Connect(function(char) task.wait(0.3) enableNoclip(char) e
 if player.Character then enableNoclip(player.Character) end
 
 -- ============================================================
--- ПОЗИЦИЯ / МАГНИТ
+-- МАГНИТ (постоянный на Heartbeat)
 -- ============================================================
 local function getHRP()
     local c = player.Character
@@ -255,7 +257,6 @@ end)
 local function magnetStart(pos, look)
     MAGNET.pos, MAGNET.look = pos, look
     MAGNET.active = true
-    -- разово телепортим, дальше heartbeat будет держать
     local hrp = getHRP()
     if hrp then
         local dir = Vector3.new(look.X - pos.X, 0, look.Z - pos.Z)
@@ -268,12 +269,13 @@ local function magnetStop()
 end
 
 -- ============================================================
--- FRUIT
+-- FRUIT helpers
 -- ============================================================
 local function isFruitTool(obj)
     return obj and obj:IsA("Tool") and string.find(string.lower(obj.Name), "fruit", 1, true) ~= nil
 end
-local function findFruitTool()  -- в моём char/backpack
+
+local function findFruitTool()
     local char = player.Character
     local bp = player:FindFirstChild("Backpack")
     for _, cont in ipairs({char, bp}) do
@@ -285,7 +287,8 @@ local function findFruitTool()  -- в моём char/backpack
     end
     return nil
 end
-local function charFruit(plr)  -- fruit Tool внутри Character у произвольного игрока
+
+local function charFruit(plr)
     local c = plr and plr.Character
     if not c then return nil end
     for _, ch in ipairs(c:GetChildren()) do
@@ -293,6 +296,30 @@ local function charFruit(plr)  -- fruit Tool внутри Character у прои�
     end
     return nil
 end
+
+-- снапшоты (по instance, чтобы отличать "новый" от "уже был")
+local function snapshotSelfFruit()
+    local set = {}
+    local c = player.Character
+    if c then
+        for _, ch in ipairs(c:GetChildren()) do
+            if isFruitTool(ch) then set[ch] = true end
+        end
+    end
+    return set
+end
+local function snapshotCharFruit(plr)
+    local set = {}
+    local c = plr and plr.Character
+    if c then
+        for _, ch in ipairs(c:GetChildren()) do
+            if isFruitTool(ch) then set[ch] = true end
+        end
+    end
+    return set
+end
+
+-- ждём ЛЮБОЙ fruit у себя
 local function waitFruitInSelf()
     local last = 0
     local t0 = tick()
@@ -307,10 +334,47 @@ local function waitFruitInSelf()
         task.wait(0.2)
     end
 end
-local function waitFruitInPartner(name, timeout)
+
+-- ждём НОВЫЙ fruit у себя (не из beforeSet)
+local function waitNewFruitInSelf(beforeSet, timeout)
     local t0 = tick()
     while State.running do
-        local p = Players:FindFirstChild(name)
+        local c = player.Character
+        if c then
+            for _, ch in ipairs(c:GetChildren()) do
+                if isFruitTool(ch) and not beforeSet[ch] then
+                    return true, ch
+                end
+            end
+        end
+        if tick() - t0 > timeout then return false end
+        task.wait(0.15)
+    end
+end
+
+-- ждём НОВЫЙ fruit в char партнёра
+local function waitNewFruitInPartner(partnerName, beforeSet, timeout)
+    local t0 = tick()
+    while State.running do
+        local p = Players:FindFirstChild(partnerName)
+        local c = p and p.Character
+        if c then
+            for _, ch in ipairs(c:GetChildren()) do
+                if isFruitTool(ch) and not beforeSet[ch] then
+                    return true, ch.Name
+                end
+            end
+        end
+        if tick() - t0 > timeout then return false end
+        task.wait(0.15)
+    end
+end
+
+-- ждём любой fruit у партнёра (для recovery в dropWithRetry)
+local function waitAnyFruitInPartner(partnerName, timeout)
+    local t0 = tick()
+    while State.running do
+        local p = Players:FindFirstChild(partnerName)
         if p and charFruit(p) then return true end
         if tick() - t0 > timeout then return false end
         task.wait(0.15)
@@ -333,22 +397,35 @@ local function equipFruit()
     return tool
 end
 
--- дроп одного фрукта с подтверждением появления у партнёра
+-- ============================================================
+-- DROP
+-- ============================================================
 local function dropOnce(partnerName)
+    local partner = Players:FindFirstChild(partnerName)
+    if not partner then return false, "no partner instance" end
+    local before = snapshotCharFruit(partner)   -- ★ что было ДО дропа
+
     local tool = equipFruit()
-    if not tool then return false, "нет fruit для дропа" end
+    if not tool then return false, "нет fruit" end
     local eatRemote = tool:FindFirstChild("EatRemote")
     if not eatRemote or not eatRemote:IsA("RemoteFunction") then
         return false, "нет EatRemote"
     end
+
     local ok, res = pcall(function() return eatRemote:InvokeServer("Drop") end)
     LOG("Drop", "invoke ok=" .. tostring(ok) .. " res=" .. tostring(res))
     if not ok then return false, "invoke err" end
-    -- успех = появился fruit в character партнёра
-    if waitFruitInPartner(partnerName, DROP_CONFIRM_TIMEOUT) then
-        return true
-    end
-    return false, "fruit не появился у партнёра"
+    if res == false then return false, "invoke denied" end
+
+    -- ждём ИМЕННО НОВЫЙ fruit у партнёра
+    local appeared, name = waitNewFruitInPartner(partnerName, before, DROP_CONFIRM_TIMEOUT)
+    if not appeared then return false, "fruit не появился у партнёра" end
+    LOG("Drop", "у партнёра появился " .. tostring(name))
+
+    -- ждём исчезновения нашего (иначе второй дроп полетит со старым стейтом)
+    local t0 = tick()
+    while findFruitTool() and tick() - t0 < DROP_FADE_TIMEOUT do task.wait(0.1) end
+    return true
 end
 
 local function dropWithRetry(partnerName, tag)
@@ -356,8 +433,7 @@ local function dropWithRetry(partnerName, tag)
     while State.running do
         i += 1
         if not findFruitTool() then
-            -- может уже улетел и подтвердилось
-            if waitFruitInPartner(partnerName, 1.5) then
+            if waitAnyFruitInPartner(partnerName, 1.5) then
                 LOG(tag, "fruit уже у партнёра — ок")
                 return true
             end
@@ -370,6 +446,10 @@ local function dropWithRetry(partnerName, tag)
         end
         LOG(tag, "drop #" .. i .. " FAIL: " .. tostring(err))
         task.wait(DROP_RETRY_DELAY)
+        if not findFruitTool() and not waitAnyFruitInPartner(partnerName, 1.5) then
+            LOG(tag, "фрукт пропал у обоих — abort")
+            return false, "no fruit after fail"
+        end
     end
 end
 
@@ -405,10 +485,6 @@ local function checkClaimBothOk()
     local d = httpGet(SERVER_URL .. "/claim_check?nickname=" .. HttpService:UrlEncode(player.Name))
     return d and d.both_ok == true
 end
-local function requestSwap()
-    local d = httpGet(SERVER_URL .. "/swap_roles?nickname=" .. HttpService:UrlEncode(player.Name))
-    return d and d.my_role
-end
 
 -- ============================================================
 -- CLAIM
@@ -425,8 +501,39 @@ local function tryClaim()
     return true, resp
 end
 
+-- ★ tryClaim вызывается РОВНО один раз (если вернул true)
+-- если вернул false — повторяем с паузой
+local function claimAndWaitServer()
+    local claimedOk = false
+
+    while State.running do
+        if not claimedOk then
+            local ok, resp = tryClaim()
+            claimedOk = (ok and resp == true)
+            LOG("Claim", "tryClaim ok=" .. tostring(ok) .. " resp=" .. tostring(resp))
+            reportClaim(claimedOk)
+        end
+
+        local t0 = tick()
+        while State.running and tick() - t0 < SERVER_POLL_TIMEOUT do
+            if checkClaimBothOk() then
+                LOG("Claim", "★ both_ok=true")
+                return true
+            end
+            task.wait(SERVER_POLL_DELAY)
+        end
+
+        LOG("Claim", "таймаут поллинга (claimedOk=" .. tostring(claimedOk) .. ")")
+        if not claimedOk then
+            task.wait(CLAIM_RETRY_DELAY)
+        end
+        -- если claimedOk уже true — продолжаем поллить, tryClaim не трогаем
+    end
+    return false
+end
+
 -- ============================================================
--- ОСНОВНАЯ ЛОГИКА
+-- WAIT partner at coords
 -- ============================================================
 local function partnerAtCoords(partnerName, coords)
     local p = Players:FindFirstChild(partnerName)
@@ -435,7 +542,6 @@ local function partnerAtCoords(partnerName, coords)
     local d = (hrp.Position - coords).Magnitude
     return d <= PARTNER_POS_TOLERANCE, d
 end
-
 local function waitPartnerAtCoords(partnerName, coords)
     local last = 0
     local t0 = tick()
@@ -454,62 +560,63 @@ local function waitPartnerAtCoords(partnerName, coords)
     end
 end
 
--- последовательность дропов для host'а
+-- ============================================================
+-- SEQUENCES
+-- ============================================================
 local function hostSequence(partnerName)
+    -- 8,7 ON → fruit
     LOG("Host", "8,7 ON — получаем fruit")
     ensureOptionOn(TAB_FRUIT, OPT_FRUIT)
     waitFruitInSelf()
     LOG("Host", "8,7 OFF")
     ensureOptionOff(TAB_FRUIT, OPT_FRUIT)
 
+    -- drop #1 → guest
     task.wait(DROP_TIMING)
     LOG("Host", "drop #1 → " .. partnerName)
     dropWithRetry(partnerName, "host-drop1")
 
-    LOG("Host", "ждём fruit обратно от " .. partnerName)
-    waitFruitInSelf()
-    task.wait(DROP_TIMING)
+    -- ждём НОВЫЙ fruit (обратный дроп от guest)
+    local snap = snapshotSelfFruit()
+    LOG("Host", "ждём новый fruit обратно от " .. partnerName)
+    if not waitNewFruitInSelf(snap, 60) then
+        WARN("Host", "не дождались обратного fruit")
+    end
 
+    -- drop #2 → guest (fruit остаётся у guest для его claim)
+    task.wait(DROP_TIMING)
     LOG("Host", "drop #2 → " .. partnerName)
     dropWithRetry(partnerName, "host-drop2")
 end
 
--- последовательность для guest'а
 local function guestSequence(partnerName)
+    -- ждём fruit #1 от host'а
     LOG("Guest", "ждём fruit #1 от " .. partnerName)
     waitFruitInSelf()
     task.wait(DROP_TIMING)
+
+    -- drop #1 → host
     LOG("Guest", "drop #1 → " .. partnerName)
     dropWithRetry(partnerName, "guest-drop1")
 
+    -- ждём fruit #2 от host'а (останется у нас для claim)
+    local snap = snapshotSelfFruit()
     LOG("Guest", "ждём fruit #2 от " .. partnerName)
-    waitFruitInSelf()
-end
-
--- claim + report + ждём both_ok от сервера (с повтором claim)
-local function claimAndWaitServer()
-    while State.running do
-        local ok, resp = tryClaim()
-        local success = (ok and resp == true)
-        LOG("Claim", "tryClaim ok=" .. tostring(ok) .. " resp=" .. tostring(resp))
-        reportClaim(success)
-
-        local t0 = tick()
-        while State.running and tick() - t0 < SERVER_POLL_TIMEOUT do
-            if checkClaimBothOk() then
-                LOG("Claim", "★ оба подтвердили — сервер OK")
-                return true
-            end
-            task.wait(SERVER_POLL_DELAY)
-        end
-        LOG("Claim", "таймаут ожидания сервера — повтор")
-        task.wait(CLAIM_RETRY_DELAY)
+    if not waitNewFruitInSelf(snap, 60) then
+        WARN("Guest", "не дождались fruit #2")
     end
-    return false
 end
 
+-- ============================================================
+-- MAIN
+-- ============================================================
 local function runGreenMode()
     LOG("Green", "=== START ===")
+
+    -- ★ 6,1 OFF — СРАЗУ, до match
+    waitForHubReady()
+    LOG("Green", "6,1 OFF (до match)")
+    ensureOptionOff(TAB_TOGGLE, OPT_TOGGLE)
 
     local match = nil
     while State.running and not match do
@@ -526,8 +633,6 @@ local function runGreenMode()
 
     LOG("Green", "role=" .. tostring(match.role) .. " partner=" .. tostring(match.partner_name))
 
-    waitForHubReady()
-
     -- guest: телепорт
     if match.role == "guest" and match.job_id and match.job_id ~= "" and match.job_id ~= game.JobId then
         LOG("Green", "guest: телепорт на " .. match.job_id)
@@ -537,12 +642,12 @@ local function runGreenMode()
             requestMatch()
         end
         task.wait(8)
+        waitForHubReady()
+        -- после телепорта хаб пересоздан — на всякий случай ещё раз 6,1 OFF
+        LOG("Green", "6,1 OFF (после телепорта)")
+        ensureOptionOff(TAB_TOGGLE, OPT_TOGGLE)
         requestMatch()
     end
-
-    -- 6,1 OFF на старте
-    LOG("Green", "6,1 OFF")
-    ensureOptionOff(TAB_TOGGLE, OPT_TOGGLE)
 
     local myPos, partnerPos
     if match.role == "host" then
@@ -555,7 +660,7 @@ local function runGreenMode()
     LOG("Green", "магнит → моя позиция")
     magnetStart(myPos, partnerPos)
 
-    -- ждём партнёра
+    -- ждём партнёра на его координатах (нужно для 8,7)
     waitPartnerAtCoords(match.partner_name, partnerPos)
 
     -- последовательность
@@ -568,7 +673,7 @@ local function runGreenMode()
     -- claim + сервер
     if not claimAndWaitServer() then return end
 
-    -- отключаем магнит, включаем 6,1
+    -- ★ финал
     LOG("Green", "магнит OFF, 6,1 ON")
     magnetStop()
     ensureOptionOn(TAB_TOGGLE, OPT_TOGGLE)
