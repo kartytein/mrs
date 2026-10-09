@@ -1,5 +1,10 @@
 --!nocheck
 -- ============================================================
+-- FULL SCRIPT v16 (compiled + blue hop once)
+--  - Belt scanner + server hop + NoBelt / Hold / Yellow-Trade
+--  - GREEN MODE v14 (host/guest fruit drop + claim)
+--  - ★ Oдин server hop после получения Blue belt
+-- ============================================================
 -- КОНФИГ
 -- ============================================================
 local BELT_SCAN_INTERVAL    = 30
@@ -20,10 +25,22 @@ local SCROLL_WAIT_TIME    = 0.15
 local SCROLL_INITIAL_WAIT = 1.0
 local SCROLL_FINAL_WAIT   = 1.0
 
-local FIXED_POS          = Vector3.new(9825.3, -1962.3, 9822.5)
-local TRADE_WAYPOINT     = Vector3.new(-12549.7, 337.5, -7501.1)
+local FIXED_POS           = Vector3.new(9825.3, -1962.3, 9822.5)
+local TRADE_WAYPOINT      = Vector3.new(-12549.7, 337.5, -7501.1)
 local POST_TRADE_WAYPOINT = Vector3.new(5866.9, 1258.6, 872.0)
 local POST_TRADE_NPC_NAME = "Dojo Trainer"
+
+-- ★ GREEN MODE config
+local GREEN_HOST_POS        = Vector3.new(5842.3, 1208.6, 886.3)
+local GREEN_GUEST_POS       = Vector3.new(5847.1, 1208.6, 882.4)
+local PARTNER_POS_TOLERANCE = 50
+local DROP_TIMING           = 2
+local DROP_RETRY_DELAY      = 2
+local DROP_CONFIRM_TIMEOUT  = 8
+local DROP_FADE_TIMEOUT     = 3
+local CLAIM_RETRY_DELAY     = 3
+local SERVER_POLL_DELAY     = 2
+local SERVER_POLL_TIMEOUT   = 60
 
 -- ============================================================
 -- ЛОГГЕР
@@ -44,6 +61,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService       = game:GetService("HttpService")
 local Workspace         = game:GetService("Workspace")
 local CoreGui           = game:GetService("CoreGui")
+local RunService        = game:GetService("RunService")
 
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -86,8 +104,11 @@ local State = {
     running         = true,
     nobeltDone      = false,
     tradeDone       = false,
+    greenDone       = false,
+    greenActive     = false,
     inTrade         = false,
     orangeNotified  = false,
+    blueHopDone     = false,   -- ★ один хоп после получения Blue
 }
 
 -- ============================================================
@@ -179,7 +200,7 @@ while true do
         local text = string.lower(loadingText.Text)
 
         if text:find("third") then
-            LOG("Check", string.format("Обнаружен 'third' (попыток клика: %d). Идем дальше.", clickAttempts))
+            LOG("Check", string.format("Обнаружен 'third' (попыток клика: %d). Идём дальше.", clickAttempts))
             break
         elseif text:find("second") then
             local serverBrowser = playerGui:FindFirstChild("ServerBrowser")
@@ -626,6 +647,7 @@ local function serverHop()
             task.wait(8)
             State.nobeltDone    = false
             State.tradeDone     = false
+            State.greenDone     = false
             State.currentBelt   = "Unknown"
             State.beltChangedAt = tick()
             State.beltScanPaused = false
@@ -645,6 +667,10 @@ local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
 local TAB_MAIN, OPT_MAIN = 6, 1
 local TAB_FARM, OPT_FARM = 2, 4
+local TAB_FRUIT, OPT_FRUIT = 8, 7
+local TELEPORT_TAB          = 19
+local TELEPORT_OPT_TEXT     = 2
+local TELEPORT_OPT_ACTIVATE = 3
 
 local function getRoot()
     for _, c in ipairs(CoreGui:GetChildren()) do
@@ -825,6 +851,36 @@ local function waitForHubReady(timeout)
 end
 
 -- ============================================================
+-- TELEPORT TO JOB ID (global helper)
+-- ============================================================
+local function teleportToJobIdGlobal(jobId)
+    local root = getRoot() if not root then return false end
+    local tb = findTab(root, TELEPORT_TAB)
+    if not tb then return false end
+    fireSequence(tb); task.wait(0.5)
+
+    local optText = findOption(root, TELEPORT_OPT_TEXT)
+    if not optText then return false end
+
+    local function findTB(p)
+        for _, c in ipairs(p:GetChildren()) do
+            if c:IsA("TextBox") then return c end
+            local f = findTB(c); if f then return f end
+        end
+    end
+    local tx = findTB(optText)
+    if not tx then return false end
+    tx:CaptureFocus(); task.wait(0.2)
+    tx.Text = jobId;   task.wait(0.2)
+    tx:ReleaseFocus(true); task.wait(0.3)
+
+    local optAct = findOption(root, TELEPORT_OPT_ACTIVATE)
+    if not optAct then return false end
+    fireSequence(optAct)
+    return true
+end
+
+-- ============================================================
 -- УВЕДОМЛЕНИЕ О ПОЛУЧЕНИИ ORANGE
 -- ============================================================
 local function notifyOrangeAchieved()
@@ -855,7 +911,7 @@ task.spawn(function()
     local lastPos = nil
     local lastMoveAt = tick()
     while State.running do
-        if State.inTrade then
+        if State.inTrade or State.greenActive then
             lastPos = nil; lastMoveAt = tick()
         else
             local c = player.Character
@@ -1054,7 +1110,7 @@ local function runHoldSixOne()
 end
 
 -- ============================================================
--- ТРЕЙД
+-- ТРЕЙД (Yellow → Orange)
 -- ============================================================
 local function runTradeMode()
     LOG("Trade", "=== START ===")
@@ -1078,10 +1134,6 @@ local function runTradeMode()
 
     local SEND_INVENTORY_INTERVAL = 20
     local CONFIG_POLL_INTERVAL    = 10
-
-    local TELEPORT_TAB          = 19
-    local TELEPORT_OPT_TEXT     = 2
-    local TELEPORT_OPT_ACTIVATE = 3
 
     local function fastSitOnSeat(targetSeat, maxAttempts)
         maxAttempts = maxAttempts or 3
@@ -1291,62 +1343,6 @@ local function runTradeMode()
             invokeLoadFruit(formatItemName(item))
             respawn(); waitRespawn(); task.wait(1)
         end
-        return true
-    end
-
-    local function findNthTabButton(ts, idx)
-        local btn, cnt = nil, 0
-        local function rec(p)
-            if btn then return end
-            for _, c in ipairs(p:GetChildren()) do
-                if c:IsA("TextButton") or c:IsA("ImageButton") then
-                    cnt += 1
-                    if cnt == idx then btn = c; return end
-                end
-                rec(c)
-            end
-        end
-        rec(ts)
-        return btn
-    end
-
-    local function findNthOption(cont, idx)
-        local btn, cnt = nil, 0
-        for _, c in ipairs(cont:GetChildren()) do
-            if c.Name == "Option" and c.Visible and (c:IsA("TextButton") or c:IsA("ImageButton")) then
-                cnt += 1
-                if cnt == idx then btn = c; break end
-            end
-        end
-        return btn
-    end
-
-    local function teleportToJobId(jobId)
-        local root = getRoot() if not root then return false end
-        local ts = safeFind(root, "Window","Components","TabsScroll")
-        if not ts then return false end
-        local tb = findNthTabButton(ts, TELEPORT_TAB)
-        if not tb then return false end
-        fireSequence(tb); task.wait(0.5)
-        local cont = safeFind(root, "Window","Components","Containers","Container")
-        if not cont then return false end
-        local optText = findNthOption(cont, TELEPORT_OPT_TEXT)
-        if not optText then return false end
-        local function findTB(p)
-            for _, c in ipairs(p:GetChildren()) do
-                if c:IsA("TextBox") then return c end
-                local f = findTB(c)
-                if f then return f end
-            end
-        end
-        local tx = findTB(optText)
-        if not tx then return false end
-        tx:CaptureFocus(); task.wait(0.2)
-        tx.Text = jobId; task.wait(0.2)
-        tx:ReleaseFocus(true); task.wait(0.3)
-        local optAct = findNthOption(cont, TELEPORT_OPT_ACTIVATE)
-        if not optAct then return false end
-        fireSequence(optAct)
         return true
     end
 
@@ -1566,9 +1562,7 @@ local function runTradeMode()
         return false
     end
 
-    -- ============================================================
     -- ФАЗА 1: ТРЕЙД
-    -- ============================================================
     local function doTradeOnce(config)
         collisionsDisabledGlobal = true
         disableCollisionsNow()
@@ -1663,9 +1657,7 @@ local function runTradeMode()
         return false
     end
 
-    -- ============================================================
     -- ФАЗА 2: ПОСТ-ТРЕЙД
-    -- ============================================================
     local function postTradeOnce()
         LOG("PostTrade", "=== START ===")
 
@@ -1782,7 +1774,7 @@ local function runTradeMode()
     local tele = config.teleport_to_job_id
     if tele and tele ~= "" and tele ~= game.JobId then
         for _ = 1, 5 do
-            if teleportToJobId(tele) then
+            if teleportToJobIdGlobal(tele) then
                 local w = 0
                 while w < 30 and game.JobId ~= tele do task.wait(1); w += 1 end
                 if game.JobId == tele then break end
@@ -1837,14 +1829,434 @@ local function runTradeMode()
         State.tradeDone = true
         LOG("Trade", "=== DONE ===")
 
-        -- ★ ORANGE: Yellow-трейд завершён → персонаж получил Orange.
-        -- Отправляем один раз. При рестарте скрипта belt уже Orange →
-        -- trade-режим не запустится → повторного запроса не будет.
         LOG("Trade", "yellow → orange подтверждён, уведомляю сервер")
         notifyOrangeAchieved()
     else
         WARN("Trade", "выход без claimed (State.running=false)")
     end
+end
+
+-- ============================================================
+-- ★ GREEN MODE (v14 integrated)
+-- ============================================================
+local MAGNET = { active = false, pos = nil, look = nil }
+
+local function getHRP()
+    local c = player.Character
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+RunService.Heartbeat:Connect(function()
+    if not MAGNET.active or not MAGNET.pos then return end
+    local hrp = getHRP()
+    if not hrp then return end
+    local dir = Vector3.new(MAGNET.look.X - MAGNET.pos.X, 0, MAGNET.look.Z - MAGNET.pos.Z)
+    if dir.Magnitude < 1e-4 then dir = Vector3.new(0,0,1) end
+    hrp.CFrame = CFrame.lookAt(MAGNET.pos, MAGNET.pos + dir.Unit)
+    hrp.AssemblyLinearVelocity  = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+end)
+
+local function magnetStart(pos, look)
+    MAGNET.pos, MAGNET.look = pos, look
+    MAGNET.active = true
+    local hrp = getHRP()
+    if hrp then
+        local dir = Vector3.new(look.X - pos.X, 0, look.Z - pos.Z)
+        if dir.Magnitude < 1e-4 then dir = Vector3.new(0,0,1) end
+        hrp.CFrame = CFrame.lookAt(pos, pos + dir.Unit)
+    end
+end
+local function magnetStop()
+    MAGNET.active = false
+end
+
+local function isFruitTool(obj)
+    return obj and obj:IsA("Tool") and string.find(string.lower(obj.Name), "fruit", 1, true) ~= nil
+end
+
+local function findFruitTool()
+    local char = player.Character
+    local bp = player:FindFirstChild("Backpack")
+    for _, cont in ipairs({char, bp}) do
+        if cont then
+            for _, ch in ipairs(cont:GetChildren()) do
+                if isFruitTool(ch) then return ch end
+            end
+        end
+    end
+    return nil
+end
+
+local function charFruit(plr)
+    local c = plr and plr.Character
+    if not c then return nil end
+    for _, ch in ipairs(c:GetChildren()) do
+        if isFruitTool(ch) then return ch end
+    end
+    return nil
+end
+
+local function snapshotSelfFruit()
+    local set = {}
+    local c = player.Character
+    if c then
+        for _, ch in ipairs(c:GetChildren()) do
+            if isFruitTool(ch) then set[ch] = true end
+        end
+    end
+    return set
+end
+local function snapshotCharFruit(plr)
+    local set = {}
+    local c = plr and plr.Character
+    if c then
+        for _, ch in ipairs(c:GetChildren()) do
+            if isFruitTool(ch) then set[ch] = true end
+        end
+    end
+    return set
+end
+
+local function waitFruitInSelf()
+    local last = 0
+    local t0 = tick()
+    while State.running do
+        local t = findFruitTool()
+        if t then return t end
+        local el = tick() - t0
+        if el - last >= 5 then
+            last = el
+            LOG("GreenWait", string.format("ждём fruit у себя... %.0fs", el))
+        end
+        task.wait(0.2)
+    end
+end
+
+local function waitNewFruitInSelf(beforeSet, timeout)
+    local t0 = tick()
+    while State.running do
+        local c = player.Character
+        if c then
+            for _, ch in ipairs(c:GetChildren()) do
+                if isFruitTool(ch) and not beforeSet[ch] then
+                    return true, ch
+                end
+            end
+        end
+        if tick() - t0 > timeout then return false end
+        task.wait(0.15)
+    end
+end
+
+local function waitNewFruitInPartner(partnerName, beforeSet, timeout)
+    local t0 = tick()
+    while State.running do
+        local p = Players:FindFirstChild(partnerName)
+        local c = p and p.Character
+        if c then
+            for _, ch in ipairs(c:GetChildren()) do
+                if isFruitTool(ch) and not beforeSet[ch] then
+                    return true, ch.Name
+                end
+            end
+        end
+        if tick() - t0 > timeout then return false end
+        task.wait(0.15)
+    end
+end
+
+local function waitAnyFruitInPartner(partnerName, timeout)
+    local t0 = tick()
+    while State.running do
+        local p = Players:FindFirstChild(partnerName)
+        if p and charFruit(p) then return true end
+        if tick() - t0 > timeout then return false end
+        task.wait(0.15)
+    end
+    return false
+end
+
+local function equipFruit()
+    local char = player.Character
+    if not char then return nil end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return nil end
+    local tool = findFruitTool()
+    if not tool then return nil end
+    if tool.Parent ~= char then
+        hum:EquipTool(tool)
+        task.wait(0.3)
+    end
+    if tool.Parent ~= char then return nil end
+    return tool
+end
+
+local function dropOnce(partnerName)
+    local partner = Players:FindFirstChild(partnerName)
+    if not partner then return false, "no partner instance" end
+    local before = snapshotCharFruit(partner)
+
+    local tool = equipFruit()
+    if not tool then return false, "нет fruit" end
+    local eatRemote = tool:FindFirstChild("EatRemote")
+    if not eatRemote or not eatRemote:IsA("RemoteFunction") then
+        return false, "нет EatRemote"
+    end
+
+    local ok, res = pcall(function() return eatRemote:InvokeServer("Drop") end)
+    LOG("GreenDrop", "invoke ok=" .. tostring(ok) .. " res=" .. tostring(res))
+    if not ok then return false, "invoke err" end
+    if res == false then return false, "invoke denied" end
+
+    local appeared, name = waitNewFruitInPartner(partnerName, before, DROP_CONFIRM_TIMEOUT)
+    if not appeared then return false, "fruit не появился у партнёра" end
+    LOG("GreenDrop", "у партнёра появился " .. tostring(name))
+
+    local t0 = tick()
+    while findFruitTool() and tick() - t0 < DROP_FADE_TIMEOUT do task.wait(0.1) end
+    return true
+end
+
+local function dropWithRetry(partnerName, tag)
+    local i = 0
+    while State.running do
+        i += 1
+        if not findFruitTool() then
+            if waitAnyFruitInPartner(partnerName, 1.5) then
+                LOG(tag, "fruit уже у партнёра — ок")
+                return true
+            end
+            return false, "нет fruit локально"
+        end
+        local ok, err = dropOnce(partnerName)
+        if ok then
+            LOG(tag, "drop #" .. i .. " OK")
+            return true
+        end
+        LOG(tag, "drop #" .. i .. " FAIL: " .. tostring(err))
+        task.wait(DROP_RETRY_DELAY)
+        if not findFruitTool() and not waitAnyFruitInPartner(partnerName, 1.5) then
+            LOG(tag, "фрукт пропал у обоих — abort")
+            return false, "no fruit after fail"
+        end
+    end
+end
+
+local function greenHttpGet(url)
+    local ok, resp = pcall(function() return game:HttpGet(url) end)
+    if not ok then return nil, tostring(resp) end
+    local ok2, data = pcall(function() return HttpService:JSONDecode(resp) end)
+    if not ok2 or type(data) ~= "table" then return nil, "bad json: " .. tostring(resp) end
+    return data
+end
+
+local function requestMatch()
+    return greenHttpGet(SERVER_URL
+        .. "/match?nickname=" .. HttpService:UrlEncode(player.Name)
+        .. "&job_id="    .. HttpService:UrlEncode(game.JobId))
+end
+local function requestUnmatch()
+    pcall(function()
+        return game:HttpGet(SERVER_URL .. "/unmatch?nickname=" .. HttpService:UrlEncode(player.Name))
+    end)
+end
+local function reportClaim(success)
+    pcall(function()
+        return game:HttpGet(SERVER_URL
+            .. "/claim_result?nickname=" .. HttpService:UrlEncode(player.Name)
+            .. "&ok=" .. tostring(success))
+    end)
+end
+local function checkClaimBothOk()
+    local d = greenHttpGet(SERVER_URL .. "/claim_check?nickname=" .. HttpService:UrlEncode(player.Name))
+    return d and d.both_ok == true
+end
+
+local function tryClaim()
+    if not RF_InteractDragonQuest then return false, "no RF" end
+    local ok, resp = pcall(function()
+        return RF_InteractDragonQuest:InvokeServer({
+            NPC = POST_TRADE_NPC_NAME,
+            Command = "ClaimQuest"
+        })
+    end)
+    if not ok then return false, resp end
+    return true, resp
+end
+
+local function claimAndWaitServer()
+    local claimedOk = false
+
+    while State.running do
+        if not claimedOk then
+            local ok, resp = tryClaim()
+            claimedOk = (ok and resp == true)
+            LOG("GreenClaim", "tryClaim ok=" .. tostring(ok) .. " resp=" .. tostring(resp))
+            reportClaim(claimedOk)
+        end
+
+        local t0 = tick()
+        while State.running and tick() - t0 < SERVER_POLL_TIMEOUT do
+            if checkClaimBothOk() then
+                LOG("GreenClaim", "★ both_ok=true")
+                return true
+            end
+            task.wait(SERVER_POLL_DELAY)
+        end
+
+        LOG("GreenClaim", "таймаут поллинга (claimedOk=" .. tostring(claimedOk) .. ")")
+        if not claimedOk then
+            task.wait(CLAIM_RETRY_DELAY)
+        end
+    end
+    return false
+end
+
+local function partnerAtCoords(partnerName, coords)
+    local p = Players:FindFirstChild(partnerName)
+    local hrp = p and p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false, math.huge end
+    local d = (hrp.Position - coords).Magnitude
+    return d <= PARTNER_POS_TOLERANCE, d
+end
+local function waitPartnerAtCoords(partnerName, coords)
+    local last = 0
+    local t0 = tick()
+    while State.running do
+        local ok, d = partnerAtCoords(partnerName, coords)
+        if ok then
+            LOG("GreenWait", string.format("партнёр на координатах (d=%.1f)", d))
+            return true
+        end
+        local el = tick() - t0
+        if el - last >= 5 then
+            last = el
+            LOG("GreenWait", string.format("ждём партнёра на координатах... d=%.1f", d))
+        end
+        task.wait(0.5)
+    end
+end
+
+local function hostSequence(partnerName)
+    LOG("GreenHost", "8,7 ON — получаем fruit")
+    ensureOptionOn(TAB_FRUIT, OPT_FRUIT)
+    waitFruitInSelf()
+    LOG("GreenHost", "8,7 OFF")
+    ensureOptionOff(TAB_FRUIT, OPT_FRUIT)
+
+    task.wait(DROP_TIMING)
+    LOG("GreenHost", "drop #1 → " .. partnerName)
+    dropWithRetry(partnerName, "host-drop1")
+
+    local snap = snapshotSelfFruit()
+    LOG("GreenHost", "ждём новый fruit обратно от " .. partnerName)
+    if not waitNewFruitInSelf(snap, 60) then
+        WARN("GreenHost", "не дождались обратного fruit")
+    end
+
+    task.wait(DROP_TIMING)
+    LOG("GreenHost", "drop #2 → " .. partnerName)
+    dropWithRetry(partnerName, "host-drop2")
+end
+
+local function guestSequence(partnerName)
+    LOG("GreenGuest", "ждём fruit #1 от " .. partnerName)
+    waitFruitInSelf()
+    task.wait(DROP_TIMING)
+
+    LOG("GreenGuest", "drop #1 → " .. partnerName)
+    dropWithRetry(partnerName, "guest-drop1")
+
+    local snap = snapshotSelfFruit()
+    LOG("GreenGuest", "ждём fruit #2 от " .. partnerName)
+    if not waitNewFruitInSelf(snap, 60) then
+        WARN("GreenGuest", "не дождались fruit #2")
+    end
+end
+
+local function runGreenMode()
+    LOG("Green", "=== START ===")
+    State.greenActive = true
+    State.beltScanPaused = true
+
+    if not waitForHubReady() then
+        WARN("Green", "хаб не готов — выход")
+        State.greenActive = false
+        State.beltScanPaused = false
+        return
+    end
+    LOG("Green", "6,1 OFF (до match)")
+    ensureOptionOff(TAB_MAIN, OPT_MAIN)
+
+    local match = nil
+    while State.running do
+        local data, err = requestMatch()
+        if not data then
+            WARN("Green", "match err: " .. tostring(err)); task.wait(3)
+        elseif data.waiting then
+            LOG("Green", "waiting for partner..."); task.wait(3)
+        else
+            match = data
+            break
+        end
+    end
+    if not match then
+        State.greenActive = false
+        State.beltScanPaused = false
+        return
+    end
+
+    LOG("Green", "role=" .. tostring(match.role) .. " partner=" .. tostring(match.partner_name))
+
+    if match.role == "guest" and match.job_id and match.job_id ~= "" and match.job_id ~= game.JobId then
+        LOG("Green", "guest: телепорт на " .. match.job_id)
+        while State.running and game.JobId ~= match.job_id do
+            teleportToJobIdGlobal(match.job_id)
+            task.wait(3)
+            requestMatch()
+        end
+        task.wait(8)
+        waitForHubReady()
+        LOG("Green", "6,1 OFF (после телепорта)")
+        ensureOptionOff(TAB_MAIN, OPT_MAIN)
+        requestMatch()
+    end
+
+    local myPos, partnerPos
+    if match.role == "host" then
+        myPos, partnerPos = GREEN_HOST_POS, GREEN_GUEST_POS
+    else
+        myPos, partnerPos = GREEN_GUEST_POS, GREEN_HOST_POS
+    end
+
+    LOG("Green", "магнит → моя позиция")
+    magnetStart(myPos, partnerPos)
+
+    waitPartnerAtCoords(match.partner_name, partnerPos)
+
+    if match.role == "host" then
+        hostSequence(match.partner_name)
+    else
+        guestSequence(match.partner_name)
+    end
+
+    local ok = claimAndWaitServer()
+
+    LOG("Green", "магнит OFF, 6,1 ON")
+    magnetStop()
+    ensureOptionOn(TAB_MAIN, OPT_MAIN)
+
+    State.greenActive = false
+    State.beltScanPaused = false
+
+    if ok then
+        State.greenDone = true
+        LOG("Green", "=== DONE ===")
+    else
+        WARN("Green", "не завершено (State.running=false)")
+    end
+    requestUnmatch()
 end
 
 -- ============================================================
@@ -1866,12 +2278,29 @@ while State.running do
 
     local belt = State.currentBelt
 
-    if belt == "Yellow" and not State.tradeDone then
+    -- ★ BLUE: один раз хоп после получения blue belt
+    if belt == "Blue" and not State.blueHopDone then
+        LOG("Main", "Blue обнаружен — выполняю ОДИН server hop")
+        State.blueHopDone = true
+        if getOptionState(TAB_MAIN, OPT_MAIN) == true then
+            setOption(TAB_MAIN, OPT_MAIN, false)
+            task.wait(0.5)
+        end
+        serverHop()
+        task.wait(3)
+        -- serverHop() сам сбросил currentBelt = "Unknown", сканер подхватит заново
+    elseif belt == "Yellow" and not State.tradeDone then
         if getOptionState(TAB_MAIN, OPT_MAIN) == true then
             setOption(TAB_MAIN, OPT_MAIN, false)
             task.wait(0.5)
         end
         runTradeMode()
+    elseif belt == "Green" and not State.greenDone then
+        if getOptionState(TAB_MAIN, OPT_MAIN) == true then
+            setOption(TAB_MAIN, OPT_MAIN, false)
+            task.wait(0.5)
+        end
+        runGreenMode()
     elseif belt == "None" or belt == "Unknown" then
         if not State.nobeltDone then
             runNoBeltMode()
