@@ -1,9 +1,8 @@
 --!nocheck
 -- ============================================================
--- FULL SCRIPT v16 (compiled + blue hop once)
+-- FULL SCRIPT v15 (compiled)
 --  - Belt scanner + server hop + NoBelt / Hold / Yellow-Trade
 --  - GREEN MODE v14 (host/guest fruit drop + claim)
---  - ★ Oдин server hop после получения Blue belt
 -- ============================================================
 -- КОНФИГ
 -- ============================================================
@@ -61,7 +60,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService       = game:GetService("HttpService")
 local Workspace         = game:GetService("Workspace")
 local CoreGui           = game:GetService("CoreGui")
-local RunService        = game:GetService("RunService")
+local RunService        = game:GetService("RunService")   -- ★ для магнита
 
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -104,11 +103,10 @@ local State = {
     running         = true,
     nobeltDone      = false,
     tradeDone       = false,
-    greenDone       = false,
-    greenActive     = false,
+    greenDone       = false,       -- ★ green
+    greenActive     = false,       -- ★ green
     inTrade         = false,
     orangeNotified  = false,
-    blueHopDone     = false,   -- ★ один хоп после получения Blue
 }
 
 -- ============================================================
@@ -667,8 +665,8 @@ local COLOR_ON  = "0.345098, 0.396078, 0.94902"
 local COLOR_OFF = "0.239216, 0.262745, 0.529412"
 local TAB_MAIN, OPT_MAIN = 6, 1
 local TAB_FARM, OPT_FARM = 2, 4
-local TAB_FRUIT, OPT_FRUIT = 8, 7
-local TELEPORT_TAB          = 19
+local TAB_FRUIT, OPT_FRUIT = 8, 7          -- ★ green
+local TELEPORT_TAB          = 19           -- ★ green
 local TELEPORT_OPT_TEXT     = 2
 local TELEPORT_OPT_ACTIVATE = 3
 
@@ -851,7 +849,7 @@ local function waitForHubReady(timeout)
 end
 
 -- ============================================================
--- TELEPORT TO JOB ID (global helper)
+-- TELEPORT TO JOB ID (global helper for green mode)
 -- ============================================================
 local function teleportToJobIdGlobal(jobId)
     local root = getRoot() if not root then return false end
@@ -1346,6 +1344,8 @@ local function runTradeMode()
         return true
     end
 
+    -- (используем глобальные findTab / findOption / teleportToJobIdGlobal)
+
     local function findTradeTable(expectedPartner)
         local tables = {}
         for _, obj in ipairs(Workspace:GetDescendants()) do
@@ -1839,6 +1839,7 @@ end
 -- ============================================================
 -- ★ GREEN MODE (v14 integrated)
 -- ============================================================
+-- Магнит
 local MAGNET = { active = false, pos = nil, look = nil }
 
 local function getHRP()
@@ -1871,6 +1872,7 @@ local function magnetStop()
     MAGNET.active = false
 end
 
+-- Fruit helpers
 local function isFruitTool(obj)
     return obj and obj:IsA("Tool") and string.find(string.lower(obj.Name), "fruit", 1, true) ~= nil
 end
@@ -1992,6 +1994,7 @@ local function equipFruit()
     return tool
 end
 
+-- Drop
 local function dropOnce(partnerName)
     local partner = Players:FindFirstChild(partnerName)
     if not partner then return false, "no partner instance" end
@@ -2043,6 +2046,7 @@ local function dropWithRetry(partnerName, tag)
     end
 end
 
+-- HTTP green
 local function greenHttpGet(url)
     local ok, resp = pcall(function() return game:HttpGet(url) end)
     if not ok then return nil, tostring(resp) end
@@ -2073,6 +2077,7 @@ local function checkClaimBothOk()
     return d and d.both_ok == true
 end
 
+-- Claim
 local function tryClaim()
     if not RF_InteractDragonQuest then return false, "no RF" end
     local ok, resp = pcall(function()
@@ -2113,6 +2118,7 @@ local function claimAndWaitServer()
     return false
 end
 
+-- Wait partner at coords
 local function partnerAtCoords(partnerName, coords)
     local p = Players:FindFirstChild(partnerName)
     local hrp = p and p.Character and p.Character:FindFirstChild("HumanoidRootPart")
@@ -2138,6 +2144,7 @@ local function waitPartnerAtCoords(partnerName, coords)
     end
 end
 
+-- Sequences
 local function hostSequence(partnerName)
     LOG("GreenHost", "8,7 ON — получаем fruit")
     ensureOptionOn(TAB_FRUIT, OPT_FRUIT)
@@ -2175,11 +2182,13 @@ local function guestSequence(partnerName)
     end
 end
 
+-- Main green
 local function runGreenMode()
     LOG("Green", "=== START ===")
     State.greenActive = true
     State.beltScanPaused = true
 
+    -- 6,1 OFF сразу (до /match)
     if not waitForHubReady() then
         WARN("Green", "хаб не готов — выход")
         State.greenActive = false
@@ -2209,6 +2218,7 @@ local function runGreenMode()
 
     LOG("Green", "role=" .. tostring(match.role) .. " partner=" .. tostring(match.partner_name))
 
+    -- guest: телепорт
     if match.role == "guest" and match.job_id and match.job_id ~= "" and match.job_id ~= game.JobId then
         LOG("Green", "guest: телепорт на " .. match.job_id)
         while State.running and game.JobId ~= match.job_id do
@@ -2278,24 +2288,14 @@ while State.running do
 
     local belt = State.currentBelt
 
-    -- ★ BLUE: один раз хоп после получения blue belt
-    if belt == "Blue" and not State.blueHopDone then
-        LOG("Main", "Blue обнаружен — выполняю ОДИН server hop")
-        State.blueHopDone = true
-        if getOptionState(TAB_MAIN, OPT_MAIN) == true then
-            setOption(TAB_MAIN, OPT_MAIN, false)
-            task.wait(0.5)
-        end
-        serverHop()
-        task.wait(3)
-        -- serverHop() сам сбросил currentBelt = "Unknown", сканер подхватит заново
-    elseif belt == "Yellow" and not State.tradeDone then
+    if belt == "Yellow" and not State.tradeDone then
         if getOptionState(TAB_MAIN, OPT_MAIN) == true then
             setOption(TAB_MAIN, OPT_MAIN, false)
             task.wait(0.5)
         end
         runTradeMode()
     elseif belt == "Green" and not State.greenDone then
+        -- ★ GREEN MODE
         if getOptionState(TAB_MAIN, OPT_MAIN) == true then
             setOption(TAB_MAIN, OPT_MAIN, false)
             task.wait(0.5)
