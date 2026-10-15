@@ -1,12 +1,20 @@
 --!nocheck
 -- ============================================================
--- HOHO_H HUB LOADER + UI WAIT + BUTTON ACTIVATOR
+-- HOHO_H HUB LOADER + UI WAIT + BUTTON ACTIVATOR (retry until success)
 -- Хаб: loadstring(game:HttpGet("https://raw.githubusercontent.com/acsu123/HOHO_H/main/Loading_UI"))()
+--
+-- Логика:
+--  - ШАГ 1 активируется → ждём появления ШАГ 2 (это = успех шага 1).
+--    Если ШАГ 2 не появился за RETRY_DELAY — повторяем активацию ШАГ 1.
+--  - ШАГ 2 активируется → ждём появления ШАГ 3 (маркер успеха ШАГ 2).
+--    Пока ШАГ 3 не задан — можно указать любой маркер (имя+координаты).
 -- ============================================================
 
 local CoreGui = game:GetService("CoreGui")
 
 print("[HOHO] === START ===")
+
+local RETRY_DELAY = 5   -- сек между попытками активации
 
 -- ============================================================
 -- 1. ЗАГРУЗКА ХАБА
@@ -58,92 +66,6 @@ local function findButtonByCoords(name, tx, ty, tol)
     return nil
 end
 
--- ============================================================
--- 3. ОЖИДАНИЕ ПОЯВЛЕНИЯ КНОПКИ (бесконечное)
--- ============================================================
-local function waitButtonInfinite(name, tx, ty, tol, logTag)
-    logTag = logTag or name
-    local lastLog = 0
-    local t0 = tick()
-    while true do
-        local b = findButtonByCoords(name, tx, ty, tol)
-        if b then
-            print(string.format("[HOHO] %s: появилась через %.1fс (%s)",
-                logTag, tick() - t0, b:GetFullName()))
-            return b
-        end
-        local el = tick() - t0
-        if el - lastLog >= 5 then
-            lastLog = el
-            print(string.format("[HOHO] %s: жду появления... %.0fс", logTag, el))
-        end
-        task.wait(0.3)
-    end
-end
-
--- ============================================================
--- 4. АКТИВАЦИЯ КНОПКИ
--- ============================================================
-local function activateButton(btn, tag)
-    tag = tag or "button"
-    if not btn then
-        warn("[HOHO] " .. tag .. ": кнопка nil")
-        return false
-    end
-    print("[HOHO] " .. tag .. ": активирую " .. btn:GetFullName())
-    local ok = fireSequence(btn)
-    print("[HOHO] " .. tag .. ": fireSequence => " .. tostring(ok))
-    if not ok then
-        pcall(function() btn:Click() end)
-        task.wait(0.15)
-        pcall(function() btn:Activate() end)
-    end
-    return ok
-end
-
--- ============================================================
--- 5. ЖДЁМ ПОЯВЛЕНИЯ ХАБА (проверяем появление любой кнопки)
--- ============================================================
-print("[HOHO] жду появления UI хаба...")
-local hubReady = false
-local t0 = tick()
-while not hubReady do
-    -- проверяем, появилась ли хоть одна кнопка с нужным именем
-    for _, obj in ipairs(CoreGui:GetDescendants()) do
-        if (obj:IsA("TextButton") or obj:IsA("ImageButton")) and obj.Name == "HOMEPAGE_BUTTON" then
-            hubReady = true
-            print(string.format("[HOHO] UI появился через %.1fс", tick() - t0))
-            break
-        end
-    end
-    if not hubReady then
-        task.wait(0.5)
-    end
-end
-
--- ============================================================
--- 6. ЦЕПОЧКА АКТИВАЦИИ
--- ============================================================
-
--- ШАГ 1: HOMEPAGE_BUTTON (557, 276)
-print("[HOHO] --- ШАГ 1: HOMEPAGE_BUTTON (557, 276) ---")
-local btn1 = waitButtonInfinite("HOMEPAGE_BUTTON", 557.18, 276.32, 5, "HOMEPAGE_BUTTON")
-activateButton(btn1, "HOMEPAGE_BUTTON")
-
--- ШАГ 2: Button (485, 245) внутри PAGES_TAB.ANCHOR.MINI_PAGES.MINI_11.ScrollingFrame
-print("[HOHO] --- ШАГ 2: Button (485, 245) ---")
-
-local PARENT_PATH = {
-    "H\u{043E}h\u{043E}_g\u{0435}n4",
-    "MAIN_UI",
-    "MAIN_ZONES",
-    "PAGES_TAB",
-    "ANCHOR",
-    "MINI_PAGES",
-    "MINI_11",
-    "ScrollingFrame",
-}
-
 local function walkPath(segments)
     local cur = CoreGui
     for _, seg in ipairs(segments) do
@@ -153,38 +75,152 @@ local function walkPath(segments)
     return cur
 end
 
-local btn2 = nil
-local lastLog = 0
-local t1 = tick()
-while not btn2 do
-    local parent = walkPath(PARENT_PATH)
-    if parent then
-        for _, c in ipairs(parent:GetChildren()) do
-            if c.Name == "Button" and (c:IsA("TextButton") or c:IsA("ImageButton")) then
-                local dx = math.abs(c.AbsolutePosition.X - 484.81)
-                local dy = math.abs(c.AbsolutePosition.Y - 244.62)
-                if dx <= 5 and dy <= 5 then
-                    btn2 = c
-                    print(string.format("[HOHO] Button: появилась через %.1fс (через MINI_11.ScrollingFrame)",
-                        tick() - t1))
-                    break
+-- Ищем «маркер» — кнопку по имени+координатам, в т.ч. через конкретный путь.
+-- marker = { name, x, y, tol, path? }
+local function findMarker(marker)
+    if marker.path then
+        local parent = walkPath(marker.path)
+        if parent then
+            for _, c in ipairs(parent:GetChildren()) do
+                if c.Name == marker.name and (c:IsA("TextButton") or c:IsA("ImageButton")) then
+                    local dx = math.abs(c.AbsolutePosition.X - marker.x)
+                    local dy = math.abs(c.AbsolutePosition.Y - marker.y)
+                    if dx <= (marker.tol or 5) and dy <= (marker.tol or 5) then
+                        return c
+                    end
                 end
             end
         end
     end
-    if not btn2 then
-        btn2 = findButtonByCoords("Button", 484.81, 244.62, 5)
-    end
-    if not btn2 then
-        local el = tick() - t1
-        if el - lastLog >= 5 then
-            lastLog = el
-            print(string.format("[HOHO] Button: жду появления... %.0fс", el))
+    return findButtonByCoords(marker.name, marker.x, marker.y, marker.tol or 5)
+end
+
+-- ============================================================
+-- 3. ЖДЁМ ПОЯВЛЕНИЯ ХАБА (появление целевой ШАГ1-кнопки)
+-- ============================================================
+print("[HOHO] жду появления UI хаба...")
+do
+    local t0 = tick()
+    while true do
+        local ready = false
+        for _, obj in ipairs(CoreGui:GetDescendants()) do
+            if (obj:IsA("TextButton") or obj:IsA("ImageButton")) and obj.Name == "HOMEPAGE_BUTTON" then
+                ready = true
+                break
+            end
         end
-        task.wait(0.3)
+        if ready then
+            print(string.format("[HOHO] UI появился через %.1fс", tick() - t0))
+            break
+        end
+        task.wait(0.5)
     end
 end
 
-activateButton(btn2, "Button")
+-- ============================================================
+-- 4. МАРКЕРЫ
+-- ============================================================
+-- ШАГ 1 = сама кнопка, которую надо нажать
+local STEP1_BTN = {
+    name = "HOMEPAGE_BUTTON", x = 557.18, y = 276.32, tol = 5,
+}
+
+-- ШАГ 2 = кнопка, которую надо нажать после ШАГ 1;
+-- её появление = индикатор успеха ШАГ 1.
+local STEP2_BTN = {
+    name = "Button", x = 484.81, y = 244.62, tol = 5,
+    path = {
+        "H\u{043E}h\u{043E}_g\u{0435}n4",
+        "MAIN_UI",
+        "MAIN_ZONES",
+        "PAGES_TAB",
+        "ANCHOR",
+        "MINI_PAGES",
+        "MINI_11",
+        "ScrollingFrame",
+    },
+}
+
+-- ============================================================
+-- 5. АКТИВАЦИЯ С ПОВТОРАМИ
+-- ============================================================
+-- activateUntilMarker:
+--   активирует targetBTN, ждёт появления marker'а.
+--   если marker не появился за RETRY_DELAY — повторяет.
+--   Возвращает найденный marker-инстанс.
+local function activateUntilMarker(targetBTN, marker, tag)
+    tag = tag or targetBTN.name
+    local attempt = 0
+    while true do
+        attempt += 1
+
+        local btn = findMarker(targetBTN)
+        if not btn then
+            print(string.format("[HOHO] %s: попытка #%d — target не найден, ждём...", tag, attempt))
+            task.wait(1)
+        else
+            print(string.format("[HOHO] %s: попытка #%d — активирую %s (%.1f, %.1f)",
+                tag, attempt, btn:GetFullName(),
+                btn.AbsolutePosition.X, btn.AbsolutePosition.Y))
+
+            local ok = fireSequence(btn)
+            if not ok then
+                pcall(function() btn:Click() end)
+                task.wait(0.15)
+                pcall(function() btn:Activate() end)
+            end
+        end
+
+        -- ждём появления marker'а RETRY_DELAY секунд
+        local t0 = tick()
+        while tick() - t0 < RETRY_DELAY do
+            local m = findMarker(marker)
+            if m then
+                print(string.format("[HOHO] %s: ✓ успех через %.1fс (маркер %s)",
+                    tag, tick() - t0, m:GetFullName()))
+                return m
+            end
+            task.wait(0.2)
+        end
+
+        print(string.format("[HOHO] %s: маркер не появился за %dс — повтор", tag, RETRY_DELAY))
+    end
+end
+
+-- ============================================================
+-- 6. ЦЕПОЧКА
+-- ============================================================
+print("[HOHO] --- ШАГ 1 → ШАГ 2 ---")
+local step2 = activateUntilMarker(STEP1_BTN, STEP2_BTN, "STEP1")
+
+-- ============================================================
+-- 7. ШАГ 2
+-- ============================================================
+-- Пока не знаем «маркер успеха» для шага 2 — просто активируем
+-- с повторами до тех пор, пока что-то дальше не подтвердит.
+-- Здесь в качестве маркера можно использовать любой следующий
+-- элемент, который должен появиться. Если его нет — оставь nil
+-- и просто один раз нажми ШАГ 2.
+print("[HOHO] --- ШАГ 2 ---")
+local nextMarker = nil  -- ← сюда можно положить {name=..., x=..., y=...}
+
+if nextMarker then
+    activateUntilMarker(STEP2_BTN, nextMarker, "STEP2")
+else
+    -- без маркера: жмём один раз и выходим
+    local b2 = step2 or findMarker(STEP2_BTN)
+    if b2 then
+        print("[HOHO] STEP2: маркер не задан, разовая активация")
+        local ok = fireSequence(b2)
+        print("[HOHO] STEP2: fireSequence => " .. tostring(ok))
+        if not ok then
+            pcall(function() b2:Click() end)
+            task.wait(0.15)
+            pcall(function() b2:Activate() end)
+        end
+    else
+        warn("[HOHO] STEP2: кнопка не найдена")
+    end
+end
 
 print("[HOHO] === DONE ===")
