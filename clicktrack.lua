@@ -1,64 +1,76 @@
 -- ============================================================================
---  СКРИПТ-ПЕРЕХВАТЧИК КЛИКОВ ПО КНОПКАМ
+--  СКРИПТ-ПЕРЕХВАТЧИК КЛИКОВ ПО КНОПКАМ (с записью в файл)
 --  Вставьте в консоль Delta после загрузки HUB.
---  При каждом клике на любую кнопку (TextButton/ImageButton) будет выводиться
---  её информация в консоль. Помогает идентифицировать нужные кнопки.
 -- ============================================================================
 
--- Функция вывода информации о кнопке
-local function logButton(btn)
-    local info = {
-        Name = btn.Name,
-        Class = btn.ClassName,
-        Text = btn:IsA("TextButton") and btn.Text or "—",
-        Path = btn:GetFullName(),
-        Visible = btn.Visible,
-        Position = tostring(btn.AbsolutePosition),
-        Size = tostring(btn.AbsoluteSize)
-    }
-    print("=== КНОПКА НАЖАТА ===")
-    print("Имя: " .. info.Name)
-    print("Класс: " .. info.Class)
-    print("Текст: " .. info.Text)
-    print("Путь: " .. info.Path)
-    print("Видимость: " .. tostring(info.Visible))
-    print("Позиция: " .. info.Position)
-    print("Размер: " .. info.Size)
-    print("=======================")
+-- Путь и инициализация файла лога
+local LOG_FILE = "button_clicks_log.txt"
+
+-- Безопасная запись: если функции нет — предупреждаем один раз
+local hasFileAPI = (type(writefile) == "function") and (type(appendfile) == "function")
+if not hasFileAPI then
+    warn("[LOG] writefile/appendfile недоступны — запись в файл отключена.")
+else
+    -- Создаём/перезаписываем файл с заголовком сессии
+    pcall(function()
+        writefile(LOG_FILE, string.format("=== СЕССИЯ %s ===\n", os.date("%Y-%m-%d %H:%M:%S")))
+    end)
 end
 
--- Функция добавления обработчика на кнопку
-local function hookButton(btn)
-    if btn:IsA("TextButton") or btn:IsA("ImageButton") then
-        -- Убедимся, что обработчик не добавлен дважды (используем атрибут)
-        if not btn:GetAttribute("_hooked") then
-            btn:SetAttribute("_hooked", true)
-            btn.MouseButton1Click:Connect(function()
-                logButton(btn)
-            end)
-        end
+-- Запись строки в файл + консоль
+local function emit(line)
+    print(line)
+    if hasFileAPI then
+        pcall(appendfile, LOG_FILE, line .. "\n")
     end
 end
 
--- Обработка всех существующих объектов
+-- Формирование информации о кнопке
+local function logButton(btn)
+    local isText = btn:IsA("TextButton")
+    local lines = {
+        "=== КНОПКА НАЖАТА ===",
+        "Имя: " .. btn.Name,
+        "Класс: " .. btn.ClassName,
+        "Текст: " .. (isText and btn.Text or "—"),
+        "Путь: " .. btn:GetFullName(),
+        "Видимость: " .. tostring(btn.Visible),
+        "Позиция: " .. tostring(btn.AbsolutePosition),
+        "Размер: " .. tostring(btn.AbsoluteSize),
+        "Время: " .. os.date("%H:%M:%S"),
+        "======================="
+    }
+    for _, l in ipairs(lines) do emit(l) end
+    if hasFileAPI then pcall(appendfile, LOG_FILE, "\n") end
+end
+
+-- Навешиваем обработчик (без дублей, через атрибут)
+local function hookButton(btn)
+    if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return end
+    if btn:GetAttribute("_hooked") then return end
+    btn:SetAttribute("_hooked", true)
+    btn.MouseButton1Click:Connect(function()
+        logButton(btn)
+    end)
+end
+
+-- Рекурсивный обход
 local function scanAndHook(parent)
     if not parent then return end
     for _, child in ipairs(parent:GetChildren()) do
         hookButton(child)
-        scanAndHook(child)  -- рекурсивно обрабатываем вложенные
+        scanAndHook(child)
     end
 end
 
--- Отслеживание новых объектов (для динамически создаваемых кнопок)
+-- Отслеживание новых объектов
 local function setupDescendantTracking(parent)
-    parent.DescendantAdded:Connect(function(desc)
-        hookButton(desc)
-    end)
+    parent.DescendantAdded:Connect(hookButton)
 end
 
--- Основная функция запуска
+-- Запуск
 local function startListener()
-    print("Запуск перехватчика кликов...")
+    emit("[INIT] Запуск перехватчика кликов...")
     local sources = {
         game:GetService("CoreGui"),
         game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
@@ -69,8 +81,7 @@ local function startListener()
             setupDescendantTracking(src)
         end
     end
-    print("Перехватчик активен. Кликайте по кнопкам – информация появится в консоли.")
+    emit("[INIT] Перехватчик активен. Лог: " .. LOG_FILE)
 end
 
--- Запускаем
 startListener()
