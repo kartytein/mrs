@@ -1,19 +1,31 @@
 --!nocheck
 -- ============================================================
--- CHAIN ACTIVATOR v2 (infinite wait for appearance)
--- 1) HOMEPAGE_BUTTON  (pos ≈ 557, 276)
--- 2) Button           (pos ≈ 485, 245)
---    Путь родителя: Hоhо_gеn4.MAIN_UI.MAIN_ZONES.PAGES_TAB.ANCHOR
---                   .MINI_PAGES.MINI_11.ScrollingFrame
--- Метод: fireSequence 1:1
+-- HOHO_H HUB LOADER + UI WAIT + BUTTON ACTIVATOR
+-- Хаб: loadstring(game:HttpGet("https://raw.githubusercontent.com/acsu123/HOHO_H/main/Loading_UI"))()
 -- ============================================================
-loadstring(game:HttpGet("https://raw.githubusercontent.com/acsu123/HOHO_H/main/Loading_UI"))()
 
 local CoreGui = game:GetService("CoreGui")
 
-print("[HPB] === START chain v2 ===")
+print("[HOHO] === START ===")
 
--- ---------- fireSequence 1:1 ----------
+-- ============================================================
+-- 1. ЗАГРУЗКА ХАБА
+-- ============================================================
+print("[HOHO] загружаю хаб...")
+task.spawn(function()
+    local ok, err = pcall(function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/acsu123/HOHO_H/main/Loading_UI"))()
+    end)
+    if ok then
+        print("[HOHO] хаб загружен")
+    else
+        warn("[HOHO] ошибка загрузки хаба: " .. tostring(err))
+    end
+end)
+
+-- ============================================================
+-- 2. УТИЛИТЫ
+-- ============================================================
 local function fireSequence(btn)
     if not btn then return false end
     if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return false end
@@ -34,7 +46,6 @@ local function fireSequence(btn)
     return fired
 end
 
--- ---------- Поиск кнопки по имени + координатам ----------
 local function findButtonByCoords(name, tx, ty, tol)
     tol = tol or 5
     for _, obj in ipairs(CoreGui:GetDescendants()) do
@@ -47,7 +58,9 @@ local function findButtonByCoords(name, tx, ty, tol)
     return nil
 end
 
--- ---------- Бесконечное ожидание кнопки ----------
+-- ============================================================
+-- 3. ОЖИДАНИЕ ПОЯВЛЕНИЯ КНОПКИ (бесконечное)
+-- ============================================================
 local function waitButtonInfinite(name, tx, ty, tol, logTag)
     logTag = logTag or name
     local lastLog = 0
@@ -55,50 +68,71 @@ local function waitButtonInfinite(name, tx, ty, tol, logTag)
     while true do
         local b = findButtonByCoords(name, tx, ty, tol)
         if b then
-            print(string.format("[HPB] %s: появилась через %.1fс (%s)",
+            print(string.format("[HOHO] %s: появилась через %.1fс (%s)",
                 logTag, tick() - t0, b:GetFullName()))
             return b
         end
         local el = tick() - t0
         if el - lastLog >= 5 then
             lastLog = el
-            print(string.format("[HPB] %s: жду появления... %.0fс", logTag, el))
+            print(string.format("[HOHO] %s: жду появления... %.0fс", logTag, el))
         end
         task.wait(0.3)
     end
 end
 
--- ---------- Ходьба по пути (фолбэк) ----------
-local function walkPath(segments)
-    local cur = CoreGui
-    for _, seg in ipairs(segments) do
-        if not cur then return nil end
-        cur = cur:FindFirstChild(seg)
+-- ============================================================
+-- 4. АКТИВАЦИЯ КНОПКИ
+-- ============================================================
+local function activateButton(btn, tag)
+    tag = tag or "button"
+    if not btn then
+        warn("[HOHO] " .. tag .. ": кнопка nil")
+        return false
     end
-    return cur
+    print("[HOHO] " .. tag .. ": активирую " .. btn:GetFullName())
+    local ok = fireSequence(btn)
+    print("[HOHO] " .. tag .. ": fireSequence => " .. tostring(ok))
+    if not ok then
+        pcall(function() btn:Click() end)
+        task.wait(0.15)
+        pcall(function() btn:Activate() end)
+    end
+    return ok
 end
 
 -- ============================================================
--- ШАГ 1: HOMEPAGE_BUTTON (557, 276) — ждём появления
+-- 5. ЖДЁМ ПОЯВЛЕНИЯ ХАБА (проверяем появление любой кнопки)
 -- ============================================================
-print("[HPB] --- ШАГ 1: жду HOMEPAGE_BUTTON (557, 276) ---")
+print("[HOHO] жду появления UI хаба...")
+local hubReady = false
+local t0 = tick()
+while not hubReady do
+    -- проверяем, появилась ли хоть одна кнопка с нужным именем
+    for _, obj in ipairs(CoreGui:GetDescendants()) do
+        if (obj:IsA("TextButton") or obj:IsA("ImageButton")) and obj.Name == "HOMEPAGE_BUTTON" then
+            hubReady = true
+            print(string.format("[HOHO] UI появился через %.1fс", tick() - t0))
+            break
+        end
+    end
+    if not hubReady then
+        task.wait(0.5)
+    end
+end
+
+-- ============================================================
+-- 6. ЦЕПОЧКА АКТИВАЦИИ
+-- ============================================================
+
+-- ШАГ 1: HOMEPAGE_BUTTON (557, 276)
+print("[HOHO] --- ШАГ 1: HOMEPAGE_BUTTON (557, 276) ---")
 local btn1 = waitButtonInfinite("HOMEPAGE_BUTTON", 557.18, 276.32, 5, "HOMEPAGE_BUTTON")
+activateButton(btn1, "HOMEPAGE_BUTTON")
 
-print("[HPB] активирую HOMEPAGE_BUTTON...")
-local ok1 = fireSequence(btn1)
-print("[HPB] fireSequence => " .. tostring(ok1))
-if not ok1 then
-    pcall(function() btn1:Click() end)
-    task.wait(0.15)
-    pcall(function() btn1:Activate() end)
-end
+-- ШАГ 2: Button (485, 245) внутри PAGES_TAB.ANCHOR.MINI_PAGES.MINI_11.ScrollingFrame
+print("[HOHO] --- ШАГ 2: Button (485, 245) ---")
 
--- ============================================================
--- ШАГ 2: Button (485, 245) — ждём появления (никакой фиксированной паузы)
--- ============================================================
-print("[HPB] --- ШАГ 2: жду Button (485, 245) ---")
-
--- 2a. Сначала пробуем найти строго через родителя MINI_11.ScrollingFrame
 local PARENT_PATH = {
     "H\u{043E}h\u{043E}_g\u{0435}n4",
     "MAIN_UI",
@@ -110,11 +144,19 @@ local PARENT_PATH = {
     "ScrollingFrame",
 }
 
+local function walkPath(segments)
+    local cur = CoreGui
+    for _, seg in ipairs(segments) do
+        if not cur then return nil end
+        cur = cur:FindFirstChild(seg)
+    end
+    return cur
+end
+
 local btn2 = nil
 local lastLog = 0
-local t0 = tick()
+local t1 = tick()
 while not btn2 do
-    -- пробуем через родителя
     local parent = walkPath(PARENT_PATH)
     if parent then
         for _, c in ipairs(parent:GetChildren()) do
@@ -123,42 +165,26 @@ while not btn2 do
                 local dy = math.abs(c.AbsolutePosition.Y - 244.62)
                 if dx <= 5 and dy <= 5 then
                     btn2 = c
-                    print(string.format("[HPB] Button: появилась через %.1fс (через MINI_11.ScrollingFrame)",
-                        tick() - t0))
+                    print(string.format("[HOHO] Button: появилась через %.1fс (через MINI_11.ScrollingFrame)",
+                        tick() - t1))
                     break
                 end
             end
         end
     end
-    -- фолбэк — глобальный поиск
     if not btn2 then
         btn2 = findButtonByCoords("Button", 484.81, 244.62, 5)
     end
     if not btn2 then
-        local el = tick() - t0
+        local el = tick() - t1
         if el - lastLog >= 5 then
             lastLog = el
-            print(string.format("[HPB] Button: жду появления... %.0fс", el))
+            print(string.format("[HOHO] Button: жду появления... %.0fс", el))
         end
         task.wait(0.3)
     end
 end
 
-print("[HPB] найден: " .. btn2:GetFullName())
-print(string.format("[HPB]   pos=(%.2f, %.2f) size=(%.2f, %.2f) vis=%s",
-    btn2.AbsolutePosition.X, btn2.AbsolutePosition.Y,
-    btn2.AbsoluteSize.X, btn2.AbsoluteSize.Y,
-    tostring(btn2.Visible)))
+activateButton(btn2, "Button")
 
-print("[HPB] fireSequence на Button...")
-local ok2 = fireSequence(btn2)
-print("[HPB] fireSequence => " .. tostring(ok2))
-if not ok2 then
-    print("[HPB] фолбэк :Click()")
-    pcall(function() btn2:Click() end)
-    task.wait(0.15)
-    print("[HPB] фолбэк :Activate()")
-    pcall(function() btn2:Activate() end)
-end
-
-print("[HPB] === DONE ===")
+print("[HOHO] === DONE ===")
