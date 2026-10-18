@@ -1,5 +1,5 @@
 -- ============================================================
--- HOHO Hub + Flask Parser Client (integrated, strict nav order)
+-- HOHO Hub + Flask Parser Client (GET-only transport)
 -- ============================================================
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -7,20 +7,19 @@ local HttpService = game:GetService("HttpService")
 local CoreGui = game:GetService("CoreGui")
 local player = Players.LocalPlayer
 
--- ЗАМЕНИТЬ IP под свою сеть
 local FLASK_URL = "http://192.168.31.179:8000"
 local HUB_URL   = "https://raw.githubusercontent.com/acsu123/HOHO_H/main/Loading_UI"
 
--- Окна аптайма в СЕКУНДАХ
-local UPTIME_WINDOWS = {
-    {45*60,      53*60},        -- 45:00 – 53:00
-    {3*60+57,    4*60+5},       -- 3:57  – 4:05
-    {7*60+10,    7*60+17},      -- 7:10  – 7:17
-    {10*60+30,   10*60+37},     -- 10:30 – 10:37
-    {13*60+37,   13*60+44},     -- 13:37 – 13:44
-    {16*60+53,   17*60+0},      -- 16:53 – 17:00
-    {20*60+8,    20*60+15},     -- 20:08 – 20:15
-    {23*60+17,   23*60+24},     -- 23:17 – 23:24
+-- Окна аптайма В СЕКУНДАХ (для локальной проверки)
+local UPTIME_WINDOWS_SEC = {
+    {45*60,    53*60},   -- 45:00 – 53:00
+    {3*60+57,  4*60+5},  -- 3:57  – 4:05
+    {7*60+10,  7*60+17}, -- 7:10  – 7:17
+    {10*60+30, 10*60+37},-- 10:30 – 10:37
+    {13*60+37, 13*60+44},-- 13:37 – 13:44
+    {16*60+53, 17*60+0}, -- 16:53 – 17:00
+    {20*60+8,  20*60+15},-- 20:08 – 20:15
+    {23*60+17, 23*60+24},-- 23:17 – 23:24
 }
 
 local RETRY_DELAY = 5
@@ -44,7 +43,7 @@ do
 end
 
 -- ============================================================
--- 2. Ждём полной загрузки персонажа
+-- 2. Ждём персонажа
 -- ============================================================
 repeat task.wait(0.5) until player.Character
     and player.Character:FindFirstChild("Humanoid")
@@ -53,7 +52,7 @@ repeat task.wait(0.5) until player.Character
 task.wait(3)
 
 -- ============================================================
--- 3. Чтение аптайма
+-- 3. Аптайм
 -- ============================================================
 local function getServerUptimeSeconds()
     local currentTime = workspace:GetServerTimeNow()
@@ -74,29 +73,26 @@ local function getServerUptimeSeconds()
 end
 
 local function inAnyWindow(sec)
-    for _, w in ipairs(UPTIME_WINDOWS) do
+    for _, w in ipairs(UPTIME_WINDOWS_SEC) do
         if sec >= w[1] and sec <= w[2] then return true end
     end
     return false
 end
 
 -- ============================================================
--- 4. Загрузка хаба (spawn)
+-- 4. Загрузка хаба
 -- ============================================================
 print("[HOHO] Loading hub...")
 task.spawn(function()
     local ok, err = pcall(function()
         loadstring(game:HttpGet(HUB_URL))()
     end)
-    if ok then
-        print("[HOHO] Hub loaded")
-    else
-        warn("[HOHO] Hub load failed: " .. tostring(err))
-    end
+    if ok then print("[HOHO] Hub loaded")
+    else warn("[HOHO] Hub load failed: " .. tostring(err)) end
 end)
 
 -- ============================================================
--- 5. Blue Moon watcher (не блокирует)
+-- 5. Blue Moon watcher
 -- ============================================================
 local blueMoonSeen = false
 local function checkLabelText(lbl)
@@ -114,7 +110,6 @@ task.spawn(function()
     if not notif then return end
     local stack = notif:WaitForChild("NotificationStack", 30)
     if not stack then return end
-
     for _, ch in ipairs(stack:GetChildren()) do
         checkLabelText(ch)
         if ch:IsA("GuiObject") then
@@ -174,7 +169,6 @@ local function findMarker(marker)
     return findButtonByCoords(marker.name, marker.x, marker.y, marker.tol)
 end
 
--- Жмём targetBTN с ретраями, пока не появится marker
 local function activateUntilMarker(targetBTN, marker, tag)
     tag = tag or targetBTN.name
     local attempt = 0
@@ -237,7 +231,7 @@ local function waitForHubUI(timeout)
 end
 
 -- ============================================================
--- 7. Вставка текста в TextBox
+-- 7. Вставка текста
 -- ============================================================
 local function doInsert(box, value)
     if not box or not box.Parent then return false end
@@ -245,8 +239,7 @@ local function doInsert(box, value)
     pcall(function() box:CaptureFocus() end)
     task.wait(0.1)
     if not box.Parent then
-        warn("[HOHO] TextBox disappeared")
-        return false
+        warn("[HOHO] TextBox disappeared"); return false
     end
     box.Text = value
     task.wait(0.1)
@@ -267,23 +260,17 @@ local function doInsert(box, value)
     return true
 end
 
--- Строгий пайплайн: ждём UI → STEP1 → STEP2 → TextBox → вставка
 local function navigateAndInsert(value)
-    -- 0. Ждём появления UI хаба
     print("[HOHO] Waiting hub UI...")
     if not waitForHubUI(120) then
-        warn("[HOHO] Hub UI not ready in 120s")
-        return false
+        warn("[HOHO] Hub UI not ready in 120s"); return false
     end
 
-    -- 1. STEP 1: HOMEPAGE_BUTTON → ждём Button
     print("[HOHO] --- STEP 1: HOMEPAGE_BUTTON ---")
     activateUntilMarker(STEP1_BTN, STEP2_BTN, "STEP1")
 
-    -- 2. STEP 2: Button → ждём TextBox
     print("[HOHO] --- STEP 2: Button ---")
-    local targetBox = nil
-    local attempt = 0
+    local targetBox, attempt = nil, 0
     while not targetBox do
         attempt += 1
         local btn2 = findMarker(STEP2_BTN)
@@ -307,39 +294,41 @@ local function navigateAndInsert(value)
             end
             task.wait(0.2)
         end
-        if not targetBox then
-            print("[HOHO] STEP2: TextBox not appeared, retry")
-        end
     end
 
-    -- 3. Вставка
     print("[HOHO] --- STEP 3: insert ---")
     return doInsert(targetBox, value)
 end
 
 -- ============================================================
--- 8. HTTP к Flask
+-- 8. HTTP — только game:HttpGet
 -- ============================================================
 local function httpGet(url)
-    local ok, res = pcall(game.HttpGet, game, url, true)
-    if ok then return res end
-    return nil
-end
-
-local function httpPostJson(url, body)
-    local ok, res = pcall(function()
-        return game:HttpPost(url, body, Enum.HttpContentType.ApplicationJson, false)
+    local success, result = pcall(function()
+        return game:HttpGet(url)
     end)
-    if ok then return res end
+    if success and result then
+        return result
+    end
+    warn("[http] error: " .. tostring(result))
     return nil
 end
 
 local function requestParse()
-    local body = HttpService:JSONEncode({ windows = UPTIME_WINDOWS })
-    local res = httpPostJson(FLASK_URL .. "/parse", body)
+    -- Секунды → минуты (парсер сравнивает cur_min с окнами в МИНУТАХ)
+    local windows_min = {}
+    for _, w in ipairs(UPTIME_WINDOWS_SEC) do
+        table.insert(windows_min, { math.floor(w[1] / 60), math.floor(w[2] / 60) })
+    end
+    local json_str = HttpService:JSONEncode(windows_min)
+    local encoded  = HttpService:UrlEncode(json_str)
+    local res = httpGet(FLASK_URL .. "/parse?windows=" .. encoded)
     if not res then return nil end
     local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
-    if ok and data and data.task_id then return data.task_id end
+    if ok and data and data.task_id then
+        return data.task_id
+    end
+    warn("[parse] bad response: " .. tostring(res))
     return nil
 end
 
@@ -364,9 +353,9 @@ local function pollResult(taskId, timeoutSec)
 end
 
 -- ============================================================
--- 9. Ждём готовности UI (до main loop)
+-- 9. Ждём готовности UI хаба
 -- ============================================================
-print("[HOHO] Waiting for hub UI before main loop...")
+print("[HOHO] Waiting hub UI...")
 if not waitForHubUI(120) then
     warn("[HOHO] Hub UI not ready in 120s, continuing anyway")
 end
@@ -393,7 +382,7 @@ while true do
             if result and result.h2o2server and result.h2o2server ~= "" then
                 local value = result.h2o2server
                 print("[main] got hoho: " .. value)
-                navigateAndInsert(value)   -- сам ждёт UI и делает 2 клика
+                navigateAndInsert(value)
             else
                 warn("[main] no valid result")
             end
