@@ -1,5 +1,5 @@
 -- ============================================================
--- HOHO Hub + Flask Parser Client (integrated)
+-- HOHO Hub + Flask Parser Client (integrated, strict nav order)
 -- ============================================================
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -8,9 +8,10 @@ local CoreGui = game:GetService("CoreGui")
 local player = Players.LocalPlayer
 
 -- ЗАМЕНИТЬ IP под свою сеть
-local FLASK_URL = "http://192.168.1.100:8000"
+local FLASK_URL = "http://192.168.31.179:8000"
 local HUB_URL   = "https://raw.githubusercontent.com/acsu123/HOHO_H/main/Loading_UI"
 
+-- Окна аптайма в СЕКУНДАХ
 local UPTIME_WINDOWS = {
     {45*60,      53*60},        -- 45:00 – 53:00
     {3*60+57,    4*60+5},       -- 3:57  – 4:05
@@ -22,10 +23,12 @@ local UPTIME_WINDOWS = {
     {23*60+17,   23*60+24},     -- 23:17 – 23:24
 }
 
-local RETRY_DELAY         = 5
-local STEP1_BTN           = { name = "HOMEPAGE_BUTTON", x = 557.18, y = 276.32, tol = 8 }
-local STEP2_BTN           = { name = "Button",          x = 484.81, y = 244.62, tol = 8 }
+local RETRY_DELAY = 5
+local STEP1_BTN   = { name = "HOMEPAGE_BUTTON", x = 557.18, y = 276.32, tol = 8 }
+local STEP2_BTN   = { name = "Button",          x = 484.81, y = 244.62, tol = 8 }
 local TARGET_TEXTBOX_X, TARGET_TEXTBOX_Y = 497.3, 279.1
+
+print("[HOHO] === START ===")
 
 -- ============================================================
 -- 1. Выбор команды
@@ -78,7 +81,7 @@ local function inAnyWindow(sec)
 end
 
 -- ============================================================
--- 4. Загрузка хаба (spawn — как в оригинале)
+-- 4. Загрузка хаба (spawn)
 -- ============================================================
 print("[HOHO] Loading hub...")
 task.spawn(function()
@@ -130,7 +133,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- 6. Hub UI helpers (из --!nocheck.txt)
+-- 6. Hub UI helpers
 -- ============================================================
 local function fireSequence(btn)
     if not btn then return false end
@@ -171,7 +174,7 @@ local function findMarker(marker)
     return findButtonByCoords(marker.name, marker.x, marker.y, marker.tol)
 end
 
--- Пока не появится следующий маркер — долбим кнопку
+-- Жмём targetBTN с ретраями, пока не появится marker
 local function activateUntilMarker(targetBTN, marker, tag)
     tag = tag or targetBTN.name
     local attempt = 0
@@ -218,7 +221,6 @@ local function findTargetTextBox()
     return best
 end
 
--- Ждём появления UI хаба (HOMEPAGE_BUTTON)
 local function waitForHubUI(timeout)
     timeout = timeout or 120
     local t0 = tick()
@@ -235,7 +237,7 @@ local function waitForHubUI(timeout)
 end
 
 -- ============================================================
--- 7. Вставка текста в TextBox (с устойчивым переходом по UI)
+-- 7. Вставка текста в TextBox
 -- ============================================================
 local function doInsert(box, value)
     if not box or not box.Parent then return false end
@@ -265,54 +267,53 @@ local function doInsert(box, value)
     return true
 end
 
--- Идём с текущей страницы хаба к TextBox и вставляем.
--- Устойчиво к тому, что мы можем уже быть на нужной странице.
+-- Строгий пайплайн: ждём UI → STEP1 → STEP2 → TextBox → вставка
 local function navigateAndInsert(value)
-    -- TextBox уже на экране → просто вставляем
-    local box = findTargetTextBox()
-    if box then return doInsert(box, value) end
-
-    -- Button (STEP2) виден → шагаем сразу на второй шаг
-    local btn2 = findMarker(STEP2_BTN)
-    if btn2 then
-        print("[HOHO] STEP2 (direct)")
-    else
-        -- ни Button, ни TextBox → идём с главной
-        local btn1 = findMarker(STEP1_BTN)
-        if not btn1 then
-            warn("[HOHO] Hub in unknown state, retry later")
-            return false
-        end
-        print("[HOHO] STEP1")
-        activateUntilMarker(STEP1_BTN, STEP2_BTN, "STEP1")
+    -- 0. Ждём появления UI хаба
+    print("[HOHO] Waiting hub UI...")
+    if not waitForHubUI(120) then
+        warn("[HOHO] Hub UI not ready in 120s")
+        return false
     end
 
-    -- STEP2: жмём Button пока не появится TextBox
-    print("[HOHO] STEP2")
+    -- 1. STEP 1: HOMEPAGE_BUTTON → ждём Button
+    print("[HOHO] --- STEP 1: HOMEPAGE_BUTTON ---")
+    activateUntilMarker(STEP1_BTN, STEP2_BTN, "STEP1")
+
+    -- 2. STEP 2: Button → ждём TextBox
+    print("[HOHO] --- STEP 2: Button ---")
     local targetBox = nil
     local attempt = 0
     while not targetBox do
         attempt += 1
-        local b = findMarker(STEP2_BTN)
-        if b then
-            local ok = fireSequence(b)
+        local btn2 = findMarker(STEP2_BTN)
+        if btn2 then
+            print(string.format("[HOHO] STEP2 #%d: activate Button", attempt))
+            local ok = fireSequence(btn2)
             if not ok then
-                pcall(function() b:Click() end)
+                pcall(function() btn2:Click() end)
                 task.wait(0.15)
-                pcall(function() b:Activate() end)
+                pcall(function() btn2:Activate() end)
             end
+        else
+            print(string.format("[HOHO] STEP2 #%d: Button not found", attempt))
         end
         local t0 = tick()
         while tick() - t0 < RETRY_DELAY do
             targetBox = findTargetTextBox()
             if targetBox then
-                print(string.format("[HOHO] STEP2: ✓ %.1fs", tick() - t0))
+                print(string.format("[HOHO] STEP2: ✓ TextBox in %.1fs", tick() - t0))
                 break
             end
             task.wait(0.2)
         end
+        if not targetBox then
+            print("[HOHO] STEP2: TextBox not appeared, retry")
+        end
     end
 
+    -- 3. Вставка
+    print("[HOHO] --- STEP 3: insert ---")
     return doInsert(targetBox, value)
 end
 
@@ -350,8 +351,8 @@ local function pollResult(taskId, timeoutSec)
         if res then
             local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
             if ok and data then
-                if data.status == "done"     then return data.result end
-                if data.status == "error"    then
+                if data.status == "done"      then return data.result end
+                if data.status == "error"     then
                     warn("[parse] error: " .. tostring(data.error)); return nil
                 end
                 if data.status == "not_found" then return nil end
@@ -363,9 +364,9 @@ local function pollResult(taskId, timeoutSec)
 end
 
 -- ============================================================
--- 9. Ждём готовности UI (без него вставлять нельзя)
+-- 9. Ждём готовности UI (до main loop)
 -- ============================================================
-print("[HOHO] Waiting for hub UI...")
+print("[HOHO] Waiting for hub UI before main loop...")
 if not waitForHubUI(120) then
     warn("[HOHO] Hub UI not ready in 120s, continuing anyway")
 end
@@ -392,12 +393,9 @@ while true do
             if result and result.h2o2server and result.h2o2server ~= "" then
                 local value = result.h2o2server
                 print("[main] got hoho: " .. value)
-
-                if not waitForHubUI(30) then
-                    warn("[main] hub not ready, skip insert")
-                else
-                    navigateAndInsert(value)
-                end
+                navigateAndInsert(value)   -- сам ждёт UI и делает 2 клика
+            else
+                warn("[main] no valid result")
             end
         else
             warn("[main] /parse failed")
