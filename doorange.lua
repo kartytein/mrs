@@ -1,5 +1,5 @@
 -- ============================================================
--- HOHO Hub + Flask Parser Client (GET-only transport)
+-- HOHO Hub + Flask Parser Client
 -- ============================================================
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -10,16 +10,15 @@ local player = Players.LocalPlayer
 local FLASK_URL = "http://192.168.31.179:8000"
 local HUB_URL   = "https://raw.githubusercontent.com/acsu123/HOHO_H/main/Loading_UI"
 
--- Окна аптайма В СЕКУНДАХ (для локальной проверки)
 local UPTIME_WINDOWS_SEC = {
-    {45*60,    53*60},   -- 45:00 – 53:00
-    {3*60+57,  4*60+5},  -- 3:57  – 4:05
-    {7*60+10,  7*60+17}, -- 7:10  – 7:17
-    {10*60+30, 10*60+37},-- 10:30 – 10:37
-    {13*60+37, 13*60+44},-- 13:37 – 13:44
-    {16*60+53, 17*60+0}, -- 16:53 – 17:00
-    {20*60+8,  20*60+15},-- 20:08 – 20:15
-    {23*60+17, 23*60+24},-- 23:17 – 23:24
+    {45*60,    53*60},
+    {3*60+57,  4*60+5},
+    {7*60+10,  7*60+17},
+    {10*60+30, 10*60+37},
+    {13*60+37, 13*60+44},
+    {16*60+53, 17*60+0},
+    {20*60+8,  20*60+15},
+    {23*60+17, 23*60+24},
 }
 
 local RETRY_DELAY = 5
@@ -30,7 +29,19 @@ local TARGET_TEXTBOX_X, TARGET_TEXTBOX_Y = 497.3, 279.1
 print("[HOHO] === START ===")
 
 -- ============================================================
--- 1. Выбор команды
+-- 1. Загрузка хаба СРАЗУ, как в --!nocheck.txt
+-- ============================================================
+print("[HOHO] Loading hub...")
+task.spawn(function()
+    local ok, err = pcall(function()
+        loadstring(game:HttpGet(HUB_URL))()
+    end)
+    if ok then print("[HOHO] Hub loaded")
+    else warn("[HOHO] Hub load failed: " .. tostring(err)) end
+end)
+
+-- ============================================================
+-- 2. Команда
 -- ============================================================
 do
     local remotes = ReplicatedStorage and ReplicatedStorage:FindFirstChild("Remotes")
@@ -43,7 +54,7 @@ do
 end
 
 -- ============================================================
--- 2. Ждём персонажа
+-- 3. Персонаж
 -- ============================================================
 repeat task.wait(0.5) until player.Character
     and player.Character:FindFirstChild("Humanoid")
@@ -52,7 +63,7 @@ repeat task.wait(0.5) until player.Character
 task.wait(3)
 
 -- ============================================================
--- 3. Аптайм
+-- 4. Аптайм
 -- ============================================================
 local function getServerUptimeSeconds()
     local currentTime = workspace:GetServerTimeNow()
@@ -78,18 +89,6 @@ local function inAnyWindow(sec)
     end
     return false
 end
-
--- ============================================================
--- 4. Загрузка хаба
--- ============================================================
-print("[HOHO] Loading hub...")
-task.spawn(function()
-    local ok, err = pcall(function()
-        loadstring(game:HttpGet(HUB_URL))()
-    end)
-    if ok then print("[HOHO] Hub loaded")
-    else warn("[HOHO] Hub load failed: " .. tostring(err)) end
-end)
 
 -- ============================================================
 -- 5. Blue Moon watcher
@@ -128,7 +127,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- 6. Hub UI helpers
+-- 6. Hub helpers
 -- ============================================================
 local function fireSequence(btn)
     if not btn then return false end
@@ -165,8 +164,29 @@ local function findButtonByCoords(name, tx, ty, tol)
     return nil
 end
 
+local function findButtonByName(name)
+    for _, obj in ipairs(CoreGui:GetDescendants()) do
+        if (obj:IsA("TextButton") or obj:IsA("ImageButton")) and obj.Name == name then
+            return obj
+        end
+    end
+    return nil
+end
+
 local function findMarker(marker)
-    return findButtonByCoords(marker.name, marker.x, marker.y, marker.tol)
+    local btn = findButtonByCoords(marker.name, marker.x, marker.y, marker.tol)
+    if btn then return btn end
+    -- fallback: name-only для уникальных кнопок (HOMEPAGE_BUTTON)
+    if marker.name == "HOMEPAGE_BUTTON" then
+        local fallback = findButtonByName(marker.name)
+        if fallback then
+            print(string.format("[HOHO] name-fallback HOMEPAGE_BUTTON at (%.1f, %.1f) (expected %.1f, %.1f)",
+                fallback.AbsolutePosition.X, fallback.AbsolutePosition.Y,
+                marker.x, marker.y))
+            return fallback
+        end
+    end
+    return nil
 end
 
 local function activateUntilMarker(targetBTN, marker, tag)
@@ -179,6 +199,8 @@ local function activateUntilMarker(targetBTN, marker, tag)
             print(string.format("[HOHO] %s #%d: target missing, wait...", tag, attempt))
             task.wait(1)
         else
+            print(string.format("[HOHO] %s #%d: activate (%.1f, %.1f)",
+                tag, attempt, btn.AbsolutePosition.X, btn.AbsolutePosition.Y))
             local ok = fireSequence(btn)
             if not ok then
                 pcall(function() btn:Click() end)
@@ -215,23 +237,43 @@ local function findTargetTextBox()
     return best
 end
 
-local function waitForHubUI(timeout)
+-- Ждём не просто существования, а положения и видимости
+local function waitForHubReady(timeout)
     timeout = timeout or 120
     local t0 = tick()
     while tick() - t0 < timeout do
         for _, obj in ipairs(CoreGui:GetDescendants()) do
             if (obj:IsA("TextButton") or obj:IsA("ImageButton"))
-               and obj.Name == "HOMEPAGE_BUTTON" then
-                return true
+               and obj.Name == "HOMEPAGE_BUTTON"
+               and obj.Visible
+               and obj.AbsoluteSize.X > 0 then
+                local dx = math.abs(obj.AbsolutePosition.X - STEP1_BTN.x)
+                local dy = math.abs(obj.AbsolutePosition.Y - STEP1_BTN.y)
+                if dx <= STEP1_BTN.tol and dy <= STEP1_BTN.tol then
+                    print(string.format("[HOHO] Hub ready in %.1fs (button at %.1f, %.1f)",
+                        tick() - t0, obj.AbsolutePosition.X, obj.AbsolutePosition.Y))
+                    return true
+                end
             end
         end
         task.wait(0.5)
+    end
+    -- диагностика
+    print("[HOHO] Hub not ready in " .. timeout .. "s, dump HOMEPAGE_BUTTON:")
+    for _, obj in ipairs(CoreGui:GetDescendants()) do
+        if (obj:IsA("TextButton") or obj:IsA("ImageButton"))
+           and obj.Name == "HOMEPAGE_BUTTON" then
+            print(string.format("  pos=(%.1f, %.1f) size=(%.1f, %.1f) visible=%s",
+                obj.AbsolutePosition.X, obj.AbsolutePosition.Y,
+                obj.AbsoluteSize.X, obj.AbsoluteSize.Y,
+                tostring(obj.Visible)))
+        end
     end
     return false
 end
 
 -- ============================================================
--- 7. Вставка текста
+-- 7. Вставка
 -- ============================================================
 local function doInsert(box, value)
     if not box or not box.Parent then return false end
@@ -261,9 +303,9 @@ local function doInsert(box, value)
 end
 
 local function navigateAndInsert(value)
-    print("[HOHO] Waiting hub UI...")
-    if not waitForHubUI(120) then
-        warn("[HOHO] Hub UI not ready in 120s"); return false
+    print("[HOHO] Waiting hub ready...")
+    if not waitForHubReady(120) then
+        warn("[HOHO] Hub not ready, abort insert"); return false
     end
 
     print("[HOHO] --- STEP 1: HOMEPAGE_BUTTON ---")
@@ -301,33 +343,22 @@ local function navigateAndInsert(value)
 end
 
 -- ============================================================
--- 8. HTTP — только game:HttpGet
+-- 8. HTTP (только game:HttpGet)
 -- ============================================================
 local function httpGet(url)
     local success, result = pcall(function()
         return game:HttpGet(url)
     end)
-    if success and result then
-        return result
-    end
+    if success and result then return result end
     warn("[http] error: " .. tostring(result))
     return nil
 end
 
 local function requestParse()
-    -- Секунды → минуты (парсер сравнивает cur_min с окнами в МИНУТАХ)
-    local windows_min = {}
-    for _, w in ipairs(UPTIME_WINDOWS_SEC) do
-        table.insert(windows_min, { math.floor(w[1] / 60), math.floor(w[2] / 60) })
-    end
-    local json_str = HttpService:JSONEncode(windows_min)
-    local encoded  = HttpService:UrlEncode(json_str)
-    local res = httpGet(FLASK_URL .. "/parse?windows=" .. encoded)
+    local res = httpGet(FLASK_URL .. "/parse")
     if not res then return nil end
     local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
-    if ok and data and data.task_id then
-        return data.task_id
-    end
+    if ok and data and data.task_id then return data.task_id end
     warn("[parse] bad response: " .. tostring(res))
     return nil
 end
@@ -353,12 +384,10 @@ local function pollResult(taskId, timeoutSec)
 end
 
 -- ============================================================
--- 9. Ждём готовности UI хаба
+-- 9. Ждём готовности UI хаба (с диагностикой)
 -- ============================================================
-print("[HOHO] Waiting hub UI...")
-if not waitForHubUI(120) then
-    warn("[HOHO] Hub UI not ready in 120s, continuing anyway")
-end
+print("[HOHO] Waiting hub ready before main loop...")
+waitForHubReady(120)  -- не блокируем main loop при неудаче
 
 -- ============================================================
 -- 10. Main loop
@@ -380,9 +409,8 @@ while true do
             print("[main] task: " .. taskId)
             local result = pollResult(taskId, 600)
             if result and result.h2o2server and result.h2o2server ~= "" then
-                local value = result.h2o2server
-                print("[main] got hoho: " .. value)
-                navigateAndInsert(value)
+                print("[main] got hoho: " .. result.h2o2server)
+                navigateAndInsert(result.h2o2server)
             else
                 warn("[main] no valid result")
             end
