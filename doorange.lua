@@ -1,264 +1,409 @@
--- ================================================================
--- H2O2 Tracer v2
--- Пишет в консоль + ho2_log.txt
--- Запускать ПЕРЕД Loading_UI
--- ================================================================
+-- ============================================================
+-- HOHO Hub + Flask Parser Client (integrated)
+-- ============================================================
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+local CoreGui = game:GetService("CoreGui")
+local player = Players.LocalPlayer
 
-local CFG = {
-    LOG_FILE           = "ho2_log.txt",
-    PRINT_TO_CONSOLE   = true,     -- дублировать в консоль
-    FLUSH_EVERY_LINE   = true,     -- писать файл на каждой строке (медленно, но надёжно)
+-- ЗАМЕНИТЬ IP под свою сеть
+local FLASK_URL = "http://192.168.1.100:8000"
+local HUB_URL   = "https://raw.githubusercontent.com/acsu123/HOHO_H/main/Loading_UI"
 
-    HOOK_TELEPORT      = true,     -- главный источник пар encoded→jobId
-    HOOK_NAMECALL      = true,     -- тот же телепорт через __namecall
-    HOOK_BXOR          = true,     -- XOR-примитив
-    HOOK_STRING_BYTE   = true,     -- байты длинных строк
-    HOOK_STRING_CHAR   = true,     -- сборка результата из байтов
-
-    HOOK_DEBUG_SETHOOK = false,    -- ТЯЖЁЛЫЙ, включать только если не поможет всё остальное
-
-    BXOR_MIN_ARG       = 128,
-    SBYTE_MIN_LEN      = 100,
-    SCHAR_MIN_N        = 4,
-    SCHAR_MAX_N        = 16,
+local UPTIME_WINDOWS = {
+    {45*60,      53*60},        -- 45:00 – 53:00
+    {3*60+57,    4*60+5},       -- 3:57  – 4:05
+    {7*60+10,    7*60+17},      -- 7:10  – 7:17
+    {10*60+30,   10*60+37},     -- 10:30 – 10:37
+    {13*60+37,   13*60+44},     -- 13:37 – 13:44
+    {16*60+53,   17*60+0},      -- 16:53 – 17:00
+    {20*60+8,    20*60+15},     -- 20:08 – 20:15
+    {23*60+17,   23*60+24},     -- 23:17 – 23:24
 }
 
--- ================================================================
--- Инициализация лога
--- ================================================================
-local has_write  = type(writefile)  == "function"
-local has_append = type(appendfile) == "function"
-local has_read   = type(readfile)   == "function"
+local RETRY_DELAY         = 5
+local STEP1_BTN           = { name = "HOMEPAGE_BUTTON", x = 557.18, y = 276.32, tol = 8 }
+local STEP2_BTN           = { name = "Button",          x = 484.81, y = 244.62, tol = 8 }
+local TARGET_TEXTBOX_X, TARGET_TEXTBOX_Y = 497.3, 279.1
 
-local LOG_LINES = {}
-
-local function flush()
-    if not has_write then return end
-    local data = table.concat(LOG_LINES, "\n")
-    if #data > 0 then data = data .. "\n" end
-    pcall(writefile, CFG.LOG_FILE, data)
-end
-
-local function log(...)
-    local n = select("#", ...)
-    local parts = {}
-    for i = 1, n do
-        local v = select(i, ...)
-        if type(v) == "string" and #v > 400 then
-            parts[i] = v:sub(1, 400) .. "…[" .. #v .. "]"
-        else
-            parts[i] = tostring(v)
+-- ============================================================
+-- 1. Выбор команды
+-- ============================================================
+do
+    local remotes = ReplicatedStorage and ReplicatedStorage:FindFirstChild("Remotes")
+    if remotes then
+        local commF = remotes:FindFirstChild("CommF_")
+        if commF then
+            pcall(function() commF:InvokeServer("SetTeam", "Marines") end)
         end
     end
-    local line = table.concat(parts, " ")
-    LOG_LINES[#LOG_LINES + 1] = line
-
-    if CFG.PRINT_TO_CONSOLE then
-        print("[ho2] " .. line)
-    end
-
-    if CFG.FLUSH_EVERY_LINE then
-        flush()
-    end
 end
 
--- очищаем файл в начале
-if has_write then
-    pcall(writefile, CFG.LOG_FILE, "")
-end
+-- ============================================================
+-- 2. Ждём полной загрузки персонажа
+-- ============================================================
+repeat task.wait(0.5) until player.Character
+    and player.Character:FindFirstChild("Humanoid")
+    and player.Character:FindFirstChild("HumanoidRootPart")
+    and player.Character.Humanoid.Health > 0
+task.wait(3)
 
-log("=================================================")
-log("H2O2 Tracer v2 запущен")
-log("writefile:", has_write, "appendfile:", has_append, "readfile:", has_read)
-log("=================================================")
-
--- ================================================================
--- 1. TeleportService — прямой hook
--- ================================================================
-if CFG.HOOK_TELEPORT then
-    local TP = game:GetService("TeleportService")
-
-    local function hook_method(name)
-        local orig = TP[name]
-        if type(orig) ~= "function" then
-            log("TeleportService." .. name .. " — не функция, skip")
-            return
-        end
-        local ok, err = pcall(function()
-            TP[name] = function(self, ...)
-                log("=== [TELEPORT." .. name .. "] ===")
-                local cnt = select("#", ...)
-                for i = 1, cnt do
-                    local v = select(i, ...)
-                    log("  arg" .. i .. " (" .. type(v) .. "):", v)
+-- ============================================================
+-- 3. Чтение аптайма
+-- ============================================================
+local function getServerUptimeSeconds()
+    local currentTime = workspace:GetServerTimeNow()
+    local found
+    for _, v in pairs(getgc(true)) do
+        if type(v) == "table" then
+            for k, val in pairs(v) do
+                if type(k) == "string" and (k == "timeIn" or k == "TimeIn")
+                   and type(val) == "number" and val > 1700000000 then
+                    found = val; break
                 end
-                log("=== end " .. name .. " ===")
-                return orig(self, ...)
             end
-        end)
-        if ok then
-            log("hooked TeleportService." .. name)
-        else
-            log("FAIL hook TeleportService." .. name .. ":", err)
+            if found then break end
         end
     end
-
-    hook_method("TeleportToPlaceInstance")
-    hook_method("Teleport")
-    hook_method("TeleportAsync")
-    hook_method("TeleportToPrivateServer")
+    if found then return math.floor(currentTime - found) end
+    return nil
 end
 
--- ================================================================
--- 2. __namecall — тот же телепорт, но через metamethod
--- ================================================================
-if CFG.HOOK_NAMECALL then
-    local have_api = hookmetamethod and getnamecallmethod and getrawmetatable
-                     and newcclosure
-    if have_api then
-        local ok, err = pcall(function()
-            local mt = getrawmetatable(game)
-            if setreadonly then setreadonly(mt, false) end
-            local old_nc = mt.__namecall
-            mt.__namecall = newcclosure(function(self, ...)
-                local method = getnamecallmethod()
-                if method == "TeleportToPlaceInstance"
-                   or method == "Teleport"
-                   or method == "TeleportAsync"
-                   or method == "TeleportToPrivateServer" then
-                    log("=== [NC." .. method .. "] ===")
-                    local cnt = select("#", ...)
-                    for i = 1, cnt do
-                        local v = select(i, ...)
-                        log("  arg" .. i .. " (" .. type(v) .. "):", v)
-                    end
-                    log("=== end NC." .. method .. " ===")
-                end
-                return old_nc(self, ...)
-            end)
-            if setreadonly then setreadonly(mt, true) end
-        end)
-        if ok then
-            log("namecall hook установлен")
-        else
-            log("FAIL namecall hook:", err)
-        end
+local function inAnyWindow(sec)
+    for _, w in ipairs(UPTIME_WINDOWS) do
+        if sec >= w[1] and sec <= w[2] then return true end
+    end
+    return false
+end
+
+-- ============================================================
+-- 4. Загрузка хаба (spawn — как в оригинале)
+-- ============================================================
+print("[HOHO] Loading hub...")
+task.spawn(function()
+    local ok, err = pcall(function()
+        loadstring(game:HttpGet(HUB_URL))()
+    end)
+    if ok then
+        print("[HOHO] Hub loaded")
     else
-        log("hookmetamethod недоступен — namecall пропущен")
+        warn("[HOHO] Hub load failed: " .. tostring(err))
+    end
+end)
+
+-- ============================================================
+-- 5. Blue Moon watcher (не блокирует)
+-- ============================================================
+local blueMoonSeen = false
+local function checkLabelText(lbl)
+    if lbl and lbl:IsA("TextLabel") and lbl.Text
+       and lbl.Text:find("The Blue Moon fades away", 1, true) then
+        blueMoonSeen = true
+        print("[BlueMoon] detected")
     end
 end
 
--- ================================================================
--- 3. bit32.bxor
--- ================================================================
-if CFG.HOOK_BXOR and bit32 and bit32.bxor then
-    local old = bit32.bxor
-    bit32.bxor = function(a, b)
-        local r = old(a, b)
-        if type(a) == "number" and type(b) == "number"
-           and (a >= CFG.BXOR_MIN_ARG or b >= CFG.BXOR_MIN_ARG
-                or r >= CFG.BXOR_MIN_ARG) then
-            log("[bxor]", a, b, "->", r)
+task.spawn(function()
+    local pg = player:WaitForChild("PlayerGui", 30)
+    if not pg then return end
+    local notif = pg:WaitForChild("Notifications", 30)
+    if not notif then return end
+    local stack = notif:WaitForChild("NotificationStack", 30)
+    if not stack then return end
+
+    for _, ch in ipairs(stack:GetChildren()) do
+        checkLabelText(ch)
+        if ch:IsA("GuiObject") then
+            checkLabelText(ch:FindFirstChildWhichIsA("TextLabel", true))
         end
-        return r
     end
-    log("bit32.bxor hooked")
-end
-
--- ================================================================
--- 4. string.byte
--- ================================================================
-if CFG.HOOK_STRING_BYTE then
-    local old = string.byte
-    string.byte = function(s, ...)
-        local r = old(s, ...)
-        if type(s) == "string" and #s >= CFG.SBYTE_MIN_LEN then
-            log("[sbyte] len=" .. #s .. " idx=" .. tostring(...)
-                .. " -> " .. tostring(r))
-        end
-        return r
-    end
-    log("string.byte hooked")
-end
-
--- ================================================================
--- 5. string.char
--- ================================================================
-if CFG.HOOK_STRING_CHAR then
-    local old = string.char
-    string.char = function(...)
-        local r = old(...)
-        local n = select("#", ...)
-        if n >= CFG.SCHAR_MIN_N and n <= CFG.SCHAR_MAX_N then
-            local printable = true
-            for i = 1, n do
-                local c = select(i, ...)
-                if type(c) ~= "number" or c < 32 or c > 126 then
-                    printable = false
-                    break
-                end
+    stack.ChildAdded:Connect(function(ch)
+        task.spawn(function()
+            task.wait(0.05)
+            checkLabelText(ch)
+            if ch:IsA("GuiObject") then
+                checkLabelText(ch:FindFirstChildWhichIsA("TextLabel", true))
             end
-            if printable then
-                log("[char] n=" .. n .. " -> " .. r)
-            end
-        end
-        return r
-    end
-    log("string.char hooked")
-end
+        end)
+    end)
+end)
 
--- ================================================================
--- 6. debug.sethook — ОПЦИОНАЛЬНО, тяжёлый
--- ================================================================
-if CFG.HOOK_DEBUG_SETHOOK then
-    if debug and debug.sethook and debug.getinfo and debug.getlocal then
-        local calls = 0
-        local ok, err = pcall(function()
-            debug.sethook(function(event, _line)
-                if event ~= "call" then return end
-                calls = calls + 1
-                if calls > 300000 then return end
-
-                local info = debug.getinfo(2, "Sl")
-                if not info then return end
-
-                for i = 1, 12 do
-                    local name, val = debug.getlocal(2, i)
-                    if not name then break end
-                    if type(val) == "string" and #val >= 20
-                       and string.find(val, "H2O2SERVER", 1, true) then
-                        log("=== [CALL with H2O2SERVER] ===")
-                        log("  func:", tostring(info.short_src))
-                        log("  line:", tostring(info.currentline))
-                        log("  arg #" .. i .. " (" .. name .. "):",
-                            val:sub(1, 200))
-                        log("=== end ===")
-                        break
+-- ============================================================
+-- 6. Hub UI helpers (из --!nocheck.txt)
+-- ============================================================
+local function fireSequence(btn)
+    if not btn then return false end
+    if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return false end
+    local fired = false
+    for _, sigName in ipairs({
+        "MouseEnter","MouseButton1Down","MouseButton1Click",
+        "MouseButton1Up","Activated","MouseLeave"
+    }) do
+        local sig = btn[sigName]
+        if sig then
+            local ok, conns = pcall(function() return getconnections(sig) end)
+            if ok and conns then
+                for _, conn in ipairs(conns) do
+                    if conn.Enabled and type(conn.Function) == "function" then
+                        pcall(conn.Function); fired = true
                     end
                 end
-            end, "c")
-        end)
-        if ok then
-            log("debug.sethook установлен (тяжёлый режим)")
-        else
-            log("FAIL debug.sethook:", err)
+            end
         end
-    else
-        log("debug.sethook недоступен")
+    end
+    return fired
+end
+
+local function findButtonByCoords(name, tx, ty, tol)
+    tol = tol or 8
+    for _, obj in ipairs(CoreGui:GetDescendants()) do
+        if (obj:IsA("TextButton") or obj:IsA("ImageButton")) and obj.Name == name then
+            local dx = math.abs(obj.AbsolutePosition.X - tx)
+            local dy = math.abs(obj.AbsolutePosition.Y - ty)
+            if dx <= tol and dy <= tol then return obj end
+        end
+    end
+    return nil
+end
+
+local function findMarker(marker)
+    return findButtonByCoords(marker.name, marker.x, marker.y, marker.tol)
+end
+
+-- Пока не появится следующий маркер — долбим кнопку
+local function activateUntilMarker(targetBTN, marker, tag)
+    tag = tag or targetBTN.name
+    local attempt = 0
+    while true do
+        attempt += 1
+        local btn = findMarker(targetBTN)
+        if not btn then
+            print(string.format("[HOHO] %s #%d: target missing, wait...", tag, attempt))
+            task.wait(1)
+        else
+            local ok = fireSequence(btn)
+            if not ok then
+                pcall(function() btn:Click() end)
+                task.wait(0.15)
+                pcall(function() btn:Activate() end)
+            end
+        end
+        local t0 = tick()
+        while tick() - t0 < RETRY_DELAY do
+            if findMarker(marker) then
+                print(string.format("[HOHO] %s: ✓ %.1fs", tag, tick() - t0))
+                return true
+            end
+            task.wait(0.2)
+        end
     end
 end
 
--- ================================================================
--- Готово
--- ================================================================
-log("=================================================")
-log("Все хуки установлены. Лог:", CFG.LOG_FILE)
-log("Дальше запускай Loading_UI")
-log("=================================================")
-flush()
+local function findTargetTextBox()
+    local best, bestDist = nil, math.huge
+    for _, obj in ipairs(CoreGui:GetDescendants()) do
+        if obj:IsA("TextBox") then
+            local ph = (obj.PlaceholderText or ""):lower()
+            local dx = math.abs(obj.AbsolutePosition.X - TARGET_TEXTBOX_X)
+            local dy = math.abs(obj.AbsolutePosition.Y - TARGET_TEXTBOX_Y)
+            if ph:find("try to text", 1, true) and dx <= 10 and dy <= 10 then
+                return obj
+            end
+            if dx <= 10 and dy <= 10 and (dx+dy) < bestDist then
+                best = obj; bestDist = dx + dy
+            end
+        end
+    end
+    return best
+end
 
--- ================================================================
--- Опциональный автозапуск
--- ================================================================
--- _G.HOHO_SERVER_ID = {994732206, "H2O2SERVER|iNwbpopSpb7bpKpFp..."}
--- loadstring(game:HttpGet("https://raw.githubusercontent.com/acsu123/HOHO_H/main/Loading_UI"))()
+-- Ждём появления UI хаба (HOMEPAGE_BUTTON)
+local function waitForHubUI(timeout)
+    timeout = timeout or 120
+    local t0 = tick()
+    while tick() - t0 < timeout do
+        for _, obj in ipairs(CoreGui:GetDescendants()) do
+            if (obj:IsA("TextButton") or obj:IsA("ImageButton"))
+               and obj.Name == "HOMEPAGE_BUTTON" then
+                return true
+            end
+        end
+        task.wait(0.5)
+    end
+    return false
+end
+
+-- ============================================================
+-- 7. Вставка текста в TextBox (с устойчивым переходом по UI)
+-- ============================================================
+local function doInsert(box, value)
+    if not box or not box.Parent then return false end
+    print("[HOHO] Insert: " .. value)
+    pcall(function() box:CaptureFocus() end)
+    task.wait(0.1)
+    if not box.Parent then
+        warn("[HOHO] TextBox disappeared")
+        return false
+    end
+    box.Text = value
+    task.wait(0.1)
+    pcall(function() box:ReleaseFocus(true) end)
+    task.wait(0.1)
+    local sig = box.FocusLost
+    if sig then
+        local ok, conns = pcall(function() return getconnections(sig) end)
+        if ok and conns then
+            for _, c in ipairs(conns) do
+                if c.Enabled and type(c.Function) == "function" then
+                    pcall(c.Function)
+                end
+            end
+        end
+    end
+    print("[HOHO] Insert done, Text='" .. tostring(box.Text) .. "'")
+    return true
+end
+
+-- Идём с текущей страницы хаба к TextBox и вставляем.
+-- Устойчиво к тому, что мы можем уже быть на нужной странице.
+local function navigateAndInsert(value)
+    -- TextBox уже на экране → просто вставляем
+    local box = findTargetTextBox()
+    if box then return doInsert(box, value) end
+
+    -- Button (STEP2) виден → шагаем сразу на второй шаг
+    local btn2 = findMarker(STEP2_BTN)
+    if btn2 then
+        print("[HOHO] STEP2 (direct)")
+    else
+        -- ни Button, ни TextBox → идём с главной
+        local btn1 = findMarker(STEP1_BTN)
+        if not btn1 then
+            warn("[HOHO] Hub in unknown state, retry later")
+            return false
+        end
+        print("[HOHO] STEP1")
+        activateUntilMarker(STEP1_BTN, STEP2_BTN, "STEP1")
+    end
+
+    -- STEP2: жмём Button пока не появится TextBox
+    print("[HOHO] STEP2")
+    local targetBox = nil
+    local attempt = 0
+    while not targetBox do
+        attempt += 1
+        local b = findMarker(STEP2_BTN)
+        if b then
+            local ok = fireSequence(b)
+            if not ok then
+                pcall(function() b:Click() end)
+                task.wait(0.15)
+                pcall(function() b:Activate() end)
+            end
+        end
+        local t0 = tick()
+        while tick() - t0 < RETRY_DELAY do
+            targetBox = findTargetTextBox()
+            if targetBox then
+                print(string.format("[HOHO] STEP2: ✓ %.1fs", tick() - t0))
+                break
+            end
+            task.wait(0.2)
+        end
+    end
+
+    return doInsert(targetBox, value)
+end
+
+-- ============================================================
+-- 8. HTTP к Flask
+-- ============================================================
+local function httpGet(url)
+    local ok, res = pcall(game.HttpGet, game, url, true)
+    if ok then return res end
+    return nil
+end
+
+local function httpPostJson(url, body)
+    local ok, res = pcall(function()
+        return game:HttpPost(url, body, Enum.HttpContentType.ApplicationJson, false)
+    end)
+    if ok then return res end
+    return nil
+end
+
+local function requestParse()
+    local body = HttpService:JSONEncode({ windows = UPTIME_WINDOWS })
+    local res = httpPostJson(FLASK_URL .. "/parse", body)
+    if not res then return nil end
+    local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
+    if ok and data and data.task_id then return data.task_id end
+    return nil
+end
+
+local function pollResult(taskId, timeoutSec)
+    timeoutSec = timeoutSec or 600
+    local t0 = os.time()
+    while os.time() - t0 < timeoutSec do
+        local res = httpGet(FLASK_URL .. "/result/" .. taskId)
+        if res then
+            local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
+            if ok and data then
+                if data.status == "done"     then return data.result end
+                if data.status == "error"    then
+                    warn("[parse] error: " .. tostring(data.error)); return nil
+                end
+                if data.status == "not_found" then return nil end
+            end
+        end
+        task.wait(2)
+    end
+    return nil
+end
+
+-- ============================================================
+-- 9. Ждём готовности UI (без него вставлять нельзя)
+-- ============================================================
+print("[HOHO] Waiting for hub UI...")
+if not waitForHubUI(120) then
+    warn("[HOHO] Hub UI not ready in 120s, continuing anyway")
+end
+
+-- ============================================================
+-- 10. Main loop
+-- ============================================================
+local function needsParse()
+    if blueMoonSeen then return true end
+    local sec = getServerUptimeSeconds()
+    if not sec then return true end
+    if not inAnyWindow(sec) then return true end
+    return false
+end
+
+while true do
+    if needsParse() then
+        blueMoonSeen = false
+        print("[main] request parse...")
+        local taskId = requestParse()
+        if taskId then
+            print("[main] task: " .. taskId)
+            local result = pollResult(taskId, 600)
+            if result and result.h2o2server and result.h2o2server ~= "" then
+                local value = result.h2o2server
+                print("[main] got hoho: " .. value)
+
+                if not waitForHubUI(30) then
+                    warn("[main] hub not ready, skip insert")
+                else
+                    navigateAndInsert(value)
+                end
+            end
+        else
+            warn("[main] /parse failed")
+        end
+        task.wait(5)
+    else
+        task.wait(3)
+    end
+end
