@@ -1,8 +1,9 @@
 -- ============================================================
 -- HOHO Hub + Flask Parser Client
---   • Один раз при старте: ждём аптайм → проверяем окно
+--   • Один раз ждём аптайм, проверяем окно
+--   • "50:00" = 50 МИНУТ, остальные = ЧАСЫ:МИНУТЫ
 --   • Если вне окна → парсим и вставляем
---   • Если в окне → ничего не делаем, ждём
+--   • Если в окне → ждём blue moon
 --   • Дальше ТОЛЬКО blue moon триггерит парсинг
 -- ============================================================
 local Players           = game:GetService("Players")
@@ -14,28 +15,27 @@ local player            = Players.LocalPlayer
 local FLASK_URL = "http://192.168.31.179:8000"
 local HUB_URL   = "https://raw.githubusercontent.com/acsu123/HOHO_H/main/Loading_UI"
 
--- Окна аптайма: "h:mm" → СЕКУНДЫ = h*3600 + m*60
+-- Окна аптайма в СЕКУНДАХ.
+-- "50:00" = 50 МИНУТ, остальные = ЧАСЫ:МИНУТЫ (допуск -5 мин, как в парсере)
 local UPTIME_WINDOWS_SEC = {
-    {45*3600 +  0*60, 53*3600 +  0*60},   -- 45:00 – 53:00
-    { 3*3600 + 57*60,  4*3600 +  5*60},   -- 3:57  – 4:05
-    { 7*3600 + 10*60,  7*3600 + 17*60},   -- 7:10  – 7:17
-    {10*3600 + 30*60, 10*3600 + 37*60},   -- 10:30 – 10:37
-    {13*3600 + 37*60, 13*3600 + 44*60},   -- 13:37 – 13:44
-    {16*3600 + 53*60, 17*3600 +  0*60},   -- 16:53 – 17:00
-    {20*3600 +  8*60, 20*3600 + 15*60},   -- 20:08 – 20:15
-    {23*3600 + 17*60, 23*3600 + 24*60},   -- 23:17 – 23:24
+    {45*60,             50*60          },   --  50 мин       → 2700 .. 3000
+    { 3*3600 + 55*60,   4*3600         },   --  4 часа       → 14100 .. 14400
+    { 7*3600 + 10*60,   7*3600 + 15*60 },   --  7:15         → 25800 .. 26100
+    {10*3600 + 30*60,  10*3600 + 35*60 },   -- 10:35         → 37800 .. 38100
+    {13*3600 + 37*60,  13*3600 + 42*60 },   -- 13:42         → 49020 .. 49320
+    {16*3600 + 51*60,  16*3600 + 56*60 },   -- 16:56         → 60660 .. 60960
+    {20*3600 +  7*60,  20*3600 + 12*60 },   -- 20:12         → 72420 .. 72720
+    {23*3600 + 18*60,  23*3600 + 23*60 },   -- 23:23         → 83880 .. 84180
 }
 
--- Метка (если ты сам ставишь "here" — ускорит поиск)
 local TARGET_TEXT = "here"
--- Путь к TextBox (родитель, где 2 копии — берём нижний по Y)
 local TARGET_PATH = {
     "Hоhо_gеn4","MAIN_UI","MAIN_ZONES","PAGES_TAB","ANCHOR",
     "CONFIG_PAGES","MINI_11_CONFIG_4","ScrollingFrame",
     "Tab2","Textbox2","Box",
 }
 
-local UPTIME_WAIT_TIMEOUT = 60   -- ждём timeIn до 60 сек
+local UPTIME_WAIT_TIMEOUT = 60
 
 print("[HOHO] === START ===")
 
@@ -75,23 +75,32 @@ end
 repeat task.wait(0.5) until isCharacterReady()
 task.wait(3)
 
--- 4. Аптайм
+-- 4. Аптайм (собираем всех кандидатов, берём самый свежий)
 local function getServerUptimeSeconds()
     local currentTime = workspace:GetServerTimeNow()
-    local found
+    local candidates = {}
     for _, v in pairs(getgc(true)) do
         if type(v) == "table" then
             for k, val in pairs(v) do
                 if type(k) == "string" and (k == "timeIn" or k == "TimeIn")
                    and type(val) == "number" and val > 1700000000 then
-                    found = val; break
+                    local sec = currentTime - val
+                    if sec > 0 and sec < 30 * 86400 then
+                        table.insert(candidates, sec)
+                    end
                 end
             end
-            if found then break end
         end
     end
-    if found then return math.floor(currentTime - found) end
-    return nil
+    if #candidates == 0 then return nil end
+    table.sort(candidates)
+    if #candidates > 1 then
+        local t = {}
+        for _, s in ipairs(candidates) do t[#t+1] = string.format("%.0f", s) end
+        print(("[uptime] найдено %d timeIn: %s")
+            :format(#candidates, table.concat(t, ", ")))
+    end
+    return math.floor(candidates[1])
 end
 
 local function waitForUptime(timeout)
@@ -298,7 +307,7 @@ local function doParseAndInsert(reason)
 end
 
 -- ============================================================
--- 10. Одноразовая стартовая проверка (с ожиданием timeIn)
+-- 10. Одноразовая стартовая проверка
 -- ============================================================
 print("[main] ждём данные аптайма...")
 local initialUptime = waitForUptime(UPTIME_WAIT_TIMEOUT)
