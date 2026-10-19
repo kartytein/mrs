@@ -1,7 +1,9 @@
 -- ============================================================
 -- HOHO Hub + Flask Parser Client
---   • Один раз ждём аптайм, проверяем окно
---   • "50:00" = 50 МИНУТ, остальные = ЧАСЫ:МИНУТЫ
+--   • Аптайм: как в твоём -- Сервисы.txt (первое найденное timeIn),
+--     + фильтр > 60с отсекает фейки эксплойта
+--   • Окна: "50:00" = 50 МИНУТ, остальные = ЧАСЫ:МИНУТЫ
+--   • Один раз при старте: ждём аптайм → проверяем окно
 --   • Если вне окна → парсим и вставляем
 --   • Если в окне → ждём blue moon
 --   • Дальше ТОЛЬКО blue moon триггерит парсинг
@@ -75,32 +77,32 @@ end
 repeat task.wait(0.5) until isCharacterReady()
 task.wait(3)
 
--- 4. Аптайм (собираем всех кандидатов, берём самый свежий)
+-- 4. Аптайм (как в -- Сервисы.txt: первое найденное timeIn,
+--    но пропускаем 0..60с — это фейки эксплойта)
 local function getServerUptimeSeconds()
     local currentTime = workspace:GetServerTimeNow()
-    local candidates = {}
+    local foundTimestamp = nil
+
     for _, v in pairs(getgc(true)) do
         if type(v) == "table" then
             for k, val in pairs(v) do
-                if type(k) == "string" and (k == "timeIn" or k == "TimeIn")
-                   and type(val) == "number" and val > 1700000000 then
-                    local sec = currentTime - val
-                    if sec > 0 and sec < 30 * 86400 then
-                        table.insert(candidates, sec)
+                if type(k) == "string" and (k == "timeIn" or k == "TimeIn") then
+                    if type(val) == "number" and val > 1700000000 then
+                        if (currentTime - val) > 60 then
+                            foundTimestamp = val
+                            break
+                        end
                     end
                 end
             end
+            if foundTimestamp then break end
         end
     end
-    if #candidates == 0 then return nil end
-    table.sort(candidates)
-    if #candidates > 1 then
-        local t = {}
-        for _, s in ipairs(candidates) do t[#t+1] = string.format("%.0f", s) end
-        print(("[uptime] найдено %d timeIn: %s")
-            :format(#candidates, table.concat(t, ", ")))
+
+    if foundTimestamp then
+        return math.floor(currentTime - foundTimestamp)
     end
-    return math.floor(candidates[1])
+    return nil
 end
 
 local function waitForUptime(timeout)
