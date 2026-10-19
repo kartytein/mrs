@@ -1,11 +1,10 @@
 -- ============================================================
 -- HOHO Hub + Flask Parser Client
---   • Аптайм: как в -- Сервисы.txt + фильтр > 60с
+--   • Аптайм: первое timeIn > 60с (фильтр фейков эксплойта)
 --   • Окна: "50:00" = 50 МИНУТ, остальные = ЧАСЫ:МИНУТЫ
---   • Один раз при старте: ждём аптайм → проверяем окно
---   • Вне окна → парсим с ретраями; в окне → ждём blue moon
---   • Дальше ТОЛЬКО blue moon триггерит парсинг (с ретраями)
---   • findTargetBox ждёт до 120с пока хаб достроится
+--   • Каждые 30с: check uptime → OUT → parse+insert
+--   • Shrine → 7-мин ожидание blue moon → parse+insert
+--   • Blue moon (без shrine) → parse+insert
 -- ============================================================
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -13,9 +12,11 @@ local HttpService       = game:GetService("HttpService")
 local CoreGui           = game:GetService("CoreGui")
 local player            = Players.LocalPlayer
 
-local FLASK_URL = "http://192.168.31.179:8000"
+local FLASK_URL = "http://192.168.1.100:8000"
 local HUB_URL   = "https://raw.githubusercontent.com/acsu123/HOHO_H/main/Loading_UI"
 
+-- Окна аптайма в СЕКУНДАХ.
+-- "50:00" = 50 МИНУТ, остальные = ЧАСЫ:МИНУТЫ (допуск -5 мин, как в парсере)
 local UPTIME_WINDOWS_SEC = {
     {45*60,             50*60          },   --  50 мин       → 2700 .. 3000
     { 3*3600 + 55*60,   4*3600         },   --  4 часа       → 14100 .. 14400
@@ -27,26 +28,30 @@ local UPTIME_WINDOWS_SEC = {
     {23*3600 + 18*60,  23*3600 + 23*60 },   -- 23:23         → 83880 .. 84180
 }
 
+-- Метка в целевом TextBox — самый надёжный ключ
 local TARGET_TEXT = "here"
+-- Fallback путь (если метку забыл поставить)
 local TARGET_PATH = {
     "Hоhо_gеn4","MAIN_UI","MAIN_ZONES","PAGES_TAB","ANCHOR",
     "CONFIG_PAGES","MINI_11_CONFIG_4","ScrollingFrame",
     "Tab2","Textbox2","Box",
 }
 
-local UPTIME_WAIT_TIMEOUT = 60
-local BOX_WAIT_TIMEOUT    = 120
+-- Триггерные тексты
+local SHRINE_TEXT    = "A mysterious shrine has appeared in the sea"
+local BLUE_MOON_TEXT = "The Blue Moon fades away"
 
--- Ретраи для /parse
-local PARSE_STARTUP_MAX_ATTEMPTS = 12   -- 12 × 15с = 3 минуты
-local PARSE_STARTUP_DELAY        = 15
-local PARSE_BLUEMOON_MAX_ATTEMPTS = 6   -- 6 × 10с = 1 минута
-local PARSE_BLUEMOON_DELAY        = 10
+-- Тайминги
+local UPTIME_CHECK_SEC = 30
+local SHRINE_WAIT_SEC  = 7 * 60
+local BOX_WAIT_TIMEOUT = 120
+local PARSE_TIMEOUT    = 600
 
 print("[HOHO] === START ===")
-print("[HOHO] Flask URL: " .. FLASK_URL)
 
--- 1. Хаб
+-- ============================================================
+-- 1. Загрузка хаба (в фоне)
+-- ============================================================
 task.spawn(function()
     local ok, err = pcall(function()
         loadstring(game:HttpGet(HUB_URL))()
@@ -55,7 +60,9 @@ task.spawn(function()
     else warn("[HOHO] Ошибка загрузки хаба: " .. tostring(err)) end
 end)
 
+-- ============================================================
 -- 2. Команда
+-- ============================================================
 do
     local remotes = ReplicatedStorage and ReplicatedStorage:FindFirstChild("Remotes")
     if remotes then
@@ -66,7 +73,9 @@ do
     end
 end
 
+-- ============================================================
 -- 3. Персонаж
+-- ============================================================
 local function isCharacterReady()
     local ok, res = pcall(function()
         local c = player.Character
@@ -82,7 +91,9 @@ end
 repeat task.wait(0.5) until isCharacterReady()
 task.wait(3)
 
+-- ============================================================
 -- 4. Аптайм
+-- ============================================================
 local function getServerUptimeSeconds()
     local currentTime = workspace:GetServerTimeNow()
     local foundTimestamp = nil
@@ -105,20 +116,6 @@ local function getServerUptimeSeconds()
     return nil
 end
 
-local function waitForUptime(timeout)
-    timeout = timeout or UPTIME_WAIT_TIMEOUT
-    local t0 = tick()
-    while tick() - t0 < timeout do
-        local sec = getServerUptimeSeconds()
-        if sec then
-            print(string.format("[uptime] получен за %.1fs", tick() - t0))
-            return sec
-        end
-        task.wait(0.5)
-    end
-    return nil
-end
-
 local function inAnyWindow(sec)
     for _, w in ipairs(UPTIME_WINDOWS_SEC) do
         if sec >= w[1] and sec <= w[2] then return true end
@@ -134,42 +131,48 @@ local function fmtUptime(sec)
     return string.format("%dh:%02dm:%02ds (%ds)", h, m, s, sec)
 end
 
--- 5. Blue Moon watcher
+-- ============================================================
+-- 5. Watcher уведомлений
+-- ============================================================
+local shrineSeen   = false
 local blueMoonSeen = false
-local function checkLabelText(lbl)
-    if lbl and lbl:IsA("TextLabel") and lbl.Text
-       and lbl.Text:find("The Blue Moon fades away", 1, true) then
+local seenLabels   = setmetatable({}, {__mode = "k"})
+
+local function checkTextLabel(lbl)
+    if not lbl or not lbl:IsA("TextLabel") then return end
+    if seenLabels[lbl] then return end
+    seenLabels[lbl] = true
+
+    local t = lbl.Text or ""
+    if t:find(SHRINE_TEXT, 1, true) then
+        shrineSeen = true
+        print("[watch] SHRINE detected: " .. t:sub(1, 60))
+    end
+    if t:find(BLUE_MOON_TEXT, 1, true) then
         blueMoonSeen = true
-        print("[BlueMoon] detected")
+        print("[watch] BLUE MOON detected: " .. t:sub(1, 60))
     end
 end
 
 task.spawn(function()
-    local pg = player:WaitForChild("PlayerGui", 30)
-    if not pg then return end
-    local notif = pg:WaitForChild("Notifications", 30)
-    if not notif then return end
-    local stack = notif:WaitForChild("NotificationStack", 30)
-    if not stack then return end
-    for _, ch in ipairs(stack:GetChildren()) do
-        checkLabelText(ch)
-        if ch:IsA("GuiObject") then
-            checkLabelText(ch:FindFirstChildWhichIsA("TextLabel", true))
-        end
+    local pg = player:WaitForChild("PlayerGui", 60)
+    if not pg then warn("[watch] no PlayerGui"); return end
+    local notif = pg:WaitForChild("Notifications", 60)
+    if not notif then warn("[watch] no Notifications"); return end
+    local stack = notif:WaitForChild("NotificationStack", 60)
+    if not stack then warn("[watch] no NotificationStack"); return end
+
+    print("[watch] watching NotificationStack")
+    for _, ch in ipairs(stack:GetDescendants()) do
+        if ch:IsA("TextLabel") then checkTextLabel(ch) end
     end
-    stack.ChildAdded:Connect(function(ch)
-        task.spawn(function()
-            task.wait(0.05)
-            checkLabelText(ch)
-            if ch:IsA("GuiObject") then
-                checkLabelText(ch:FindFirstChildWhichIsA("TextLabel", true))
-            end
-        end)
+    stack.DescendantAdded:Connect(function(obj)
+        if obj:IsA("TextLabel") then checkTextLabel(obj) end
     end)
 end)
 
 -- ============================================================
--- 6. Поиск целевого TextBox
+-- 6. Поиск целевого TextBox (ждёт до BOX_WAIT_TIMEOUT)
 -- ============================================================
 local function matchesPath(obj, segments)
     local cur = obj
@@ -199,6 +202,7 @@ local function findTargetBox(waitTimeout)
     local dumped = false
 
     while tick() - t0 < waitTimeout do
+        -- 1) метка
         if TARGET_TEXT and TARGET_TEXT ~= "" then
             for _, obj in ipairs(CoreGui:GetDescendants()) do
                 if obj:IsA("TextBox") and (obj.Text or "") == TARGET_TEXT then
@@ -209,6 +213,7 @@ local function findTargetBox(waitTimeout)
             end
         end
 
+        -- 2) путь
         local cands = {}
         for _, obj in ipairs(CoreGui:GetDescendants()) do
             if obj:IsA("TextBox") and matchesPath(obj, TARGET_PATH) then
@@ -225,6 +230,7 @@ local function findTargetBox(waitTimeout)
             return cands[1]
         end
 
+        -- 3) через 10с один дамп
         if not dumped and (tick() - t0) > 10 then
             dumped = true
             dumpAllTextBoxes()
@@ -271,40 +277,32 @@ local function doInsert(box, value)
 end
 
 -- ============================================================
--- 8. HTTP (строкий, пустой ответ = nil)
+-- 8. HTTP
 -- ============================================================
 local function httpGet(url)
     local ok, res = pcall(function() return game:HttpGet(url) end)
-    if not ok then
-        warn("[http] httpGet error: " .. tostring(res))
-        return nil
-    end
-    if type(res) ~= "string" then
-        warn("[http] httpGet non-string: " .. type(res))
-        return nil
-    end
-    if res == "" then
-        warn("[http] httpGet empty from " .. url)
-        return nil
-    end
-    return res
+    if ok and res then return res end
+    warn("[http] error: " .. tostring(res))
+    return nil
 end
 
 local function requestParse()
-    local res = httpGet(FLASK_URL .. "/parse")
-    if not res then
-        return nil
+    local url = FLASK_URL .. "/parse"
+    local ok, res = pcall(function() return game:HttpGet(url) end)
+    if not ok then
+        warn("[parse] httpGet fail: " .. tostring(res)); return nil
     end
-    local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
-    if ok and data and data.task_id then
-        return data.task_id
+    if not res or res == "" then
+        warn("[parse] empty response from " .. url); return nil
     end
-    warn("[parse] bad response (" .. #res .. "B): " .. res:sub(1, 200))
+    local ok2, data = pcall(HttpService.JSONDecode, HttpService, res)
+    if ok2 and data and data.task_id then return data.task_id end
+    warn("[parse] bad response: " .. tostring(res):sub(1, 200))
     return nil
 end
 
 local function pollResult(taskId, timeoutSec)
-    timeoutSec = timeoutSec or 600
+    timeoutSec = timeoutSec or PARSE_TIMEOUT
     local t0 = os.time()
     while os.time() - t0 < timeoutSec do
         local res = httpGet(FLASK_URL .. "/result/" .. taskId)
@@ -324,84 +322,88 @@ local function pollResult(taskId, timeoutSec)
 end
 
 -- ============================================================
--- 9. Parse + insert (возвращает true = «попытка завершена успешно»,
---    false = «надо повторить /parse, потому что он не прошёл»)
+-- 9. Обёртки
 -- ============================================================
-local function doParseAndInsert(reason)
-    print("[main] parse (" .. (reason or "?") .. ")")
+local function doParseOnly(reason)
+    print("[parse] " .. (reason or "?"))
     local taskId = requestParse()
     if not taskId then
-        warn("[main] /parse failed")
+        warn("[parse] /parse failed")
+        return nil
+    end
+    print("[parse] task: " .. taskId)
+    local result = pollResult(taskId, PARSE_TIMEOUT)
+    if result and result.h2o2server and result.h2o2server ~= "" then
+        print("[parse] got hoho: " .. result.h2o2server:sub(1, 40) .. "...")
+        return result
+    end
+    warn("[parse] no valid result")
+    return nil
+end
+
+local function doParseAndInsert(reason)
+    local result = doParseOnly(reason)
+    if not result then return false end
+    local box = findTargetBox(BOX_WAIT_TIMEOUT)
+    if not box then
+        warn("[insert] TextBox не найден")
         return false
     end
-    print("[main] task: " .. taskId)
-    local result = pollResult(taskId, 600)
-    if result and result.h2o2server and result.h2o2server ~= "" then
-        print("[main] got hoho: " .. result.h2o2server)
-        local box = findTargetBox(BOX_WAIT_TIMEOUT)
-        if box then
-            doInsert(box, result.h2o2server)
-            return true
-        else
-            warn("[main] TextBox не найден за " .. BOX_WAIT_TIMEOUT .. "с")
-            return false  -- retry: хаб мог не догрузиться
-        end
-    else
-        warn("[main] no valid result (no match in discord)")
-        return true   -- /parse прошёл, матча нет → retry бесполезен
-    end
+    return doInsert(box, result.h2o2server)
 end
 
 -- ============================================================
--- 10. Health check + одноразовая стартовая проверка
+-- 10. Main loop
 -- ============================================================
-print("[main] health check: " .. FLASK_URL .. "/health")
-do
-    local h = httpGet(FLASK_URL .. "/health")
-    if h then print("[main] flask alive: " .. h)
-    else warn("[main] flask NOT reachable — will retry /parse") end
-end
+print("[main] main loop started")
+local lastUptimeCheck = 0
 
-print("[main] ждём данные аптайма...")
-local initialUptime = waitForUptime(UPTIME_WAIT_TIMEOUT)
-
-if not initialUptime then
-    print("[main] аптайм не получен за " .. UPTIME_WAIT_TIMEOUT ..
-          "с → форсируем парсинг")
-    for attempt = 1, PARSE_STARTUP_MAX_ATTEMPTS do
-        if doParseAndInsert("uptime timeout") then break end
-        warn(("[main] retry %d/%d через %ds")
-            :format(attempt, PARSE_STARTUP_MAX_ATTEMPTS, PARSE_STARTUP_DELAY))
-        task.wait(PARSE_STARTUP_DELAY)
-    end
-else
-    print("[main] initial uptime=" .. fmtUptime(initialUptime))
-    if inAnyWindow(initialUptime) then
-        print("[main] ✓ в окне — парсер не нужен, ждём blue moon")
-    else
-        print("[main] ✗ вне окна — парсим сейчас (с ретраями)")
-        for attempt = 1, PARSE_STARTUP_MAX_ATTEMPTS do
-            if doParseAndInsert("out of window") then break end
-            warn(("[main] retry %d/%d через %ds")
-                :format(attempt, PARSE_STARTUP_MAX_ATTEMPTS, PARSE_STARTUP_DELAY))
-            task.wait(PARSE_STARTUP_DELAY)
-        end
-    end
-end
-
--- ============================================================
--- 11. Дальше — только blue moon (с ретраями)
--- ============================================================
-print("[main] ожидание blue moon...")
 while true do
-    if blueMoonSeen then
+    -- ===== SHRINE: приоритет №1, 30с-проверки СТОП =====
+    if shrineSeen then
+        shrineSeen   = false
         blueMoonSeen = false
-        for attempt = 1, PARSE_BLUEMOON_MAX_ATTEMPTS do
-            if doParseAndInsert("blue moon") then break end
-            warn(("[main] blue moon retry %d/%d через %ds")
-                :format(attempt, PARSE_BLUEMOON_MAX_ATTEMPTS, PARSE_BLUEMOON_DELAY))
-            task.wait(PARSE_BLUEMOON_DELAY)
+        print("[shrine] shrine detected → uptime checks paused, wait blue moon")
+
+        local t0 = os.time()
+        local trigger = nil
+        while (os.time() - t0) < SHRINE_WAIT_SEC do
+            if blueMoonSeen then
+                trigger = "blue moon"
+                break
+            end
+            task.wait(1)
+        end
+        if not trigger then
+            trigger = "timeout " .. SHRINE_WAIT_SEC .. "s"
+        end
+        blueMoonSeen = false
+
+        print(("[shrine] ended (%s, waited %ds) → parse+insert")
+            :format(trigger, os.time() - t0))
+        doParseAndInsert("shrine: " .. trigger)
+        lastUptimeCheck = os.time()
+
+    -- ===== BLUE MOON без shrine =====
+    elseif blueMoonSeen then
+        blueMoonSeen = false
+        print("[main] blue moon (no shrine) → parse+insert")
+        doParseAndInsert("blue moon")
+        lastUptimeCheck = os.time()
+
+    -- ===== UPTIME CHECK каждые 30с =====
+    elseif (os.time() - lastUptimeCheck) >= UPTIME_CHECK_SEC then
+        lastUptimeCheck = os.time()
+        local sec = getServerUptimeSeconds()
+        if not sec then
+            print("[main] uptime unknown")
+        elseif inAnyWindow(sec) then
+            print("[main] " .. fmtUptime(sec) .. " | IN WINDOW")
+        else
+            print("[main] " .. fmtUptime(sec) .. " | OUT → parse+insert")
+            doParseAndInsert("out of window")
         end
     end
+
     task.wait(1)
 end
