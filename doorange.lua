@@ -1,12 +1,11 @@
 -- ============================================================
 -- HOHO Hub + Flask Parser Client
---   • Аптайм: как в твоём -- Сервисы.txt (первое найденное timeIn),
---     + фильтр > 60с отсекает фейки эксплойта
+--   • Аптайм: как в -- Сервисы.txt + фильтр > 60с
 --   • Окна: "50:00" = 50 МИНУТ, остальные = ЧАСЫ:МИНУТЫ
 --   • Один раз при старте: ждём аптайм → проверяем окно
---   • Если вне окна → парсим и вставляем
---   • Если в окне → ждём blue moon
---   • Дальше ТОЛЬКО blue moon триггерит парсинг
+--   • Вне окна → парсим с ретраями; в окне → ждём blue moon
+--   • Дальше ТОЛЬКО blue moon триггерит парсинг (с ретраями)
+--   • findTargetBox ждёт до 120с пока хаб достроится
 -- ============================================================
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -17,8 +16,6 @@ local player            = Players.LocalPlayer
 local FLASK_URL = "http://192.168.31.179:8000"
 local HUB_URL   = "https://raw.githubusercontent.com/acsu123/HOHO_H/main/Loading_UI"
 
--- Окна аптайма в СЕКУНДАХ.
--- "50:00" = 50 МИНУТ, остальные = ЧАСЫ:МИНУТЫ (допуск -5 мин, как в парсере)
 local UPTIME_WINDOWS_SEC = {
     {45*60,             50*60          },   --  50 мин       → 2700 .. 3000
     { 3*3600 + 55*60,   4*3600         },   --  4 часа       → 14100 .. 14400
@@ -38,8 +35,16 @@ local TARGET_PATH = {
 }
 
 local UPTIME_WAIT_TIMEOUT = 60
+local BOX_WAIT_TIMEOUT    = 120
+
+-- Ретраи для /parse
+local PARSE_STARTUP_MAX_ATTEMPTS = 12   -- 12 × 15с = 3 минуты
+local PARSE_STARTUP_DELAY        = 15
+local PARSE_BLUEMOON_MAX_ATTEMPTS = 6   -- 6 × 10с = 1 минута
+local PARSE_BLUEMOON_DELAY        = 10
 
 print("[HOHO] === START ===")
+print("[HOHO] Flask URL: " .. FLASK_URL)
 
 -- 1. Хаб
 task.spawn(function()
@@ -77,12 +82,10 @@ end
 repeat task.wait(0.5) until isCharacterReady()
 task.wait(3)
 
--- 4. Аптайм (как в -- Сервисы.txt: первое найденное timeIn,
---    но пропускаем 0..60с — это фейки эксплойта)
+-- 4. Аптайм
 local function getServerUptimeSeconds()
     local currentTime = workspace:GetServerTimeNow()
     local foundTimestamp = nil
-
     for _, v in pairs(getgc(true)) do
         if type(v) == "table" then
             for k, val in pairs(v) do
@@ -98,10 +101,7 @@ local function getServerUptimeSeconds()
             if foundTimestamp then break end
         end
     end
-
-    if foundTimestamp then
-        return math.floor(currentTime - foundTimestamp)
-    end
+    if foundTimestamp then return math.floor(currentTime - foundTimestamp) end
     return nil
 end
 
@@ -180,36 +180,62 @@ local function matchesPath(obj, segments)
     return true
 end
 
-local function findTargetBox()
-    if TARGET_TEXT and TARGET_TEXT ~= "" then
-        for _, obj in ipairs(CoreGui:GetDescendants()) do
-            if obj:IsA("TextBox") and (obj.Text or "") == TARGET_TEXT then
-                print("[find] по метке '"..TARGET_TEXT.."' -> " .. obj:GetFullName())
-                return obj
+local function dumpAllTextBoxes()
+    print("[find] дамп TextBox под CONFIG_PAGES:")
+    local rootSegments = {"Hоhо_gеn4","MAIN_UI","MAIN_ZONES","PAGES_TAB","ANCHOR","CONFIG_PAGES"}
+    for _, obj in ipairs(CoreGui:GetDescendants()) do
+        if obj:IsA("TextBox") and matchesPath(obj, rootSegments) then
+            print(string.format("[find]   text='%s' pos=(%.1f,%.1f) path=%s",
+                tostring(obj.Text),
+                obj.AbsolutePosition.X, obj.AbsolutePosition.Y,
+                obj:GetFullName()))
+        end
+    end
+end
+
+local function findTargetBox(waitTimeout)
+    waitTimeout = waitTimeout or BOX_WAIT_TIMEOUT
+    local t0 = tick()
+    local dumped = false
+
+    while tick() - t0 < waitTimeout do
+        if TARGET_TEXT and TARGET_TEXT ~= "" then
+            for _, obj in ipairs(CoreGui:GetDescendants()) do
+                if obj:IsA("TextBox") and (obj.Text or "") == TARGET_TEXT then
+                    print(("[find] по метке '%s' за %.1fs -> %s")
+                        :format(TARGET_TEXT, tick() - t0, obj:GetFullName()))
+                    return obj
+                end
             end
         end
+
+        local cands = {}
+        for _, obj in ipairs(CoreGui:GetDescendants()) do
+            if obj:IsA("TextBox") and matchesPath(obj, TARGET_PATH) then
+                table.insert(cands, obj)
+            end
+        end
+        if #cands >= 1 then
+            table.sort(cands, function(a, b)
+                return a.AbsolutePosition.Y > b.AbsolutePosition.Y
+            end)
+            print(("[find] по пути за %.1fs (%d шт), нижний Y=%.1f -> %s")
+                :format(tick() - t0, #cands,
+                        cands[1].AbsolutePosition.Y, cands[1]:GetFullName()))
+            return cands[1]
+        end
+
+        if not dumped and (tick() - t0) > 10 then
+            dumped = true
+            dumpAllTextBoxes()
+        end
+
+        task.wait(0.5)
     end
 
-    local cands = {}
-    for _, obj in ipairs(CoreGui:GetDescendants()) do
-        if obj:IsA("TextBox") and matchesPath(obj, TARGET_PATH) then
-            table.insert(cands, obj)
-        end
-    end
-    if #cands == 0 then
-        print("[find] по пути MINI_11_CONFIG_4 ничего нет")
-        return nil
-    end
-    if #cands == 1 then
-        print("[find] единственный по пути -> " .. cands[1]:GetFullName())
-        return cands[1]
-    end
-    table.sort(cands, function(a, b)
-        return a.AbsolutePosition.Y > b.AbsolutePosition.Y
-    end)
-    print(("[find] %d дублей, выбран нижний Y=%.1f -> %s")
-        :format(#cands, cands[1].AbsolutePosition.Y, cands[1]:GetFullName()))
-    return cands[1]
+    print(("[find] не нашли за %.1fs — финальный дамп:"):format(waitTimeout))
+    dumpAllTextBoxes()
+    return nil
 end
 
 -- ============================================================
@@ -245,21 +271,35 @@ local function doInsert(box, value)
 end
 
 -- ============================================================
--- 8. HTTP
+-- 8. HTTP (строкий, пустой ответ = nil)
 -- ============================================================
 local function httpGet(url)
     local ok, res = pcall(function() return game:HttpGet(url) end)
-    if ok and res then return res end
-    warn("[http] error: " .. tostring(res))
-    return nil
+    if not ok then
+        warn("[http] httpGet error: " .. tostring(res))
+        return nil
+    end
+    if type(res) ~= "string" then
+        warn("[http] httpGet non-string: " .. type(res))
+        return nil
+    end
+    if res == "" then
+        warn("[http] httpGet empty from " .. url)
+        return nil
+    end
+    return res
 end
 
 local function requestParse()
     local res = httpGet(FLASK_URL .. "/parse")
-    if not res then return nil end
+    if not res then
+        return nil
+    end
     local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
-    if ok and data and data.task_id then return data.task_id end
-    warn("[parse] bad response: " .. tostring(res))
+    if ok and data and data.task_id then
+        return data.task_id
+    end
+    warn("[parse] bad response (" .. #res .. "B): " .. res:sub(1, 200))
     return nil
 end
 
@@ -284,58 +324,84 @@ local function pollResult(taskId, timeoutSec)
 end
 
 -- ============================================================
--- 9. Parse + insert
+-- 9. Parse + insert (возвращает true = «попытка завершена успешно»,
+--    false = «надо повторить /parse, потому что он не прошёл»)
 -- ============================================================
 local function doParseAndInsert(reason)
     print("[main] parse (" .. (reason or "?") .. ")")
     local taskId = requestParse()
     if not taskId then
         warn("[main] /parse failed")
-        return
+        return false
     end
     print("[main] task: " .. taskId)
     local result = pollResult(taskId, 600)
     if result and result.h2o2server and result.h2o2server ~= "" then
         print("[main] got hoho: " .. result.h2o2server)
-        local box = findTargetBox()
+        local box = findTargetBox(BOX_WAIT_TIMEOUT)
         if box then
             doInsert(box, result.h2o2server)
+            return true
         else
-            warn("[main] целевой TextBox не найден")
+            warn("[main] TextBox не найден за " .. BOX_WAIT_TIMEOUT .. "с")
+            return false  -- retry: хаб мог не догрузиться
         end
     else
-        warn("[main] no valid result")
+        warn("[main] no valid result (no match in discord)")
+        return true   -- /parse прошёл, матча нет → retry бесполезен
     end
 end
 
 -- ============================================================
--- 10. Одноразовая стартовая проверка
+-- 10. Health check + одноразовая стартовая проверка
 -- ============================================================
+print("[main] health check: " .. FLASK_URL .. "/health")
+do
+    local h = httpGet(FLASK_URL .. "/health")
+    if h then print("[main] flask alive: " .. h)
+    else warn("[main] flask NOT reachable — will retry /parse") end
+end
+
 print("[main] ждём данные аптайма...")
 local initialUptime = waitForUptime(UPTIME_WAIT_TIMEOUT)
 
 if not initialUptime then
     print("[main] аптайм не получен за " .. UPTIME_WAIT_TIMEOUT ..
           "с → форсируем парсинг")
-    doParseAndInsert("uptime timeout")
+    for attempt = 1, PARSE_STARTUP_MAX_ATTEMPTS do
+        if doParseAndInsert("uptime timeout") then break end
+        warn(("[main] retry %d/%d через %ds")
+            :format(attempt, PARSE_STARTUP_MAX_ATTEMPTS, PARSE_STARTUP_DELAY))
+        task.wait(PARSE_STARTUP_DELAY)
+    end
 else
     print("[main] initial uptime=" .. fmtUptime(initialUptime))
     if inAnyWindow(initialUptime) then
         print("[main] ✓ в окне — парсер не нужен, ждём blue moon")
     else
-        print("[main] ✗ вне окна — парсим сейчас")
-        doParseAndInsert("out of window")
+        print("[main] ✗ вне окна — парсим сейчас (с ретраями)")
+        for attempt = 1, PARSE_STARTUP_MAX_ATTEMPTS do
+            if doParseAndInsert("out of window") then break end
+            warn(("[main] retry %d/%d через %ds")
+                :format(attempt, PARSE_STARTUP_MAX_ATTEMPTS, PARSE_STARTUP_DELAY))
+            task.wait(PARSE_STARTUP_DELAY)
+        end
     end
 end
 
 -- ============================================================
--- 11. Дальше — только blue moon
+-- 11. Дальше — только blue moon (с ретраями)
 -- ============================================================
 print("[main] ожидание blue moon...")
 while true do
     if blueMoonSeen then
         blueMoonSeen = false
-        doParseAndInsert("blue moon")
+        for attempt = 1, PARSE_BLUEMOON_MAX_ATTEMPTS do
+            if doParseAndInsert("blue moon") then break end
+            warn(("[main] blue moon retry %d/%d через %ds")
+                :format(attempt, PARSE_BLUEMOON_MAX_ATTEMPTS, PARSE_BLUEMOON_DELAY))
+            task.wait(PARSE_BLUEMOON_DELAY)
+        end
     end
     task.wait(1)
 end
