@@ -1,8 +1,9 @@
 -- ============================================================
 -- HOHO Hub + Flask Parser Client
---   • Аптайм: первое timeIn > 60с (фильтр фейков эксплойта)
---   • Окна: "50:00" = 50 МИНУТ, остальные = ЧАСЫ:МИНУТЫ
---   • Каждые 30с: check uptime → OUT → parse+insert
+--   • Аптайм: первое timeIn > 60с
+--   • Окна — новые значения
+--   • Watcher сканирует дерево каждые 0.5с (shrine + blue moon)
+--   • Каждые 30с: OUT → parse+insert
 --   • Shrine → 7-мин ожидание blue moon → parse+insert
 --   • Blue moon (без shrine) → parse+insert
 -- ============================================================
@@ -15,21 +16,21 @@ local player            = Players.LocalPlayer
 local FLASK_URL = "http://192.168.31.179:8000"
 local HUB_URL   = "https://raw.githubusercontent.com/acsu123/HOHO_H/main/Loading_UI"
 
--- Окна аптайма в СЕКУНДАХ.
--- "50:00" = 50 МИНУТ, остальные = ЧАСЫ:МИНУТЫ (допуск -5 мин, как в парсере)
+-- Окна аптайма в СЕКУНДАХ (новые значения)
 local UPTIME_WINDOWS_SEC = {
-    {00*3600 + 46*60,   00*3600 + 56*60 },   -- 00:46–00:56  → 2760  .. 3360
-    { 3*3600 + 58*60,    4*3600 +  8*60 },   -- 03:58–04:08  → 14280 .. 14880
-    { 7*3600 + 12*60,    7*3600 + 22*60 },   -- 07:12–07:22  → 25920 .. 26520
-    {10*3600 + 28*60,   10*3600 + 38*60 },   -- 10:28–10:38  → 37680 .. 38280
-    {13*3600 + 40*60,   13*3600 + 51*60 },   -- 13:46–13:56  → 49560 .. 50160
-    {16*3600 +  55*60,   17*3600 + 5*60 },   -- 17:06–17:16  → 61560 .. 62160
-    {20*3600 + 11*60,   20*3600 + 21*60 },   -- 20:28–20:38  → 73680 .. 74280
-    {23*3600 + 22*60,   23*3600 +  32*60 },   -- 23:52–00:02 (+1) → 85920 .. 86520
+    {00*3600 + 46*60,   00*3600 + 56*60 },   --  0:46 – 0:56
+    { 3*3600 + 58*60,    4*3600 +  8*60 },   --  3:58 – 4:08
+    { 7*3600 + 12*60,    7*3600 + 22*60 },   --  7:12 – 7:22
+    {10*3600 + 28*60,   10*3600 + 38*60 },   -- 10:28 – 10:38
+    {13*3600 + 40*60,   13*3600 + 51*60 },   -- 13:40 – 13:51
+    {16*3600 + 55*60,   17*3600 +  5*60 },   -- 16:55 – 17:05
+    {20*3600 + 11*60,   20*3600 + 21*60 },   -- 20:11 – 20:21
+    {23*3600 + 22*60,   23*3600 + 32*60 },   -- 23:22 – 23:32
 }
+
 -- Метка в целевом TextBox — самый надёжный ключ
 local TARGET_TEXT = "here"
--- Fallback путь (если метку забыл поставить)
+-- Fallback путь
 local TARGET_PATH = {
     "Hоhо_gеn4","MAIN_UI","MAIN_ZONES","PAGES_TAB","ANCHOR",
     "CONFIG_PAGES","MINI_11_CONFIG_4","ScrollingFrame",
@@ -131,47 +132,59 @@ local function fmtUptime(sec)
 end
 
 -- ============================================================
--- 5. Watcher уведомлений
+-- 5. Watcher уведомлений (сканер каждые 0.5с)
 -- ============================================================
-local shrineSeen   = false
-local blueMoonSeen = false
-local seenLabels   = setmetatable({}, {__mode = "k"})
+local shrineSeen       = false
+local blueMoonSeen     = false
+local lastShrineTime   = 0
+local lastBlueMoonTime = 0
+local seenTexts        = {}
 
-local function checkTextLabel(lbl)
-    if not lbl or not lbl:IsA("TextLabel") then return end
-    if seenLabels[lbl] then return end
-    seenLabels[lbl] = true
+local function scanNotifications()
+    local pg = player:FindFirstChild("PlayerGui")
+    if not pg then return end
+    local notif = pg:FindFirstChild("Notifications")
+    if not notif then return end
 
-    local t = lbl.Text or ""
-    if t:find(SHRINE_TEXT, 1, true) then
-        shrineSeen = true
-        print("[watch] SHRINE detected: " .. t:sub(1, 60))
-    end
-    if t:find(BLUE_MOON_TEXT, 1, true) then
-        blueMoonSeen = true
-        print("[watch] BLUE MOON detected: " .. t:sub(1, 60))
+    local now = os.time()
+
+    for _, obj in ipairs(notif:GetDescendants()) do
+        if obj:IsA("TextLabel") then
+            local t = obj.Text or ""
+            if t ~= "" then
+                if not seenTexts[t] then
+                    seenTexts[t] = now
+                    if t:len() > 10 then
+                        print(("[watch] TEXT: %s"):format(t:sub(1, 100)))
+                    end
+                end
+
+                if t:find(SHRINE_TEXT, 1, true) and (now - lastShrineTime) > 5 then
+                    shrineSeen = true
+                    lastShrineTime = now
+                    print("[watch] ★ SHRINE detected: " .. t:sub(1, 80))
+                end
+                if t:find(BLUE_MOON_TEXT, 1, true) and (now - lastBlueMoonTime) > 5 then
+                    blueMoonSeen = true
+                    lastBlueMoonTime = now
+                    print("[watch] ★ BLUE MOON detected: " .. t:sub(1, 80))
+                end
+            end
+        end
     end
 end
 
 task.spawn(function()
-    local pg = player:WaitForChild("PlayerGui", 60)
-    if not pg then warn("[watch] no PlayerGui"); return end
-    local notif = pg:WaitForChild("Notifications", 60)
-    if not notif then warn("[watch] no Notifications"); return end
-    local stack = notif:WaitForChild("NotificationStack", 60)
-    if not stack then warn("[watch] no NotificationStack"); return end
-
-    print("[watch] watching NotificationStack")
-    for _, ch in ipairs(stack:GetDescendants()) do
-        if ch:IsA("TextLabel") then checkTextLabel(ch) end
+    task.wait(5)
+    print("[watch] scan loop started (every 0.5s)")
+    while true do
+        scanNotifications()
+        task.wait(0.5)
     end
-    stack.DescendantAdded:Connect(function(obj)
-        if obj:IsA("TextLabel") then checkTextLabel(obj) end
-    end)
 end)
 
 -- ============================================================
--- 6. Поиск целевого TextBox (ждёт до BOX_WAIT_TIMEOUT)
+-- 6. Поиск целевого TextBox
 -- ============================================================
 local function matchesPath(obj, segments)
     local cur = obj
@@ -201,7 +214,6 @@ local function findTargetBox(waitTimeout)
     local dumped = false
 
     while tick() - t0 < waitTimeout do
-        -- 1) метка
         if TARGET_TEXT and TARGET_TEXT ~= "" then
             for _, obj in ipairs(CoreGui:GetDescendants()) do
                 if obj:IsA("TextBox") and (obj.Text or "") == TARGET_TEXT then
@@ -212,7 +224,6 @@ local function findTargetBox(waitTimeout)
             end
         end
 
-        -- 2) путь
         local cands = {}
         for _, obj in ipairs(CoreGui:GetDescendants()) do
             if obj:IsA("TextBox") and matchesPath(obj, TARGET_PATH) then
@@ -229,7 +240,6 @@ local function findTargetBox(waitTimeout)
             return cands[1]
         end
 
-        -- 3) через 10с один дамп
         if not dumped and (tick() - t0) > 10 then
             dumped = true
             dumpAllTextBoxes()
@@ -358,7 +368,7 @@ print("[main] main loop started")
 local lastUptimeCheck = 0
 
 while true do
-    -- ===== SHRINE: приоритет №1, 30с-проверки СТОП =====
+    -- SHRINE: приоритет №1, 30с-проверки СТОП на 7 минут
     if shrineSeen then
         shrineSeen   = false
         blueMoonSeen = false
@@ -383,14 +393,14 @@ while true do
         doParseAndInsert("shrine: " .. trigger)
         lastUptimeCheck = os.time()
 
-    -- ===== BLUE MOON без shrine =====
+    -- BLUE MOON без shrine
     elseif blueMoonSeen then
         blueMoonSeen = false
         print("[main] blue moon (no shrine) → parse+insert")
         doParseAndInsert("blue moon")
         lastUptimeCheck = os.time()
 
-    -- ===== UPTIME CHECK каждые 30с =====
+    -- UPTIME CHECK каждые 30с
     elseif (os.time() - lastUptimeCheck) >= UPTIME_CHECK_SEC then
         lastUptimeCheck = os.time()
         local sec = getServerUptimeSeconds()
