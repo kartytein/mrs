@@ -1,103 +1,338 @@
 -- ============================================================
--- ПОИСК ОБЪЕКТОВ С ТЕКСТОМ "sand"
--- Ищет в PlayerGui (интерфейс) и в workspace (мир).
--- Выводит путь, класс, текст и тип объекта.
+-- HOHO Hub + Flask Parser Client
+--   • Один раз ждём аптайм, проверяем окно (в МИНУТАХ)
+--   • Если вне окна → парсим и вставляем
+--   • Если в окне → ждём blue moon
+--   • Дальше ТОЛЬКО blue moon триггерит парсинг
 -- ============================================================
+local Players           = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService       = game:GetService("HttpService")
+local CoreGui           = game:GetService("CoreGui")
+local player            = Players.LocalPlayer
 
-local target = "Ready" -- искомый текст (регистронезависимо)
+local FLASK_URL = "http://192.168.31.179:8000"
+local HUB_URL   = "https://raw.githubusercontent.com/acsu123/HOHO_H/main/Loading_UI"
 
-local player = game.Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
-local workspace = game:GetService("Workspace")
+-- Окна аптайма в СЕКУНДАХ (формат "MM:SS" → mm*60 + ss).
+-- "50:00"=50 мин=3000с, но мы ловим окно ±несколько минут → 45–53 мин = 2700–3180с
+local UPTIME_WINDOWS_SEC = {
+    {45*60 +  0, 53*60 +  0},   -- 45:00 – 53:00
+    { 3*60 + 57,  4*60 +  5},   -- 3:57  – 4:05
+    { 7*60 + 10,  7*60 + 17},   -- 7:10  – 7:17
+    {10*60 + 30, 10*60 + 37},   -- 10:30 – 10:37
+    {13*60 + 37, 13*60 + 44},   -- 13:37 – 13:44
+    {16*60 + 53, 17*60 +  0},   -- 16:53 – 17:00
+    {20*60 +  8, 20*60 + 15},   -- 20:08 – 20:15
+    {23*60 + 17, 23*60 + 24},   -- 23:17 – 23:24
+}
 
-local results = {}
+local TARGET_TEXT = "here"
+local TARGET_PATH = {
+    "Hоhо_gеn4","MAIN_UI","MAIN_ZONES","PAGES_TAB","ANCHOR",
+    "CONFIG_PAGES","MINI_11_CONFIG_4","ScrollingFrame",
+    "Tab2","Textbox2","Box",
+}
 
--- Функция проверки: содержит ли текст подстроку target (регистронезависимо)
-local function matchesText(text)
-    if not text then return false end
-    return text:lower():find(target, 1, true) ~= nil
-end
+local UPTIME_WAIT_TIMEOUT = 60
 
--- Рекурсивный обход GuiObject и сбор совпадений
-local function scanGui(parent)
-    for _, child in ipairs(parent:GetChildren()) do
-        local text = nil
-        if child:IsA("TextButton") or child:IsA("TextBox") or child:IsA("TextLabel") then
-            text = child.Text
-        elseif child:IsA("ImageButton") or child:IsA("ImageLabel") then
-            text = nil -- у них нет текста, но проверяем имя
+print("[HOHO] === START ===")
+
+-- 1. Хаб
+task.spawn(function()
+    local ok, err = pcall(function()
+        loadstring(game:HttpGet(HUB_URL))()
+    end)
+    if ok then print("[HOHO] Хаб загружен успешно.")
+    else warn("[HOHO] Ошибка загрузки хаба: " .. tostring(err)) end
+end)
+
+-- 2. Команда
+do
+    local remotes = ReplicatedStorage and ReplicatedStorage:FindFirstChild("Remotes")
+    if remotes then
+        local commF = remotes:FindFirstChild("CommF_")
+        if commF then
+            pcall(function() commF:InvokeServer("SetTeam", "Marines") end)
         end
-
-        -- Проверяем текст или имя
-        if matchesText(text) or matchesText(child.Name) then
-            table.insert(results, {
-                Path = child:GetFullName(),
-                Class = child.ClassName,
-                Text = text or "-",
-                Name = child.Name,
-                Type = "GUI"
-            })
-        end
-        scanGui(child)
     end
 end
 
--- Рекурсивный обход workspace
-local function scanWorld(parent)
-    for _, child in ipairs(parent:GetChildren()) do
-        local text = nil
-        if child:IsA("Part") or child:IsA("MeshPart") then
-            -- Проверяем имя, возможно есть SurfaceGui или ProximityPrompt с текстом?
-            text = child.Name
-        elseif child:IsA("Model") then
-            text = child.Name
-        elseif child:IsA("ProximityPrompt") then
-            text = child.ActionText
-        elseif child:IsA("SurfaceGui") then
-            -- внутри могут быть TextLabel
-            for _, guiChild in ipairs(child:GetDescendants()) do
-                if guiChild:IsA("TextLabel") or guiChild:IsA("TextButton") or guiChild:IsA("TextBox") then
-                    if matchesText(guiChild.Text) then
-                        table.insert(results, {
-                            Path = guiChild:GetFullName(),
-                            Class = guiChild.ClassName,
-                            Text = guiChild.Text,
-                            Name = guiChild.Name,
-                            Type = "WorldGUI"
-                        })
+-- 3. Персонаж
+local function isCharacterReady()
+    local ok, res = pcall(function()
+        local c = player.Character
+        if not c then return false end
+        local h = c:FindFirstChild("Humanoid")
+        local r = c:FindFirstChild("HumanoidRootPart")
+        if not h or not r then return false end
+        return h.Health > 0
+    end)
+    return ok and res
+end
+
+repeat task.wait(0.5) until isCharacterReady()
+task.wait(3)
+
+-- 4. Аптайм (собираем все кандидаты, берём самый свежий)
+local function getServerUptimeSeconds()
+    local currentTime = workspace:GetServerTimeNow()
+    local candidates = {}
+    for _, v in pairs(getgc(true)) do
+        if type(v) == "table" then
+            for k, val in pairs(v) do
+                if type(k) == "string" and (k == "timeIn" or k == "TimeIn")
+                   and type(val) == "number" and val > 1700000000 then
+                    local sec = currentTime - val
+                    if sec > 0 and sec < 30 * 86400 then
+                        table.insert(candidates, sec)
                     end
                 end
             end
         end
+    end
+    if #candidates == 0 then return nil end
+    table.sort(candidates)
+    if #candidates > 1 then
+        local t = {}
+        for _, s in ipairs(candidates) do t[#t+1] = string.format("%.0f", s) end
+        print(("[uptime] найдено %d timeIn: %s")
+            :format(#candidates, table.concat(t, ", ")))
+    end
+    return math.floor(candidates[1])
+end
 
-        if matchesText(text) or matchesText(child.Name) then
-            table.insert(results, {
-                Path = child:GetFullName(),
-                Class = child.ClassName,
-                Text = text or "-",
-                Name = child.Name,
-                Type = "World"
-            })
+local function waitForUptime(timeout)
+    timeout = timeout or UPTIME_WAIT_TIMEOUT
+    local t0 = tick()
+    while tick() - t0 < timeout do
+        local sec = getServerUptimeSeconds()
+        if sec then
+            print(string.format("[uptime] получен за %.1fs", tick() - t0))
+            return sec
         end
+        task.wait(0.5)
+    end
+    return nil
+end
 
-        scanWorld(child)
+local function inAnyWindow(sec)
+    for _, w in ipairs(UPTIME_WINDOWS_SEC) do
+        if sec >= w[1] and sec <= w[2] then return true end
+    end
+    return false
+end
+
+local function fmtUptime(sec)
+    if not sec then return "nil" end
+    local h = math.floor(sec / 3600)
+    local m = math.floor((sec % 3600) / 60)
+    local s = math.floor(sec % 60)
+    return string.format("%dh:%02dm:%02ds (%ds)", h, m, s, sec)
+end
+
+-- 5. Blue Moon watcher
+local blueMoonSeen = false
+local function checkLabelText(lbl)
+    if lbl and lbl:IsA("TextLabel") and lbl.Text
+       and lbl.Text:find("The Blue Moon fades away", 1, true) then
+        blueMoonSeen = true
+        print("[BlueMoon] detected")
     end
 end
 
--- Запуск сканирования
-scanGui(playerGui)
-scanWorld(workspace)
-
--- Вывод результатов
-print("=== РЕЗУЛЬТАТЫ ПОИСКА: '" .. target .. "' ===")
-if #results == 0 then
-    print("Ничего не найдено.")
-else
-    for i, res in ipairs(results) do
-        print(string.format(
-            "[%d] %s | Path: %s | Class: %s | Name: %s | Text: %s",
-            i, res.Type, res.Path, res.Class, res.Name, res.Text
-        ))
+task.spawn(function()
+    local pg = player:WaitForChild("PlayerGui", 30)
+    if not pg then return end
+    local notif = pg:WaitForChild("Notifications", 30)
+    if not notif then return end
+    local stack = notif:WaitForChild("NotificationStack", 30)
+    if not stack then return end
+    for _, ch in ipairs(stack:GetChildren()) do
+        checkLabelText(ch)
+        if ch:IsA("GuiObject") then
+            checkLabelText(ch:FindFirstChildWhichIsA("TextLabel", true))
+        end
     end
-    print("Всего найдено:", #results)
+    stack.ChildAdded:Connect(function(ch)
+        task.spawn(function()
+            task.wait(0.05)
+            checkLabelText(ch)
+            if ch:IsA("GuiObject") then
+                checkLabelText(ch:FindFirstChildWhichIsA("TextLabel", true))
+            end
+        end)
+    end)
+end)
+
+-- ============================================================
+-- 6. Поиск целевого TextBox
+-- ============================================================
+local function matchesPath(obj, segments)
+    local cur = obj
+    for i = #segments, 1, -1 do
+        if not cur or cur.Name ~= segments[i] then return false end
+        cur = cur.Parent
+    end
+    return true
+end
+
+local function findTargetBox()
+    if TARGET_TEXT and TARGET_TEXT ~= "" then
+        for _, obj in ipairs(CoreGui:GetDescendants()) do
+            if obj:IsA("TextBox") and (obj.Text or "") == TARGET_TEXT then
+                print("[find] по метке '"..TARGET_TEXT.."' -> " .. obj:GetFullName())
+                return obj
+            end
+        end
+    end
+
+    local cands = {}
+    for _, obj in ipairs(CoreGui:GetDescendants()) do
+        if obj:IsA("TextBox") and matchesPath(obj, TARGET_PATH) then
+            table.insert(cands, obj)
+        end
+    end
+    if #cands == 0 then
+        print("[find] по пути MINI_11_CONFIG_4 ничего нет")
+        return nil
+    end
+    if #cands == 1 then
+        print("[find] единственный по пути -> " .. cands[1]:GetFullName())
+        return cands[1]
+    end
+    table.sort(cands, function(a, b)
+        return a.AbsolutePosition.Y > b.AbsolutePosition.Y
+    end)
+    print(("[find] %d дублей, выбран нижний Y=%.1f -> %s")
+        :format(#cands, cands[1].AbsolutePosition.Y, cands[1]:GetFullName()))
+    return cands[1]
+end
+
+-- ============================================================
+-- 7. Вставка
+-- ============================================================
+local function doInsert(box, value)
+    if not box or not box.Parent then
+        warn("[insert] box пропал"); return false
+    end
+    print("[insert] TextBox: " .. box:GetFullName())
+    pcall(function() box:CaptureFocus() end)
+    task.wait(0.1)
+    if not box.Parent then
+        warn("[insert] box пропал после CaptureFocus"); return false
+    end
+    box.Text = value
+    task.wait(0.1)
+    pcall(function() box:ReleaseFocus(true) end)
+    task.wait(0.1)
+    print("[insert] после вставки Text = '" .. tostring(box.Text) .. "'")
+    local sig = box.FocusLost
+    if sig then
+        local ok, conns = pcall(function() return getconnections(sig) end)
+        if ok and conns then
+            for _, c in ipairs(conns) do
+                if c.Enabled and type(c.Function) == "function" then
+                    pcall(c.Function)
+                end
+            end
+        end
+    end
+    return true
+end
+
+-- ============================================================
+-- 8. HTTP
+-- ============================================================
+local function httpGet(url)
+    local ok, res = pcall(function() return game:HttpGet(url) end)
+    if ok and res then return res end
+    warn("[http] error: " .. tostring(res))
+    return nil
+end
+
+local function requestParse()
+    local res = httpGet(FLASK_URL .. "/parse")
+    if not res then return nil end
+    local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
+    if ok and data and data.task_id then return data.task_id end
+    warn("[parse] bad response: " .. tostring(res))
+    return nil
+end
+
+local function pollResult(taskId, timeoutSec)
+    timeoutSec = timeoutSec or 600
+    local t0 = os.time()
+    while os.time() - t0 < timeoutSec do
+        local res = httpGet(FLASK_URL .. "/result/" .. taskId)
+        if res then
+            local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
+            if ok and data then
+                if data.status == "done"      then return data.result end
+                if data.status == "error"     then
+                    warn("[parse] error: " .. tostring(data.error)); return nil
+                end
+                if data.status == "not_found" then return nil end
+            end
+        end
+        task.wait(2)
+    end
+    return nil
+end
+
+-- ============================================================
+-- 9. Parse + insert
+-- ============================================================
+local function doParseAndInsert(reason)
+    print("[main] parse (" .. (reason or "?") .. ")")
+    local taskId = requestParse()
+    if not taskId then
+        warn("[main] /parse failed")
+        return
+    end
+    print("[main] task: " .. taskId)
+    local result = pollResult(taskId, 600)
+    if result and result.h2o2server and result.h2o2server ~= "" then
+        print("[main] got hoho: " .. result.h2o2server)
+        local box = findTargetBox()
+        if box then
+            doInsert(box, result.h2o2server)
+        else
+            warn("[main] целевой TextBox не найден")
+        end
+    else
+        warn("[main] no valid result")
+    end
+end
+
+-- ============================================================
+-- 10. Одноразовая стартовая проверка
+-- ============================================================
+print("[main] ждём данные аптайма...")
+local initialUptime = waitForUptime(UPTIME_WAIT_TIMEOUT)
+
+if not initialUptime then
+    print("[main] аптайм не получен за " .. UPTIME_WAIT_TIMEOUT ..
+          "с → форсируем парсинг")
+    doParseAndInsert("uptime timeout")
+else
+    print("[main] initial uptime=" .. fmtUptime(initialUptime))
+    if inAnyWindow(initialUptime) then
+        print("[main] ✓ в окне — парсер не нужен, ждём blue moon")
+    else
+        print("[main] ✗ вне окна — парсим сейчас")
+        doParseAndInsert("out of window")
+    end
+end
+
+-- ============================================================
+-- 11. Дальше — только blue moon
+-- ============================================================
+print("[main] ожидание blue moon...")
+while true do
+    if blueMoonSeen then
+        blueMoonSeen = false
+        doParseAndInsert("blue moon")
+    end
+    task.wait(1)
 end
