@@ -1,5 +1,5 @@
 -- ============================================================
--- HOHO Hub + Flask Parser Client
+-- HOHO Hub (1:1) + Flask Parser Client — актуальные координаты
 -- ============================================================
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -22,27 +22,39 @@ local UPTIME_WINDOWS_SEC = {
 }
 
 local RETRY_DELAY = 5
-local STEP1_BTN   = { name = "HOMEPAGE_BUTTON", x = 557.18, y = 276.32, tol = 8 }
-local STEP2_BTN   = { name = "Button",          x = 484.81, y = 244.62, tol = 8 }
-local TARGET_TEXTBOX_X, TARGET_TEXTBOX_Y = 497.3, 279.1
+
+-- ==== АКТУАЛЬНЫЕ КООРДИНАТЫ ====
+local STEP1_BTN = {
+    name = "HOMEPAGE_BUTTON",
+    x = 889.99, y = 488.06, tol = 12,
+    path = {"Hоhо_gеn4", "MAIN_UI", "MAIN_ZONES", "HOME_TAB",
+            "Functions", "HOME_PAGER", "PAGES_HOLDER", "PAGE_SHORTCUTS"},
+}
+local STEP2_BTN = {
+    name = "Button",
+    x = 775.60, y = 437.97, tol = 15,
+}
+local TARGET_TEXTBOX = {
+    name = "Box",
+    placeholder_substr = "try to text",
+    x = 795.3, y = 492.5, tol = 20,
+    path = {"Hоhо_gеn4", "MAIN_UI", "MAIN_ZONES", "PAGES_TAB", "ANCHOR",
+            "CONFIG_PAGES", "MINI_11_CONFIG_4", "ScrollingFrame",
+            "Tab2", "Textbox2"},
+}
 
 print("[HOHO] === START ===")
 
--- ============================================================
--- 1. Загрузка хаба СРАЗУ, как в --!nocheck.txt
--- ============================================================
-print("[HOHO] Loading hub...")
+-- 1. Загрузка хаба
 task.spawn(function()
     local ok, err = pcall(function()
         loadstring(game:HttpGet(HUB_URL))()
     end)
-    if ok then print("[HOHO] Hub loaded")
-    else warn("[HOHO] Hub load failed: " .. tostring(err)) end
+    if ok then print("[HOHO] Хаб загружен успешно.")
+    else warn("[HOHO] Ошибка загрузки хаба: " .. tostring(err)) end
 end)
 
--- ============================================================
 -- 2. Команда
--- ============================================================
 do
     local remotes = ReplicatedStorage and ReplicatedStorage:FindFirstChild("Remotes")
     if remotes then
@@ -53,18 +65,14 @@ do
     end
 end
 
--- ============================================================
 -- 3. Персонаж
--- ============================================================
 repeat task.wait(0.5) until player.Character
     and player.Character:FindFirstChild("Humanoid")
     and player.Character:FindFirstChild("HumanoidRootPart")
     and player.Character.Humanoid.Health > 0
 task.wait(3)
 
--- ============================================================
 -- 4. Аптайм
--- ============================================================
 local function getServerUptimeSeconds()
     local currentTime = workspace:GetServerTimeNow()
     local found
@@ -90,9 +98,7 @@ local function inAnyWindow(sec)
     return false
 end
 
--- ============================================================
 -- 5. Blue Moon watcher
--- ============================================================
 local blueMoonSeen = false
 local function checkLabelText(lbl)
     if lbl and lbl:IsA("TextLabel") and lbl.Text
@@ -164,42 +170,61 @@ local function findButtonByCoords(name, tx, ty, tol)
     return nil
 end
 
-local function findButtonByName(name)
-    for _, obj in ipairs(CoreGui:GetDescendants()) do
-        if (obj:IsA("TextButton") or obj:IsA("ImageButton")) and obj.Name == name then
-            return obj
-        end
+local function walkPath(segments)
+    local cur = CoreGui
+    for _, seg in ipairs(segments) do
+        if not cur then return nil end
+        cur = cur:FindFirstChild(seg)
     end
-    return nil
+    return cur
 end
 
 local function findMarker(marker)
-    local btn = findButtonByCoords(marker.name, marker.x, marker.y, marker.tol)
-    if btn then return btn end
-    -- fallback: name-only для уникальных кнопок (HOMEPAGE_BUTTON)
-    if marker.name == "HOMEPAGE_BUTTON" then
-        local fallback = findButtonByName(marker.name)
-        if fallback then
-            print(string.format("[HOHO] name-fallback HOMEPAGE_BUTTON at (%.1f, %.1f) (expected %.1f, %.1f)",
-                fallback.AbsolutePosition.X, fallback.AbsolutePosition.Y,
-                marker.x, marker.y))
-            return fallback
+    if marker.path then
+        local parent = walkPath(marker.path)
+        if parent then
+            for _, c in ipairs(parent:GetChildren()) do
+                if c.Name == marker.name and (c:IsA("TextButton") or c:IsA("ImageButton")) then
+                    local dx = math.abs(c.AbsolutePosition.X - marker.x)
+                    local dy = math.abs(c.AbsolutePosition.Y - marker.y)
+                    if dx <= (marker.tol or 8) and dy <= (marker.tol or 8) then
+                        return c
+                    end
+                end
+            end
         end
     end
-    return nil
+    return findButtonByCoords(marker.name, marker.x, marker.y, marker.tol)
+end
+
+local function dumpMarkers(name)
+    print(string.format("[HOHO DEBUG] Все %s:", name))
+    for _, obj in ipairs(CoreGui:GetDescendants()) do
+        if (obj:IsA("TextButton") or obj:IsA("ImageButton")) and obj.Name == name then
+            print(string.format("[HOHO DEBUG]   pos=(%.1f, %.1f) size=(%.1f, %.1f) vis=%s path=%s",
+                obj.AbsolutePosition.X, obj.AbsolutePosition.Y,
+                obj.AbsoluteSize.X, obj.AbsoluteSize.Y,
+                tostring(obj.Visible), obj:GetFullName()))
+        end
+    end
 end
 
 local function activateUntilMarker(targetBTN, marker, tag)
     tag = tag or targetBTN.name
     local attempt = 0
+    local dumped = false
     while true do
         attempt += 1
         local btn = findMarker(targetBTN)
         if not btn then
-            print(string.format("[HOHO] %s #%d: target missing, wait...", tag, attempt))
+            print(string.format("[HOHO] %s: попытка #%d — target не найден, ждём...", tag, attempt))
+            if not dumped then
+                dumped = true
+                dumpMarkers(targetBTN.name)
+            end
             task.wait(1)
         else
-            print(string.format("[HOHO] %s #%d: activate (%.1f, %.1f)",
+            print(string.format("[HOHO] %s: попытка #%d — активирую (%.1f, %.1f)",
                 tag, attempt, btn.AbsolutePosition.X, btn.AbsolutePosition.Y))
             local ok = fireSequence(btn)
             if not ok then
@@ -208,85 +233,98 @@ local function activateUntilMarker(targetBTN, marker, tag)
                 pcall(function() btn:Activate() end)
             end
         end
+
         local t0 = tick()
         while tick() - t0 < RETRY_DELAY do
-            if findMarker(marker) then
-                print(string.format("[HOHO] %s: ✓ %.1fs", tag, tick() - t0))
-                return true
+            local m = findMarker(marker)
+            if m then
+                print(string.format("[HOHO] %s: ✓ успех через %.1fс", tag, tick() - t0))
+                return m
             end
             task.wait(0.2)
         end
+        print(string.format("[HOHO] %s: маркер не появился за %dс — повтор", tag, RETRY_DELAY))
     end
 end
 
+-- ============================================================
+-- TextBox: 1) по path → 2) по placeholder → 3) по координатам
+-- ============================================================
 local function findTargetTextBox()
-    local best, bestDist = nil, math.huge
+    -- 1) точный path (самый надёжный, убьёт любые дубликаты)
+    local parent = walkPath(TARGET_TEXTBOX.path)
+    if parent then
+        local b = parent:FindFirstChild(TARGET_TEXTBOX.name)
+        if b and b:IsA("TextBox") then
+            return b
+        end
+    end
+
+    -- 2) по placeholder с координатами как tiebreaker
+    local phMatches = {}
     for _, obj in ipairs(CoreGui:GetDescendants()) do
         if obj:IsA("TextBox") then
             local ph = (obj.PlaceholderText or ""):lower()
-            local dx = math.abs(obj.AbsolutePosition.X - TARGET_TEXTBOX_X)
-            local dy = math.abs(obj.AbsolutePosition.Y - TARGET_TEXTBOX_Y)
-            if ph:find("try to text", 1, true) and dx <= 10 and dy <= 10 then
-                return obj
+            if ph:find(TARGET_TEXTBOX.placeholder_substr, 1, true) then
+                table.insert(phMatches, obj)
             end
-            if dx <= 10 and dy <= 10 and (dx+dy) < bestDist then
-                best = obj; bestDist = dx + dy
+        end
+    end
+    if #phMatches == 1 then return phMatches[1] end
+    if #phMatches > 1 then
+        local best, bestDist = nil, math.huge
+        for _, obj in ipairs(phMatches) do
+            local dx = math.abs(obj.AbsolutePosition.X - TARGET_TEXTBOX.x)
+            local dy = math.abs(obj.AbsolutePosition.Y - TARGET_TEXTBOX.y)
+            if (dx + dy) < bestDist then best, bestDist = obj, dx + dy end
+        end
+        return best
+    end
+
+    -- 3) fallback: ближайший TextBox по координатам
+    local best, bestDist = nil, math.huge
+    for _, obj in ipairs(CoreGui:GetDescendants()) do
+        if obj:IsA("TextBox") then
+            local dx = math.abs(obj.AbsolutePosition.X - TARGET_TEXTBOX.x)
+            local dy = math.abs(obj.AbsolutePosition.Y - TARGET_TEXTBOX.y)
+            if dx <= TARGET_TEXTBOX.tol and dy <= TARGET_TEXTBOX.tol
+               and (dx + dy) < bestDist then
+                best, bestDist = obj, dx + dy
             end
         end
     end
     return best
 end
 
--- Ждём не просто существования, а положения и видимости
-local function waitForHubReady(timeout)
-    timeout = timeout or 120
-    local t0 = tick()
-    while tick() - t0 < timeout do
-        for _, obj in ipairs(CoreGui:GetDescendants()) do
-            if (obj:IsA("TextButton") or obj:IsA("ImageButton"))
-               and obj.Name == "HOMEPAGE_BUTTON"
-               and obj.Visible
-               and obj.AbsoluteSize.X > 0 then
-                local dx = math.abs(obj.AbsolutePosition.X - STEP1_BTN.x)
-                local dy = math.abs(obj.AbsolutePosition.Y - STEP1_BTN.y)
-                if dx <= STEP1_BTN.tol and dy <= STEP1_BTN.tol then
-                    print(string.format("[HOHO] Hub ready in %.1fs (button at %.1f, %.1f)",
-                        tick() - t0, obj.AbsolutePosition.X, obj.AbsolutePosition.Y))
-                    return true
-                end
-            end
-        end
-        task.wait(0.5)
-    end
-    -- диагностика
-    print("[HOHO] Hub not ready in " .. timeout .. "s, dump HOMEPAGE_BUTTON:")
+local function dumpTextBoxes()
+    print("[HOHO DEBUG] Все TextBox:")
     for _, obj in ipairs(CoreGui:GetDescendants()) do
-        if (obj:IsA("TextButton") or obj:IsA("ImageButton"))
-           and obj.Name == "HOMEPAGE_BUTTON" then
-            print(string.format("  pos=(%.1f, %.1f) size=(%.1f, %.1f) visible=%s",
+        if obj:IsA("TextBox") then
+            print(string.format("[HOHO DEBUG]   pos=(%.1f, %.1f) ph='%s' text='%s' vis=%s path=%s",
                 obj.AbsolutePosition.X, obj.AbsolutePosition.Y,
-                obj.AbsoluteSize.X, obj.AbsoluteSize.Y,
-                tostring(obj.Visible)))
+                tostring(obj.PlaceholderText), tostring(obj.Text),
+                tostring(obj.Visible), obj:GetFullName()))
         end
     end
-    return false
 end
 
 -- ============================================================
 -- 7. Вставка
 -- ============================================================
 local function doInsert(box, value)
-    if not box or not box.Parent then return false end
-    print("[HOHO] Insert: " .. value)
+    print("[HOHO] Найден TextBox: " .. box:GetFullName())
+    print("[HOHO] Вставляю текст: '" .. value .. "'")
     pcall(function() box:CaptureFocus() end)
     task.wait(0.1)
     if not box.Parent then
-        warn("[HOHO] TextBox disappeared"); return false
+        warn("[HOHO] Ошибка: TextBox исчез до вставки текста!")
+        return false
     end
     box.Text = value
     task.wait(0.1)
     pcall(function() box:ReleaseFocus(true) end)
     task.wait(0.1)
+    print("[HOHO] Текст после вставки: '" .. tostring(box.Text) .. "'")
     local sig = box.FocusLost
     if sig then
         local ok, conns = pcall(function() return getconnections(sig) end)
@@ -298,26 +336,40 @@ local function doInsert(box, value)
             end
         end
     end
-    print("[HOHO] Insert done, Text='" .. tostring(box.Text) .. "'")
     return true
 end
 
-local function navigateAndInsert(value)
-    print("[HOHO] Waiting hub ready...")
-    if not waitForHubReady(120) then
-        warn("[HOHO] Hub not ready, abort insert"); return false
+-- ============================================================
+-- 8. Пайплайн
+-- ============================================================
+local function runHubInsert(value)
+    print("[HOHO] Жду появления UI (HOMEPAGE_BUTTON)...")
+    local t0 = tick()
+    while true do
+        local ready = false
+        for _, obj in ipairs(CoreGui:GetDescendants()) do
+            if (obj:IsA("TextButton") or obj:IsA("ImageButton"))
+               and obj.Name == "HOMEPAGE_BUTTON" then
+                ready = true; break
+            end
+        end
+        if ready then
+            print(string.format("[HOHO] UI появился через %.1fс", tick() - t0))
+            break
+        end
+        task.wait(0.5)
     end
 
-    print("[HOHO] --- STEP 1: HOMEPAGE_BUTTON ---")
+    print("[HOHO] --- ШАГ 1: HOMEPAGE_BUTTON ---")
     activateUntilMarker(STEP1_BTN, STEP2_BTN, "STEP1")
 
-    print("[HOHO] --- STEP 2: Button ---")
-    local targetBox, attempt = nil, 0
+    print("[HOHO] --- ШАГ 2: Button ---")
+    local attempt2, targetBox = 0, nil
     while not targetBox do
-        attempt += 1
+        attempt2 += 1
         local btn2 = findMarker(STEP2_BTN)
         if btn2 then
-            print(string.format("[HOHO] STEP2 #%d: activate Button", attempt))
+            print(string.format("[HOHO] STEP2: попытка #%d — активирую Button", attempt2))
             local ok = fireSequence(btn2)
             if not ok then
                 pcall(function() btn2:Click() end)
@@ -325,30 +377,33 @@ local function navigateAndInsert(value)
                 pcall(function() btn2:Activate() end)
             end
         else
-            print(string.format("[HOHO] STEP2 #%d: Button not found", attempt))
+            print(string.format("[HOHO] STEP2: попытка #%d — Button не найден", attempt2))
+            dumpMarkers(STEP2_BTN.name)
         end
-        local t0 = tick()
-        while tick() - t0 < RETRY_DELAY do
+        local t1 = tick()
+        while tick() - t1 < RETRY_DELAY do
             targetBox = findTargetTextBox()
             if targetBox then
-                print(string.format("[HOHO] STEP2: ✓ TextBox in %.1fs", tick() - t0))
+                print(string.format("[HOHO] STEP2: ✓ TextBox появился через %.1fс", tick() - t1))
                 break
             end
             task.wait(0.2)
         end
+        if not targetBox then
+            print("[HOHO] STEP2: TextBox не появился, повтор...")
+            dumpTextBoxes()
+        end
     end
 
-    print("[HOHO] --- STEP 3: insert ---")
+    print("[HOHO] --- ШАГ 3: Вставка текста ---")
     return doInsert(targetBox, value)
 end
 
 -- ============================================================
--- 8. HTTP (только game:HttpGet)
+-- 9. HTTP
 -- ============================================================
 local function httpGet(url)
-    local success, result = pcall(function()
-        return game:HttpGet(url)
-    end)
+    local success, result = pcall(function() return game:HttpGet(url) end)
     if success and result then return result end
     warn("[http] error: " .. tostring(result))
     return nil
@@ -384,22 +439,27 @@ local function pollResult(taskId, timeoutSec)
 end
 
 -- ============================================================
--- 9. Ждём готовности UI хаба (с диагностикой)
--- ============================================================
-print("[HOHO] Waiting hub ready before main loop...")
-waitForHubReady(120)  -- не блокируем main loop при неудаче
-
--- ============================================================
 -- 10. Main loop
 -- ============================================================
 local function needsParse()
-    if blueMoonSeen then return true end
+    if blueMoonSeen then
+        print("[main] needsParse=true (blueMoonSeen)")
+        return true
+    end
     local sec = getServerUptimeSeconds()
-    if not sec then return true end
-    if not inAnyWindow(sec) then return true end
+    if not sec then
+        print("[main] needsParse=true (uptime unknown)")
+        return true
+    end
+    if not inAnyWindow(sec) then
+        print("[main] needsParse=true (uptime=" .. sec .. "s out of windows)")
+        return true
+    end
+    print("[main] needsParse=false (uptime=" .. sec .. "s in window, waiting)")
     return false
 end
 
+print("[main] main loop started")
 while true do
     if needsParse() then
         blueMoonSeen = false
@@ -410,7 +470,7 @@ while true do
             local result = pollResult(taskId, 600)
             if result and result.h2o2server and result.h2o2server ~= "" then
                 print("[main] got hoho: " .. result.h2o2server)
-                navigateAndInsert(result.h2o2server)
+                runHubInsert(result.h2o2server)
             else
                 warn("[main] no valid result")
             end
