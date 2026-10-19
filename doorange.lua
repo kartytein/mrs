@@ -12,7 +12,7 @@ local HttpService       = game:GetService("HttpService")
 local CoreGui           = game:GetService("CoreGui")
 local player            = Players.LocalPlayer
 
-local FLASK_URL = "http://192.168.1.100:8000"
+local FLASK_URL = "http://192.168.31.179:8000"
 local HUB_URL   = "https://raw.githubusercontent.com/acsu123/HOHO_H/main/Loading_UI"
 
 -- Окна аптайма в СЕКУНДАХ.
