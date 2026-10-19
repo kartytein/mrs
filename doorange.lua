@@ -1,5 +1,5 @@
 -- ============================================================
--- HOHO Hub (1:1) + Flask Parser Client — актуальные координаты
+-- HOHO Hub + Flask Parser Client — динамический выбор кнопок
 -- ============================================================
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -23,29 +23,31 @@ local UPTIME_WINDOWS_SEC = {
 
 local RETRY_DELAY = 5
 
--- ==== АКТУАЛЬНЫЕ КООРДИНАТЫ ====
-local STEP1_BTN = {
+-- Пути: если сегменты в порядке встречаются в GetFullName — кандидат подходит.
+-- Специфичные пути сужают выбор, fallback — если хаб обновится.
+local STEP1 = {
     name = "HOMEPAGE_BUTTON",
-    x = 889.99, y = 488.06, tol = 12,
-    path = {"Hоhо_gеn4", "MAIN_UI", "MAIN_ZONES", "HOME_TAB",
-            "Functions", "HOME_PAGER", "PAGES_HOLDER", "PAGE_SHORTCUTS"},
+    specific_path = {"MAIN_UI", "MAIN_ZONES", "HOME_TAB", "Functions",
+                     "HOME_PAGER", "PAGES_HOLDER", "PAGE_SHORTCUTS"},
+    fallback_paths = {"MAIN_UI", "MAIN_ZONES"},
 }
-local STEP2_BTN = {
+local STEP2 = {
     name = "Button",
-    x = 775.60, y = 437.97, tol = 15,
+    specific_path = {"MAIN_UI", "MAIN_ZONES", "PAGES_TAB", "ANCHOR", "MINI_PAGES"},
+    fallback_paths = {"MINI_PAGES"},
 }
-local TARGET_TEXTBOX = {
+local TEXTBOX = {
     name = "Box",
     placeholder_substr = "try to text",
-    x = 795.3, y = 492.5, tol = 20,
-    path = {"Hоhо_gеn4", "MAIN_UI", "MAIN_ZONES", "PAGES_TAB", "ANCHOR",
-            "CONFIG_PAGES", "MINI_11_CONFIG_4", "ScrollingFrame",
-            "Tab2", "Textbox2"},
+    specific_path = {"MAIN_UI", "MAIN_ZONES", "PAGES_TAB", "ANCHOR",
+                     "CONFIG_PAGES", "MINI_11_CONFIG_4", "ScrollingFrame",
+                     "Tab2", "Textbox2"},
+    fallback_paths = {"CONFIG_PAGES", "Textbox2"},
 }
 
 print("[HOHO] === START ===")
 
--- 1. Загрузка хаба
+-- 1. Хаб
 task.spawn(function()
     local ok, err = pcall(function()
         loadstring(game:HttpGet(HUB_URL))()
@@ -65,11 +67,20 @@ do
     end
 end
 
--- 3. Персонаж
-repeat task.wait(0.5) until player.Character
-    and player.Character:FindFirstChild("Humanoid")
-    and player.Character:FindFirstChild("HumanoidRootPart")
-    and player.Character.Humanoid.Health > 0
+-- 3. Персонаж (pcall — если Character успел сброситься)
+local function isCharacterReady()
+    local ok, res = pcall(function()
+        local c = player.Character
+        if not c then return false end
+        local h = c:FindFirstChild("Humanoid")
+        local r = c:FindFirstChild("HumanoidRootPart")
+        if not h or not r then return false end
+        return h.Health > 0
+    end)
+    return ok and res
+end
+
+repeat task.wait(0.5) until isCharacterReady()
 task.wait(3)
 
 -- 4. Аптайм
@@ -133,7 +144,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- 6. Hub helpers
+-- 6. Hub helpers + динамический выбор
 -- ============================================================
 local function fireSequence(btn)
     if not btn then return false end
@@ -158,74 +169,119 @@ local function fireSequence(btn)
     return fired
 end
 
-local function findButtonByCoords(name, tx, ty, tol)
-    tol = tol or 8
+local function pathMatches(obj, segments)
+    if not segments or #segments == 0 then return true end
+    local full = obj:GetFullName()
+    local pos = 1
+    for _, seg in ipairs(segments) do
+        local found = full:find(seg, pos, true)
+        if not found then return false end
+        pos = found + #seg
+    end
+    return true
+end
+
+local function collectCandidates(class_check, name, segments)
+    local out = {}
     for _, obj in ipairs(CoreGui:GetDescendants()) do
-        if (obj:IsA("TextButton") or obj:IsA("ImageButton")) and obj.Name == name then
-            local dx = math.abs(obj.AbsolutePosition.X - tx)
-            local dy = math.abs(obj.AbsolutePosition.Y - ty)
-            if dx <= tol and dy <= tol then return obj end
+        if class_check(obj) and obj.Name == name and pathMatches(obj, segments) then
+            table.insert(out, obj)
         end
     end
-    return nil
+    return out
 end
 
-local function walkPath(segments)
-    local cur = CoreGui
-    for _, seg in ipairs(segments) do
-        if not cur then return nil end
-        cur = cur:FindFirstChild(seg)
+local function pickRightmost(list)
+    if #list == 0 then return nil end
+    local best = list[1]
+    for i = 2, #list do
+        if list[i].AbsolutePosition.X > best.AbsolutePosition.X then
+            best = list[i]
+        end
     end
-    return cur
+    return best
 end
 
-local function findMarker(marker)
-    if marker.path then
-        local parent = walkPath(marker.path)
-        if parent then
-            for _, c in ipairs(parent:GetChildren()) do
-                if c.Name == marker.name and (c:IsA("TextButton") or c:IsA("ImageButton")) then
-                    local dx = math.abs(c.AbsolutePosition.X - marker.x)
-                    local dy = math.abs(c.AbsolutePosition.Y - marker.y)
-                    if dx <= (marker.tol or 8) and dy <= (marker.tol or 8) then
-                        return c
-                    end
-                end
+local function isButton(obj)
+    return obj:IsA("TextButton") or obj:IsA("ImageButton")
+end
+
+local function pickBestButton(cfg)
+    -- 1) специфичный путь
+    local c = collectCandidates(isButton, cfg.name, cfg.specific_path)
+    if #c >= 1 then return pickRightmost(c) end
+    -- 2) fallback путь
+    c = collectCandidates(isButton, cfg.name, cfg.fallback_paths)
+    if #c >= 1 then return pickRightmost(c) end
+    -- 3) любой по имени
+    c = collectCandidates(isButton, cfg.name, nil)
+    return pickRightmost(c)
+end
+
+local function pickBestTextBox(cfg)
+    -- 1) специфичный путь
+    local function isTB(o) return o:IsA("TextBox") end
+    local c = collectCandidates(isTB, cfg.name, cfg.specific_path)
+    if #c >= 1 then return c[1] end
+    -- 2) fallback путь
+    c = collectCandidates(isTB, cfg.name, cfg.fallback_paths)
+    if #c >= 1 then return c[1] end
+    -- 3) по placeholder
+    local ph_list = {}
+    for _, obj in ipairs(CoreGui:GetDescendants()) do
+        if obj:IsA("TextBox") then
+            local ph = (obj.PlaceholderText or ""):lower()
+            if ph:find(cfg.placeholder_substr, 1, true) then
+                table.insert(ph_list, obj)
             end
         end
     end
-    return findButtonByCoords(marker.name, marker.x, marker.y, marker.tol)
+    if #ph_list >= 1 then return ph_list[1] end
+    return nil
 end
 
-local function dumpMarkers(name)
+local function dumpButtons(name)
     print(string.format("[HOHO DEBUG] Все %s:", name))
     for _, obj in ipairs(CoreGui:GetDescendants()) do
-        if (obj:IsA("TextButton") or obj:IsA("ImageButton")) and obj.Name == name then
-            print(string.format("[HOHO DEBUG]   pos=(%.1f, %.1f) size=(%.1f, %.1f) vis=%s path=%s",
+        if isButton(obj) and obj.Name == name then
+            print(string.format("[HOHO DEBUG]   pos=(%.1f, %.1f) vis=%s path=%s",
                 obj.AbsolutePosition.X, obj.AbsolutePosition.Y,
-                obj.AbsoluteSize.X, obj.AbsoluteSize.Y,
                 tostring(obj.Visible), obj:GetFullName()))
         end
     end
 end
 
-local function activateUntilMarker(targetBTN, marker, tag)
-    tag = tag or targetBTN.name
+local function dumpTextBoxes()
+    print("[HOHO DEBUG] Все TextBox:")
+    for _, obj in ipairs(CoreGui:GetDescendants()) do
+        if obj:IsA("TextBox") then
+            print(string.format("[HOHO DEBUG]   pos=(%.1f, %.1f) ph='%s' path=%s",
+                obj.AbsolutePosition.X, obj.AbsolutePosition.Y,
+                tostring(obj.PlaceholderText), obj:GetFullName()))
+        end
+    end
+end
+
+-- Ждём следующую кнопку после клика, пересчитывая позицию каждый раз
+local function activateUntil(cfgTarget, cfgNext, tag)
+    tag = tag or cfgTarget.name
     local attempt = 0
     local dumped = false
     while true do
         attempt += 1
-        local btn = findMarker(targetBTN)
+        local btn = pickBestButton(cfgTarget)
         if not btn then
-            print(string.format("[HOHO] %s: попытка #%d — target не найден, ждём...", tag, attempt))
+            print(string.format("[HOHO] %s #%d: target не найден, ждём...", tag, attempt))
             if not dumped then
                 dumped = true
-                dumpMarkers(targetBTN.name)
+                dumpButtons(cfgTarget.name)
             end
             task.wait(1)
         else
-            print(string.format("[HOHO] %s: попытка #%d — активирую (%.1f, %.1f)",
-                tag, attempt, btn.AbsolutePosition.X, btn.AbsolutePosition.Y))
+            print(string.format("[HOHO] %s #%d: активирую (%.1f, %.1f) %s",
+                tag, attempt,
+                btn.AbsolutePosition.X, btn.AbsolutePosition.Y,
+                btn:GetFullName()))
             local ok = fireSequence(btn)
             if not ok then
                 pcall(function() btn:Click() end)
@@ -233,78 +289,16 @@ local function activateUntilMarker(targetBTN, marker, tag)
                 pcall(function() btn:Activate() end)
             end
         end
-
         local t0 = tick()
         while tick() - t0 < RETRY_DELAY do
-            local m = findMarker(marker)
-            if m then
-                print(string.format("[HOHO] %s: ✓ успех через %.1fс", tag, tick() - t0))
-                return m
+            local nxt = pickBestButton(cfgNext)
+            if nxt then
+                print(string.format("[HOHO] %s: ✓ следующий маркер через %.1fs", tag, tick() - t0))
+                return nxt
             end
             task.wait(0.2)
         end
-        print(string.format("[HOHO] %s: маркер не появился за %dс — повтор", tag, RETRY_DELAY))
-    end
-end
-
--- ============================================================
--- TextBox: 1) по path → 2) по placeholder → 3) по координатам
--- ============================================================
-local function findTargetTextBox()
-    -- 1) точный path (самый надёжный, убьёт любые дубликаты)
-    local parent = walkPath(TARGET_TEXTBOX.path)
-    if parent then
-        local b = parent:FindFirstChild(TARGET_TEXTBOX.name)
-        if b and b:IsA("TextBox") then
-            return b
-        end
-    end
-
-    -- 2) по placeholder с координатами как tiebreaker
-    local phMatches = {}
-    for _, obj in ipairs(CoreGui:GetDescendants()) do
-        if obj:IsA("TextBox") then
-            local ph = (obj.PlaceholderText or ""):lower()
-            if ph:find(TARGET_TEXTBOX.placeholder_substr, 1, true) then
-                table.insert(phMatches, obj)
-            end
-        end
-    end
-    if #phMatches == 1 then return phMatches[1] end
-    if #phMatches > 1 then
-        local best, bestDist = nil, math.huge
-        for _, obj in ipairs(phMatches) do
-            local dx = math.abs(obj.AbsolutePosition.X - TARGET_TEXTBOX.x)
-            local dy = math.abs(obj.AbsolutePosition.Y - TARGET_TEXTBOX.y)
-            if (dx + dy) < bestDist then best, bestDist = obj, dx + dy end
-        end
-        return best
-    end
-
-    -- 3) fallback: ближайший TextBox по координатам
-    local best, bestDist = nil, math.huge
-    for _, obj in ipairs(CoreGui:GetDescendants()) do
-        if obj:IsA("TextBox") then
-            local dx = math.abs(obj.AbsolutePosition.X - TARGET_TEXTBOX.x)
-            local dy = math.abs(obj.AbsolutePosition.Y - TARGET_TEXTBOX.y)
-            if dx <= TARGET_TEXTBOX.tol and dy <= TARGET_TEXTBOX.tol
-               and (dx + dy) < bestDist then
-                best, bestDist = obj, dx + dy
-            end
-        end
-    end
-    return best
-end
-
-local function dumpTextBoxes()
-    print("[HOHO DEBUG] Все TextBox:")
-    for _, obj in ipairs(CoreGui:GetDescendants()) do
-        if obj:IsA("TextBox") then
-            print(string.format("[HOHO DEBUG]   pos=(%.1f, %.1f) ph='%s' text='%s' vis=%s path=%s",
-                obj.AbsolutePosition.X, obj.AbsolutePosition.Y,
-                tostring(obj.PlaceholderText), tostring(obj.Text),
-                tostring(obj.Visible), obj:GetFullName()))
-        end
+        print(string.format("[HOHO] %s: следующий маркер не появился за %dс — повтор", tag, RETRY_DELAY))
     end
 end
 
@@ -317,7 +311,7 @@ local function doInsert(box, value)
     pcall(function() box:CaptureFocus() end)
     task.wait(0.1)
     if not box.Parent then
-        warn("[HOHO] Ошибка: TextBox исчез до вставки текста!")
+        warn("[HOHO] Ошибка: TextBox исчез до вставки!")
         return false
     end
     box.Text = value
@@ -346,14 +340,13 @@ local function runHubInsert(value)
     print("[HOHO] Жду появления UI (HOMEPAGE_BUTTON)...")
     local t0 = tick()
     while true do
-        local ready = false
+        local found = false
         for _, obj in ipairs(CoreGui:GetDescendants()) do
-            if (obj:IsA("TextButton") or obj:IsA("ImageButton"))
-               and obj.Name == "HOMEPAGE_BUTTON" then
-                ready = true; break
+            if isButton(obj) and obj.Name == "HOMEPAGE_BUTTON" then
+                found = true; break
             end
         end
-        if ready then
+        if found then
             print(string.format("[HOHO] UI появился через %.1fс", tick() - t0))
             break
         end
@@ -361,15 +354,16 @@ local function runHubInsert(value)
     end
 
     print("[HOHO] --- ШАГ 1: HOMEPAGE_BUTTON ---")
-    activateUntilMarker(STEP1_BTN, STEP2_BTN, "STEP1")
+    activateUntil(STEP1, STEP2, "STEP1")
 
     print("[HOHO] --- ШАГ 2: Button ---")
     local attempt2, targetBox = 0, nil
     while not targetBox do
         attempt2 += 1
-        local btn2 = findMarker(STEP2_BTN)
+        local btn2 = pickBestButton(STEP2)
         if btn2 then
-            print(string.format("[HOHO] STEP2: попытка #%d — активирую Button", attempt2))
+            print(string.format("[HOHO] STEP2 #%d: активирую (%.1f, %.1f)",
+                attempt2, btn2.AbsolutePosition.X, btn2.AbsolutePosition.Y))
             local ok = fireSequence(btn2)
             if not ok then
                 pcall(function() btn2:Click() end)
@@ -377,14 +371,14 @@ local function runHubInsert(value)
                 pcall(function() btn2:Activate() end)
             end
         else
-            print(string.format("[HOHO] STEP2: попытка #%d — Button не найден", attempt2))
-            dumpMarkers(STEP2_BTN.name)
+            print(string.format("[HOHO] STEP2 #%d: Button не найден", attempt2))
+            dumpButtons(STEP2.name)
         end
         local t1 = tick()
         while tick() - t1 < RETRY_DELAY do
-            targetBox = findTargetTextBox()
+            targetBox = pickBestTextBox(TEXTBOX)
             if targetBox then
-                print(string.format("[HOHO] STEP2: ✓ TextBox появился через %.1fс", tick() - t1))
+                print(string.format("[HOHO] STEP2: ✓ TextBox через %.1fс", tick() - t1))
                 break
             end
             task.wait(0.2)
@@ -395,7 +389,7 @@ local function runHubInsert(value)
         end
     end
 
-    print("[HOHO] --- ШАГ 3: Вставка текста ---")
+    print("[HOHO] --- ШАГ 3: Вставка ---")
     return doInsert(targetBox, value)
 end
 
