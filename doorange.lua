@@ -1,15 +1,15 @@
 -- ============================================================
--- HOHO Hub + Flask Parser Client
---   • Аптайм через моду (самый частый timeIn в gc)
+-- HOHO Hub + Flask Parser Client (с server hop каждые 20 мин)
+--   • Аптайм через моду
 --   • Watcher shrine + blue moon (скан 0.5с)
---   • /parse → кэш → перебор hoho с verify
---   • Shrine → 7-мин ожидание blue moon → перебор
---   • OUT → перебор (30с цикл)
+--   • OUT → перебор hoho из кэша (30с)
+--   • Каждые 20 минут → server hop
 -- ============================================================
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService       = game:GetService("HttpService")
 local CoreGui           = game:GetService("CoreGui")
+local TeleportService   = game:GetService("TeleportService")
 local player            = Players.LocalPlayer
 
 local FLASK_URL = "http://192.168.31.179:8000"
@@ -38,8 +38,9 @@ local BLUE_MOON_TEXT = "The Blue Moon fades away"
 
 local UPTIME_CHECK_SEC   = 30
 local SHRINE_WAIT_SEC    = 7 * 60
-local BOX_WAIT_TIMEOUT   = 120
+local BOX_WAIT_TIMEOUT   = 30
 local VERIFY_WAIT_SEC    = 10
+local HOP_INTERVAL       = 20 * 60   -- 20 минут → server hop
 
 print("[HOHO] === START ===")
 
@@ -80,7 +81,7 @@ repeat task.wait(0.5) until isCharacterReady()
 task.wait(3)
 
 -- ============================================================
--- 4. Аптайм — МОДА (самый частый timeIn)
+-- 4. Аптайм — МОДА
 -- ============================================================
 local function getServerUptimeSeconds()
     local currentTime = workspace:GetServerTimeNow()
@@ -205,6 +206,7 @@ end
 local function findTargetBox(waitTimeout)
     waitTimeout = waitTimeout or BOX_WAIT_TIMEOUT
     local t0 = tick()
+    local lastLog = 0
     while tick() - t0 < waitTimeout do
         if TARGET_TEXT and TARGET_TEXT ~= "" then
             for _, obj in ipairs(CoreGui:GetDescendants()) do
@@ -227,8 +229,13 @@ local function findTargetBox(waitTimeout)
             print(("[find] по пути за %.1fs (%d шт)"):format(tick() - t0, #cands))
             return cands[1]
         end
+        if tick() - lastLog > 5 then
+            lastLog = tick()
+            print(("[find] ... ждём TextBox (%.0fs/%.0fs)"):format(tick() - t0, waitTimeout))
+        end
         task.wait(0.5)
     end
+    print(("[find] НЕ нашли за %.0fs"):format(waitTimeout))
     dumpAllTextBoxes()
     return nil
 end
@@ -282,7 +289,7 @@ local function requestHohos()
 
     local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
     if not ok then
-        warn("[parse] JSONDecode FAILED — response truncated or invalid")
+        warn("[parse] JSONDecode FAILED — truncated")
         warn("[parse] raw: " .. res:sub(1, math.min(#res, 300)))
         return nil
     end
@@ -291,28 +298,21 @@ local function requestHohos()
         return nil
     end
 
-    if data.hohos then
-        return data.hohos
-    end
-    -- Fallback: старый формат {count, details: [{hoho, ...}]}
+    if data.hohos then return data.hohos end
     if data.details then
-        warn("[parse] old format detected (details), converting")
+        warn("[parse] old format (details), converting")
         local out = {}
         for _, it in ipairs(data.details) do
             if it.hoho then table.insert(out, it.hoho) end
         end
         return out
     end
-
-    local ks = {}
-    for k in pairs(data) do table.insert(ks, tostring(k)) end
-    warn("[parse] no 'hohos'/'details' in response. keys: " ..
-        table.concat(ks, ", "))
+    warn("[parse] no 'hohos' in response")
     return nil
 end
 
 -- ============================================================
--- 9. Verify (появление нового уведомления)
+-- 9. Verify
 -- ============================================================
 local function countNotifications()
     local pg = player:FindFirstChild("PlayerGui")
@@ -348,16 +348,20 @@ local function tryInsertAndVerify(hoho, box)
 end
 
 -- ============================================================
--- 10. Получить из кэша + перебрать
+-- 10. doParseAndInsert
 -- ============================================================
 local function doParseAndInsert(reason)
     print("[main] request hohos (" .. (reason or "?") .. ")")
     local hohos = requestHohos()
-    if not hohos or #hohos == 0 then
-        warn("[main] кэш пуст")
+    if not hohos then
+        warn("[main] /parse failed (nil)")
         return false
     end
-    print(("[main] got %d hohos"):format(#hohos))
+    if #hohos == 0 then
+        warn("[main] кэш пуст — нечего вставлять")
+        return false
+    end
+    print(("[main] got %d hohos — ищем TextBox..."):format(#hohos))
 
     local box = findTargetBox(BOX_WAIT_TIMEOUT)
     if not box then
@@ -373,17 +377,45 @@ local function doParseAndInsert(reason)
         end
         task.wait(2)
     end
-    print("[main] ✗ все hohos испробованы, ни один не сработал")
+    print("[main] ✗ все испробованы — ни один не сработал")
     return false
 end
 
 -- ============================================================
--- 11. Main loop
+-- 11. Server hop
+-- ============================================================
+local function serverHop()
+    print("[hop] === SERVER HOP ===")
+    local ok, err = pcall(function()
+        TeleportService:Teleport(game.PlaceId, player)
+    end)
+    if not ok then
+        warn("[hop] Teleport error: " .. tostring(err))
+        pcall(function()
+            game:GetService("TeleportService"):Teleport(game.PlaceId)
+        end)
+    end
+    -- после хопа скрипт умрёт вместе с сервером; новый экземпляр запустится на новом
+end
+
+-- ============================================================
+-- 12. Main loop
 -- ============================================================
 print("[main] main loop started")
 local lastUptimeCheck = 0
+local lastHopTime     = os.time()
 
 while true do
+    -- === SERVER HOP каждые HOP_INTERVAL ===
+    local sinceHop = os.time() - lastHopTime
+    if sinceHop >= HOP_INTERVAL then
+        print(("[hop] %d минут прошло → server hop"):format(HOP_INTERVAL / 60))
+        serverHop()
+        lastHopTime = os.time()
+        task.wait(30)   -- ждём телепорта
+    end
+
+    -- === SHRINE ===
     if shrineSeen then
         shrineSeen   = false
         blueMoonSeen = false
@@ -405,12 +437,14 @@ while true do
         doParseAndInsert("shrine: " .. trigger)
         lastUptimeCheck = os.time()
 
+    -- === BLUE MOON ===
     elseif blueMoonSeen then
         blueMoonSeen = false
-        print("[main] blue moon (no shrine) → try all hohos")
+        print("[main] blue moon → try all hohos")
         doParseAndInsert("blue moon")
         lastUptimeCheck = os.time()
 
+    -- === UPTIME CHECK ===
     elseif (os.time() - lastUptimeCheck) >= UPTIME_CHECK_SEC then
         lastUptimeCheck = os.time()
         local sec = getServerUptimeSeconds()
